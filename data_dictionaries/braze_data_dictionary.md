@@ -5,6 +5,13 @@
 
 This dataset is the BigQuery landing for Braze Currents event streams plus Cafe Zupas custom attribute feeds and user-profile exports. Most event tables share a common set of Braze identifier and timestamp columns (documented once below); table-specific columns are described in each table's dictionary.
 
+> **Streaming addendum (2026-07-22):** the switch to streaming ingestion (Currents → `braze_stream` → merged into `braze`) changed the dataset after this dictionary was generated:
+>
+> - **New `workspace` column on ~89 event tables** (STRING, backfilled for full history): `cafe_zupas` (main, ~99% of volume) or `cafe_zupas_catering`. Canonical default is `workspace = 'cafe_zupas'`.
+> - **~50 new tables**, notably active: `banner_impression`/`banner_click` (new Banner channel — impression is the exposure event; no send), `rcs_send`/`rcs_delivery`/`rcs_read`/`rcs_click`/`rcs_inboundreceive` (RCS — now carries most text volume, ~4x SMS), `email_deferral`, `email_retry`. Created but empty so far: `line_*`, `whatsapp_*`, `sms_carriersend`, `pushnotification_iosforeground`, `liveactivity_*`, `featureflag_impression`, `agentconsole_*`.
+> - **Streaming-era tables have no `is_canvas` column** — derive it from `canvas_id`. `banner_*` also lack `send_id`/`dispatch_id`; `rcs_read` lacks `send_id`.
+> - Channel/table guidance and validated union templates: `claude_skills/braze-campaigns/SKILL.md`. Full per-table dictionary refresh for the new tables is pending.
+
 **Freshness:** `braze.load_watermark` (not an event table) holds the load high-water mark per job — columns `job_name`, `watermark`, `updated_at`. Check it before assuming today's events are complete.
 
 **Pipeline internals — never query for analysis:** `braze.currents_raw` (raw pub/sub feed), `braze_stream.*` (shadow/validation copy of the event tables), and `staging.users_messages_*` are ingestion plumbing. They duplicate or precede what lands in the `braze` event tables and are not deduplicated/normalized.

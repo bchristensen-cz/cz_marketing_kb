@@ -18,6 +18,7 @@ Full column docs: `data_dictionaries/sales_ops.order_customer.md` and `data_dict
 2. **Always filter `BusinessDate`** on both tables (partition column). Never run unbounded scans.
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only). Yesterday and older is stable after the 4am run.
+5. **All datasets are read-only.** If you need to materialize a table (intermediate results, cohorts), create it ONLY in `marketing-data-442316.scratch` — the single writable dataset; tables there auto-expire after 7 days. Materialize with `create table scratch.x as ...`, not views: a view over a heavy query silently re-runs the full scan on every select.
 
 ## Canonical metric definitions
 
@@ -106,7 +107,7 @@ group by 1
 - `sales_ops.order_discount` exists (order-level discount lines: `order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, …) but is **not yet documented** — join keys unverified. If a question needs it, treat answers as provisional until its dictionary lands.
 - **Employee/test exclusion (steward business rule):** internal orders are identified by mapped email domain in (`cafezupas.com`, `tkxel.com`). The `mapped_domain` column only exists on the legacy table today, so this filter can't yet be applied on `order_customer` — a mart gap is logged. State whether employee orders are included when it matters.
 - **Lifetime customer fields** (`lifetime_order_cnt`, `first_order_datetime`, `days_since_last_order`) exist only on the legacy table; `order_customer.order_count` is reload-window-scoped. For lifetime/first-order questions, compute fresh from `order_customer` history (see customer-frequency recipe) until the lifetime columns land in the mart.
-- `cowork_interim.*` objects are session scratch views — selecting from them can re-run the full underlying scan. Don't build on them.
+- The old `cowork_interim` and `nces_staging` scratch datasets were dropped 2026-07-22. Any saved query referencing them must be rebuilt against the marts (materialize intermediates in `scratch` if needed).
 
 ## When done
 

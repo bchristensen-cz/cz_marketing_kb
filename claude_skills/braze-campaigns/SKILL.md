@@ -72,6 +72,7 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 ## Conventions these templates follow (team SQL style)
 
 - All lower case; fully-qualified table names (`` `marketing-data-442316`.braze.table ``).
+- **All datasets are read-only.** Materialize intermediate results ONLY in `marketing-data-442316.scratch` (the single writable dataset; 7-day auto-expiry). Use `create table`, not views over heavy unions.
 - **Early partition filtering** on `event_date` in every base CTE.
 - Select only the columns needed.
 - No `sales_ops` filters here. `storeid = 1111` exclusion and `iscatering = 0` apply to **order** tables, not Braze.

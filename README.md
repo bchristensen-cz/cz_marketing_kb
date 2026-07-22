@@ -11,8 +11,9 @@ Point Claude (Cowork or Claude Code) at this folder. Before answering any data q
 ```
 claude_skills/        Skills — how to query each domain (canonical definitions, joins, gotchas)
   sales-ops-orders/   Order & sales data (order_customer, order_lines)
+  braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
 data_dictionaries/    Column-level documentation per table
-sql/                  Build scripts for the sales_ops / claude data marts
+sql/                  Build scripts for data marts + validated query templates
 ```
 
 ## Ground rules
@@ -29,5 +30,6 @@ sql/                  Build scripts for the sales_ops / claude data marts
 | `marketing-data-442316.sales_ops.order_customer` | 1 row per order | Sales, orders, channels, customers, loyalty |
 | `marketing-data-442316.sales_ops.order_lines` | 1 row per line element | Menu mix, items, modifiers, combos |
 | `marketing-data-442316.sales_ops.store_info` | 1 row per store | Store attributes (name, state, timezone) |
+| `marketing-data-442316.braze.*` (69 tables) | 1 row per message event | Campaign activity & engagement — use the `braze-campaigns` skill's templates, don't hand-roll unions |
 
 More marts are being added in the `claude` dataset — documented here as they land.

@@ -104,6 +104,9 @@ group by 1
 - There is **no `order_id` column** on either table — the order key is `brink_order_id` (multiple users have hit this error).
 - A legacy table `sales_ops.OrderCustomer` also exists (different schema: `netsales`, `iscatering`, `storeid`, `lifetime_order_cnt`, …). **Do not use it** — it predates this mart and gives different answers. `sales_ops.order_customer` (lowercase) is the only canonical order table.
 - `sales_ops.order_discount` exists (order-level discount lines: `order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, …) but is **not yet documented** — join keys unverified. If a question needs it, treat answers as provisional until its dictionary lands.
+- **Employee/test exclusion (steward business rule):** internal orders are identified by mapped email domain in (`cafezupas.com`, `tkxel.com`). The `mapped_domain` column only exists on the legacy table today, so this filter can't yet be applied on `order_customer` — a mart gap is logged. State whether employee orders are included when it matters.
+- **Lifetime customer fields** (`lifetime_order_cnt`, `first_order_datetime`, `days_since_last_order`) exist only on the legacy table; `order_customer.order_count` is reload-window-scoped. For lifetime/first-order questions, compute fresh from `order_customer` history (see customer-frequency recipe) until the lifetime columns land in the mart.
+- `cowork_interim.*` objects are session scratch views — selecting from them can re-run the full underlying scan. Don't build on them.
 
 ## When done
 

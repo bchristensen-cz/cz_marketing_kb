@@ -5,7 +5,11 @@
 
 This dataset is the BigQuery landing for Braze Currents event streams plus Cafe Zupas custom attribute feeds and user-profile exports. Most event tables share a common set of Braze identifier and timestamp columns (documented once below); table-specific columns are described in each table's dictionary.
 
-**Freshness:** `braze.load_watermark` (not an event table) holds the load high-water mark — columns `watermark`, `updated_at`. Check it before assuming today's events are complete.
+**Freshness:** `braze.load_watermark` (not an event table) holds the load high-water mark per job — columns `job_name`, `watermark`, `updated_at`. Check it before assuming today's events are complete.
+
+**Pipeline internals — never query for analysis:** `braze.currents_raw` (raw pub/sub feed), `braze_stream.*` (shadow/validation copy of the event tables), and `staging.users_messages_*` are ingestion plumbing. They duplicate or precede what lands in the `braze` event tables and are not deduplicated/normalized.
+
+**Custom attributes on `braze.users`:** `custom_attributes` is a JSON column; read fields with `lax_string()`, e.g. `lax_string(u.custom_attributes.first_purch_cat)`. Known Cafe Zupas attributes: `first_purch_cat` (first-order menu-category classification pushed from BigQuery, 2026-07) and `guest_test_email` (guest-checkout email capture). Related custom event: `customevent` rows with `name = 'guest_email_from_order'` carry `$.order_id` in `properties`, linking guest-checkout orders to emails.
 
 ## Common columns (shared across most event tables)
 

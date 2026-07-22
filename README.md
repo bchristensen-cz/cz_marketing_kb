@@ -14,6 +14,8 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
+LEARNINGS.md          How the learnings inbox works (format + consolidation rules)
+learnings/            One file per proposed gotcha/fix, awaiting consolidation
 ```
 
 ## Ground rules

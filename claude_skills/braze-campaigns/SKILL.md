@@ -165,4 +165,8 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
 ## When done
 
-If you learned something new about the Braze tables during the session (new gotcha, new canonical definition, data quality issue), update this skill and the data dictionary so the next session benefits.
+If you learned something new about the Braze tables during the session (new gotcha, new canonical definition, data quality issue), capture it so the next session benefits:
+
+1. The installed skill is a **read-only cache** — do not try to edit it. Edit the local working copy of `cz_marketing_kb` instead (on Jamie's machine: `cafe-zupas/cz-marketing-kb` in the Claude Skills folder).
+2. Add a **new file** under `learnings/` at the repo root, named `YYYY-MM-DD-short-slug.md` (format in `LEARNINGS.md`). One file per finding — never append to a shared file or rewrite this SKILL.md/dictionary mid-session; that's what keeps multi-contributor merges conflict-free.
+3. A periodic consolidation pass merges vetted entries into the skill and dictionary, pushes to GitHub, and repackages/reinstalls the skill so everyone gets the update.

@@ -5,6 +5,8 @@
 
 This dataset is the BigQuery landing for Braze Currents event streams plus Cafe Zupas custom attribute feeds and user-profile exports. Most event tables share a common set of Braze identifier and timestamp columns (documented once below); table-specific columns are described in each table's dictionary.
 
+**Freshness:** `braze.load_watermark` (not an event table) holds the load high-water mark — columns `watermark`, `updated_at`. Check it before assuming today's events are complete.
+
 ## Common columns (shared across most event tables)
 
 | Column | Description |
@@ -14,6 +16,7 @@ This dataset is the BigQuery landing for Braze Currents event streams plus Cafe 
 | `external_user_id` | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | Identifier of the specific app/platform build the event is tied to. |
 | `app_group_id` | Identifier of the Braze app group (workspace) the event belongs to. |
+| `workspace` | Human-readable Braze workspace name: `'cafe_zupas'` (retail, ~97.5% of email_send rows) or `'cafe_zupas_catering'`. Added/backfilled 2026-07-22 across event tables (full history to 2024-06). **Filter `workspace = 'cafe_zupas'` for retail-only campaign analyses** — catering campaign events are mixed into the same tables. |
 | `time` | Unix epoch timestamp (seconds, UTC) when the event occurred. |
 | `timezone` | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `event_timestamp` | Event time as a UTC DATETIME (derived from time). |

@@ -131,6 +131,8 @@ bod.OrderId
 , 0  as net
 , 'none'
 from `marketing-data-442316`.brink.brinkOrderDiscount bod
+	join brink_order bo
+	on bo.id = bod.orderid
 where 1=1
 and bod.isDeleted = false
 

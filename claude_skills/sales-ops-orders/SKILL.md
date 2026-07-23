@@ -111,7 +111,7 @@ group by 1
 - **Net sales is always calculated** (`gross_sales - total_discount_amount - total_promotions_amount`), never read from the `net_sales` / `item_net_sales` columns — those are Brink-given and kept for validation only (steward rule 2026-07-23). The upcoming `claude` dataset views will expose only the calculated net.
 - Item counts need `line_item_type = 'item'`, else modifiers ~double the count.
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.
-- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level calculated net from `order_customer` is the truth for sales.
+- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level calculated net from `order_customer` is the truth for sales. Quantified 2026-07-23: ~3% of orders have no `order_lines` rows at all, and line-reconstructed net runs ~0.7% high on the rest — never report sales totals from `order_lines`.
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.
 - `is_guest_order` is loyalty-based (91% of all-time orders are guest); `mapped_cust_id` coverage is ~53% over the last year.
 - `order_count` / `days_since_prev_order` are computed within reload windows — recompute for lifetime analyses.

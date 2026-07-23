@@ -20,22 +20,23 @@ Full column docs: `data_dictionaries/sales_ops.order_customer.md` and `data_dict
 2. **Always filter `BusinessDate`** on both tables (partition column). Never run unbounded scans.
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only). Yesterday and older is stable after the 4am run.
-5. **All datasets are read-only.** If you need to materialize a table (intermediate results, cohorts), create it ONLY in `marketing-data-442316.scratch` — the single writable dataset; tables there auto-expire after 7 days. Materialize with `create table scratch.x as ...`, not views: a view over a heavy query silently re-runs the full scan on every select.
+5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
+6. **All datasets are read-only.** If you need to materialize a table (intermediate results, cohorts), create it ONLY in `marketing-data-442316.scratch` — the single writable dataset; tables there auto-expire after 7 days. Materialize with `create table scratch.x as ...`, not views: a view over a heavy query silently re-runs the full scan on every select.
 
 ## Canonical metric definitions
 
 | Metric | Definition |
 |---|---|
-| Net sales | `sum(net_sales)` from `order_customer` |
+| Net sales | **Calculated**: `sum(gross_sales - total_discount_amount - total_promotions_amount)` from `order_customer`. Do NOT use the `net_sales` column — it's Brink-given and retained for validation only (steward rule 2026-07-23) |
 | Gross sales | `sum(gross_sales)` from `order_customer` |
 | Order count | `count(*)` from `order_customer` (or `count(distinct brink_order_id)`, identical) |
-| Average check | `sum(net_sales) / count(*)` |
+| Average check | `sum(gross_sales - total_discount_amount - total_promotions_amount) / count(*)` |
 | Identified customers | `count(distinct mapped_cust_id)` where `mapped_cust_id is not null` |
 | Guest orders | `is_guest_order = 1` |
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Digital source | `order_source` (NULL = in-store POS) |
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)` |
-| Item sales | `sum(item_gross_sales)` / `sum(item_net_sales)` from `order_lines` |
+| Item sales | `sum(item_gross_sales)` from `order_lines`. The gross-minus-discount net rule applies at line level too, but discounts/promotions are separate order-level lines (no per-item allocation), so per-item net isn't computable from the mart — use gross for item mix; `item_net_sales` is validation-only (steward rule 2026-07-23) |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
 **Required clarifications (steward rule 2026-07-23):** if the user hasn't already stated them, ASK before querying — do not assume defaults:
@@ -60,7 +61,9 @@ where l.BusinessDate between @start and @end
 
 **Daily net sales by channel (last 30 days):**
 ```sql
-select BusinessDate, revenue_category, round(sum(net_sales), 2) net_sales, count(*) orders
+select BusinessDate, revenue_category,
+  round(sum(gross_sales - total_discount_amount - total_promotions_amount), 2) net_sales,
+  count(*) orders
 from `marketing-data-442316`.sales_ops.order_customer
 where BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
   and store_id <> 1111
@@ -70,7 +73,7 @@ order by 1, 2
 
 **Top items by quantity (entrées, last 90 days):**
 ```sql
-select item_name, item_size, sum(qty) qty, round(sum(item_net_sales), 0) net_sales
+select item_name, item_size, sum(qty) qty, round(sum(item_gross_sales), 0) gross_sales
 from `marketing-data-442316`.sales_ops.order_lines
 where BusinessDate >= date_sub(current_date('America/Denver'), interval 90 day)
   and store_id <> 1111
@@ -104,15 +107,17 @@ group by 1
 
 ## Gotchas checklist (scan before answering)
 
-- `order_lines.amount` is NOT sales — it mixes tips, fees, and negative discounts. Use `item_gross_sales` / `item_net_sales`.
+- `order_lines.amount` is NOT sales — it mixes tips, fees, and negative discounts. Use `item_gross_sales`.
+- **Net sales is always calculated** (`gross_sales - total_discount_amount - total_promotions_amount`), never read from the `net_sales` / `item_net_sales` columns — those are Brink-given and kept for validation only (steward rule 2026-07-23). The upcoming `claude` dataset views will expose only the calculated net.
 - Item counts need `line_item_type = 'item'`, else modifiers ~double the count.
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.
-- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level is the truth for sales.
+- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level calculated net from `order_customer` is the truth for sales.
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.
 - `is_guest_order` is loyalty-based (91% of all-time orders are guest); `mapped_cust_id` coverage is ~53% over the last year.
 - `order_count` / `days_since_prev_order` are computed within reload windows — recompute for lifetime analyses.
 - **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales, order, and item metrics on both tables. No exceptions (steward rule 2026-07-23).
 - Store footprint: ~90 stores in UT, AZ, MN, NV, WI, ID, IL, OH, TX. Store attributes come from `sales_ops.store_info`.
+- **Business week is Monday–Saturday** — all stores are closed Sunday. "Last week" means the most recent Mon–Sat; weekly averages divide by 6 days, not 7. Don't use Sun-anchored `date_trunc(..., week)` for CZ weeks (observed in analyst SQL 2026-07-22; steward-confirmed pending).
 - Timezone: business runs on `America/Denver` for schedule logic; each store's local time is in `order_datetime`, UTC in `order_customer.order_timestamp_utc`.
 - There is **no `order_id` column** on either table — the order key is `brink_order_id` (multiple users have hit this error).
 - A legacy table `sales_ops.OrderCustomer` also exists (different schema: `netsales`, `iscatering`, `storeid`, `lifetime_order_cnt`, …). **Do not use it** — it predates this mart and gives different answers. `sales_ops.order_customer` (lowercase) is the only canonical order table.

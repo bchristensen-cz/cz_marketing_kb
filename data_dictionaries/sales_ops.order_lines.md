@@ -69,14 +69,14 @@
 |---|---|
 | `amount` | The line's raw amount. **Do not sum for sales** — includes tips and fees, and discounts/promotions are negative. |
 | `item_gross_sales` | Line gross sales (0 for tips, discounts, promos, gift cards). **Canonical line-level sales measure.** |
-| `item_net_sales` | Line net sales (same zeroing rules). |
+| `item_net_sales` | Line net sales, Brink-given (same zeroing rules). **Validation-only (steward rule 2026-07-23)** — canonical net = gross minus discounts/promotions, but those are separate order-level lines with no per-item allocation, so per-item net isn't computable here. Use `item_gross_sales` for item mix. |
 | `price` | Item master price (menu price). |
 | `qty` | **Derived**: `round(item_gross_sales / price)`, floored at 1. Approximate — wrong when price is 0/missing or item was price-overridden. Good for menu-mix counts on `line_item_type='item'`. |
 
 ## Gotchas
 - **Always filter `BusinessDate`** (partition). Cluster fields (`rev_center_name`, `item_name`, parent fields) make filters on them cheap.
 - **Item counts**: filter `line_item_type = 'item'` — otherwise modifiers/fees inflate counts ~2x.
-- **Order-level sales**: use `order_customer.net_sales` / `gross_sales`. Line-level sums won't exactly reconcile to order-level (order-level discounts, rounding).
+- **Order-level sales**: use `order_customer` — gross = `gross_sales`, net = calculated `gross_sales - total_discount_amount - total_promotions_amount` (the `net_sales` column is validation-only). Line-level sums won't exactly reconcile to order-level (order-level discounts, rounding).
 - **Combos**: components each carry their own sales; the parent combo line may carry the base price. For "how many Try 2 Combos sold", count distinct `combo_order_line_item_id` where `parent_rev_center_name = 'Try 2 Combo'`. For entrée mix inside combos, use component rows.
 - `'Foutain Beverages'` (sic) in `rev_center_name`; corrected to `'Fountain Beverage'` only in `parent_item_grp_name`.
 - `item_type` and `rev_center_name` fall back to raw `description` / NULL for a small tail (~7K rows/yr NULL) — filter to known buckets for clean rollups.

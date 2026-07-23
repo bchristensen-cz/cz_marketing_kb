@@ -56,14 +56,17 @@
 | `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
 
 ### Financials (all FLOAT, dollars)
+
+> **Net sales rule (steward, 2026-07-23):** canonical net sales = `gross_sales - total_discount_amount - total_promotions_amount`, computed at query time. All financials come from Brink only — Pulse is never a financial source (helper/metadata only).
+
 | Column | Description |
 |---|---|
 | `gross_sales` | Order gross sales from Brink (`brinkOrder.GrossSales`). |
-| `net_sales` | **Canonical net sales** (`brinkOrder.NetSales`). Use this for sales reporting. |
+| `net_sales` | Brink-given net (`brinkOrder.NetSales`). **Validation-only — do NOT use for reporting.** Report calculated net: `gross_sales - total_discount_amount - total_promotions_amount`. Kept in this table for reconciliation; the planned `claude.order_customer` view will expose only the calculated net. |
 | `subtotal` | Brink subtotal. |
 | `tax` | Sales tax. |
 | `rounding` | Cash rounding adjustment. |
-| `item_gross_sales` / `item_net_sales` | Sum of item-level gross/net, **excluding tip items**. |
+| `item_gross_sales` / `item_net_sales` | Sum of item-level gross/net, **excluding tip items**. `item_net_sales` is Brink-given — validation-only per the net sales rule above. |
 | `item_netsales_with_mods` | Item net including modifier contribution (`brinkOrderItem.NetSales`). |
 | `mods_gross_sales` / `mods_net_sales` | Modifier-level gross/net sums. |
 | `total_gift_card_amount` | Gift card purchases on the order (not redemptions). |

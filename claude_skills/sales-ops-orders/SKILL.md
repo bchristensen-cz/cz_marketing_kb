@@ -46,39 +46,61 @@ Full column docs: `data_dictionaries/sales_ops.order_customer.md` and `data_dict
 
 Not up for discussion: **store 1111 is ALWAYS excluded** (test/training store — add `store_id <> 1111` on whichever table you're querying; never include it, don't ask). Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 
+## SQL style (steward rule 2026-07-23 — MANDATORY)
+
+All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. Match the build scripts in `sql/`:
+
+1. **Fully qualify every table**: `` `marketing-data-442316`.dataset.table `` — never rely on a default project or dataset.
+2. **Lowercase whenever possible**: keywords, functions, aliases. Column names as they exist in the schema (e.g. `BusinessDate`).
+3. **Layout**:
+   - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
+   - CTEs: `with name as (` … `)`, chained as `, next_name as (`
+   - `where 1=1`, then each condition on its own `and ...` line
+   - each join on its own line, `on ...` on the next line, indented; short lowercase table aliases (`oc`, `ol`, `bo`)
+
 ## Join pattern
 
 ```sql
-select ...
-from `marketing-data-442316`.sales_ops.order_lines l
-join `marketing-data-442316`.sales_ops.order_customer c
-  on c.brink_order_id = l.brink_order_id
-where l.BusinessDate between @start and @end
-  and c.BusinessDate between @start and @end   -- partition-prune BOTH tables
+select
+...
+from `marketing-data-442316`.sales_ops.order_lines ol
+	join `marketing-data-442316`.sales_ops.order_customer oc
+	on oc.brink_order_id = ol.brink_order_id
+where 1=1
+and ol.BusinessDate between @start and @end
+and oc.BusinessDate between @start and @end   -- partition-prune BOTH tables
 ```
 
 ## Recipes
 
 **Daily net sales by channel (last 30 days):**
 ```sql
-select BusinessDate, revenue_category,
-  round(sum(gross_sales - total_discount_amount - total_promotions_amount), 2) net_sales,
-  count(*) orders
-from `marketing-data-442316`.sales_ops.order_customer
-where BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
-  and store_id <> 1111
+select
+oc.BusinessDate
+, oc.revenue_category
+, round(sum(oc.gross_sales - oc.total_discount_amount - oc.total_promotions_amount), 2) as net_sales
+, count(*) as orders
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
+and oc.store_id <> 1111
 group by 1, 2
 order by 1, 2
 ```
 
 **Top items by quantity (entrées, last 90 days):**
 ```sql
-select item_name, item_size, sum(qty) qty, round(sum(item_gross_sales), 0) gross_sales
-from `marketing-data-442316`.sales_ops.order_lines
-where BusinessDate >= date_sub(current_date('America/Denver'), interval 90 day)
-  and store_id <> 1111
-  and line_item_type = 'item'
-  and item_type = 'Entree'
+select
+ol.item_name
+, ol.item_size
+, sum(ol.qty) as qty
+, round(sum(ol.item_gross_sales), 0) as gross_sales
+from `marketing-data-442316`.sales_ops.order_lines ol
+where 1=1
+and ol.BusinessDate >= date_sub(current_date('America/Denver'), interval 90 day)
+and ol.store_id <> 1111
+and ol.line_item_type = 'item'
+and ol.item_type = 'Entree'
 group by 1, 2
 order by 3 desc
 limit 25
@@ -86,22 +108,30 @@ limit 25
 
 **Try 2 Combo count and composition:**
 ```sql
-select parent_item_grp_name, count(distinct combo_order_line_item_id) combos
-from `marketing-data-442316`.sales_ops.order_lines
-where BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
-  and store_id <> 1111
-  and parent_rev_center_name = 'Try 2 Combo'
+select
+ol.parent_item_grp_name
+, count(distinct ol.combo_order_line_item_id) as combos
+from `marketing-data-442316`.sales_ops.order_lines ol
+where 1=1
+and ol.BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
+and ol.store_id <> 1111
+and ol.parent_rev_center_name = 'Try 2 Combo'
 group by 1
 order by 2 desc
 ```
 
 **Customer frequency (compute windows fresh — don't trust stored `order_count` across reload boundaries):**
 ```sql
-select mapped_cust_id, count(*) orders, min(BusinessDate) first_order, max(BusinessDate) last_order
-from `marketing-data-442316`.sales_ops.order_customer
-where BusinessDate >= '2025-01-01'
-  and store_id <> 1111
-  and mapped_cust_id is not null
+select
+oc.mapped_cust_id
+, count(*) as orders
+, min(oc.BusinessDate) as first_order
+, max(oc.BusinessDate) as last_order
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.BusinessDate >= '2025-01-01'
+and oc.store_id <> 1111
+and oc.mapped_cust_id is not null
 group by 1
 ```
 

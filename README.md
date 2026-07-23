@@ -32,7 +32,8 @@ sql/                  Build scripts for data marts + validated query templates
 1. Only query tables documented here. Upstream raw datasets (`brink.*`, `pulse.*`, `sessionM.*`) contain voids, duplicates, and traps — the marts exist so nobody has to relearn them.
 2. Always filter on the partition column (`BusinessDate`) — these tables are large.
 3. Use the canonical metric definitions in the skills. Don't invent alternate logic.
-4. Found a gap or a new gotcha? **Don't edit the repo** — only the data steward (Brent) commits. Log it as an Asana task on the **Claude Data** board (workspace cafezupas.com, project `1216769551099591`), titled `KB finding: <short title>`, with what you observed (including the query) and the proposed change. The steward reviews, merges vetted findings into the repo, and pushes — the next session's clone picks it up automatically.
+4. Write ALL SQL in the steward's format (see "SQL style" in `claude_skills/sales-ops-orders/SKILL.md`): fully qualified table names, lowercase whenever possible, leading commas, `where 1=1` + one `and` per line, joins with `on` on the next line. The steward diagnoses user-generated SQL — it must be instantly readable in his layout.
+5. Found a gap or a new gotcha? **Don't edit the repo** — only the data steward (Brent) commits. Log it as an Asana task on the **Claude Data** board (workspace cafezupas.com, project `1216769551099591`), titled `KB finding: <short title>`, with what you observed (including the query) and the proposed change. The steward reviews, merges vetted findings into the repo, and pushes — the next session's clone picks it up automatically.
 
 ## Approved tables
 

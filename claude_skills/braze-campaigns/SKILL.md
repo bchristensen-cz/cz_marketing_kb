@@ -96,6 +96,7 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 ## Conventions these templates follow (team SQL style)
 
 - All lower case; fully-qualified table names (`` `marketing-data-442316`.braze.table ``).
+- **Steward SQL layout (mandatory 2026-07-23, applies to ALL generated SQL):** select list one column per line with leading commas; column aliases use `as`; CTEs chained `with a as (...)`, `, b as (...)`; `where 1=1` then one `and ...` per line; each join on its own line with `on ...` indented on the next line; short lowercase table aliases. See the "SQL style" section of `claude_skills/sales-ops-orders/SKILL.md` and the build scripts in `sql/` for reference.
 - **All datasets are read-only.** Materialize intermediate results ONLY in `marketing-data-442316.scratch` (the single writable dataset; 7-day auto-expiry). Use `create table`, not views over heavy unions.
 - **Early partition filtering** on `event_date` in every base CTE.
 - Select only the columns needed.

@@ -5,6 +5,8 @@ description: How to query Braze marketing campaign data in BigQuery (dataset bra
 
 # Querying Braze Campaign Data
 
+> **Freshness check:** this file must come from a clone of `https://github.com/bchristensen-cz/cz_marketing_kb` `main` pulled **this session**. If you're reading it from an installed skill package, a fork, or any saved copy, stop and re-clone first — it may be stale.
+
 **Project:** `marketing-data-442316`  **Dataset:** `braze`
 
 A reference for writing SQL against the Braze tables so that Claude and analysts produce **consistent, correct** cross-channel campaign queries without re-deriving the logic each time. It answers two recurring questions:
@@ -187,4 +189,4 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
 ## When done
 
-If you learned something new about the Braze tables during the session (new gotcha, new canonical definition, data quality issue), update this skill and the data dictionary so the next session benefits.
+If you learned something new about the Braze tables during the session (new gotcha, new canonical definition, data quality issue), do **not** edit this skill or any local copy — only the data steward commits to the repo, and session copies are discarded. Instead, create an Asana task on the **Claude Data** board (workspace cafezupas.com, project `1216769551099591`) titled `KB finding: <short title>`, describing what you observed (include the query that surfaced it) and the proposed change. The steward reviews and merges vetted findings; the next session's fresh clone benefits automatically.

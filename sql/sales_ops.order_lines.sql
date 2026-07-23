@@ -33,10 +33,10 @@ end if;
 -- cluster by rev_center_name, item_name, parent_item_grp_name, parent_rev_center_name
 -- as
 
--- delete `marketing-data-442316`.sales_ops.order_lines
--- where businessdate >= start_date;
+delete `marketing-data-442316`.sales_ops.order_lines
+where businessdate >= start_date;
 
--- insert into `marketing-data-442316`.sales_ops.order_lines
+insert into `marketing-data-442316`.sales_ops.order_lines
 
 with brink_order as (
 select distinct bo.Id

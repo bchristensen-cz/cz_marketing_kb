@@ -36,7 +36,12 @@ Full column docs: `data_dictionaries/sales_ops.order_customer.md` and `data_dict
 | Item sales | `sum(item_gross_sales)` / `sum(item_net_sales)` from `order_lines` |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
-Defaults unless the user says otherwise: include catering, include employee-discount orders, all channels, all stores. State these assumptions in the answer when they matter.
+**Required clarifications (steward rule 2026-07-23):** if the user hasn't already stated them, ASK before querying — do not assume defaults:
+
+1. **Date range** — which dates the question covers.
+2. **Catering** — included or excluded (`revenue_category = 'Catering'`).
+
+Not up for discussion: **store 1111 is ALWAYS excluded** (test/training store — add `store_id <> 1111` on whichever table you're querying; never include it, don't ask). Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 
 ## Join pattern
 
@@ -56,6 +61,7 @@ where l.BusinessDate between @start and @end
 select BusinessDate, revenue_category, round(sum(net_sales), 2) net_sales, count(*) orders
 from `marketing-data-442316`.sales_ops.order_customer
 where BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
+  and store_id <> 1111
 group by 1, 2
 order by 1, 2
 ```
@@ -65,6 +71,7 @@ order by 1, 2
 select item_name, item_size, sum(qty) qty, round(sum(item_net_sales), 0) net_sales
 from `marketing-data-442316`.sales_ops.order_lines
 where BusinessDate >= date_sub(current_date('America/Denver'), interval 90 day)
+  and store_id <> 1111
   and line_item_type = 'item'
   and item_type = 'Entree'
 group by 1, 2
@@ -77,6 +84,7 @@ limit 25
 select parent_item_grp_name, count(distinct combo_order_line_item_id) combos
 from `marketing-data-442316`.sales_ops.order_lines
 where BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
+  and store_id <> 1111
   and parent_rev_center_name = 'Try 2 Combo'
 group by 1
 order by 2 desc
@@ -87,6 +95,7 @@ order by 2 desc
 select mapped_cust_id, count(*) orders, min(BusinessDate) first_order, max(BusinessDate) last_order
 from `marketing-data-442316`.sales_ops.order_customer
 where BusinessDate >= '2025-01-01'
+  and store_id <> 1111
   and mapped_cust_id is not null
 group by 1
 ```
@@ -100,6 +109,7 @@ group by 1
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.
 - `is_guest_order` is loyalty-based (91% of all-time orders are guest); `mapped_cust_id` coverage is ~53% over the last year.
 - `order_count` / `days_since_prev_order` are computed within reload windows — recompute for lifetime analyses.
+- **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales, order, and item metrics on both tables. No exceptions (steward rule 2026-07-23).
 - Store footprint: ~90 stores in UT, AZ, MN, NV, WI, ID, IL, OH, TX. Store attributes come from `sales_ops.store_info`.
 - Timezone: business runs on `America/Denver` for schedule logic; each store's local time is in `order_datetime`, UTC in `order_customer.order_timestamp_utc`.
 - There is **no `order_id` column** on either table — the order key is `brink_order_id` (multiple users have hit this error).

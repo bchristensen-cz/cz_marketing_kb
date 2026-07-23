@@ -39,7 +39,7 @@
 ### Store & channel
 | Column | Type | Description |
 |---|---|---|
-| `store_id` | INTEGER | FK to `sales_ops.store_info`. |
+| `store_id` | INTEGER | FK to `sales_ops.store_info`. **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales/order metrics. No exceptions (steward rule 2026-07-23). |
 | `store_name` | STRING | Store name (denormalized). |
 | `state` | STRING | Store state. Current footprint: Utah (30 stores), Arizona (14), Minnesota (12), Nevada (9), Wisconsin (8), Idaho (7), Illinois (6), Ohio (3), Texas (1). |
 | `destination` | STRING | Raw Brink destination. Common values: To Stay, Takeout, DoorDash, Online Takeout, Drive Thru, Good Life Lane, UberEats, CZ Delivery, GrubHub, Catering Online Delivery/Takeout, Postmates, Fundraiser, EZ Cater Delivery/Takeout. |

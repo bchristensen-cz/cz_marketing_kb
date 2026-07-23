@@ -45,7 +45,7 @@
 |---|---|---|
 | `BusinessDate` | DATE | Operating day (partition column). |
 | `order_datetime` | DATETIME | Local order time (same logic as `order_customer`). |
-| `store_id`, `store_name` | | Store. |
+| `store_id`, `store_name` | | Store. **Store 1111 is a test/training store — ALWAYS exclude** (`store_id <> 1111`); no exceptions (steward rule 2026-07-23). |
 | `is_catering` | BOOLEAN | Catering flag from pulse. |
 
 ### Item descriptors

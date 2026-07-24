@@ -102,7 +102,7 @@ boim.orderId
 , 'modifier' as item_type
 , boim.ItemId
 , i.Name
-, boim.GrossSales as amount
+, boim.ItemGrossSales as amount  -- was boim.GrossSales; ItemGrossSales is the true modifier contribution (verified 2026-07-23: order gross match 94.2% -> 99.99%)
 , boim.ItemGrossSales as gross
 , boim.ItemNetSales as net
 , mc.name as item_modifier

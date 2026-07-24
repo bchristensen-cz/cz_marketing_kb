@@ -19,7 +19,7 @@
 | Value | ~1yr rows | What it is | Sales columns behavior |
 |---|---|---|---|
 | `item` | 36.3M | Sold menu items (voided/cleared/deleted excluded) | `item_gross_sales`/`item_net_sales` populated; tips rung as items zeroed out |
-| `modifier` | 25.5M | Modifiers attached to items | `amount` = modifier gross; `item_gross_sales`/`item_net_sales` = modifier's item-level gross/net |
+| `modifier` | 25.5M | Modifiers attached to items | `amount` = `item_gross_sales` = modifier's item-level gross (`brinkOrderItemModifier.ItemGrossSales`; switched from unreliable `GrossSales` 2026-07-23, full history rebuilt) |
 | `tip` | 0.7M | Tip items (name matches `\btip\b`) | `amount` has the tip; gross/net forced to 0 |
 | `discount` | 0.6M | Order discounts | `amount` is **negative**; gross/net = 0 |
 | `fee` | 0.4M | Fee items (name matches `\bfee\b`) | Included in gross/net like items |
@@ -67,7 +67,7 @@
 ### Amounts (FLOAT, dollars)
 | Column | Description |
 |---|---|
-| `amount` | The line's raw amount. **Do not sum for sales** — includes tips and fees, and discounts/promotions are negative. |
+| `amount` | The line's amount. For `item`/`fee`/`surcharge`/`modifier` it equals the line's gross contribution; `tip` and `gift_card` carry their own amounts; `discount`/`promotion` are negative. Don't sum blindly across all line types — filter by `line_item_type` (see reconstruction gotcha). |
 | `item_gross_sales` | Line gross sales (0 for tips, discounts, promos, gift cards). **Canonical line-level sales measure.** |
 | `item_net_sales` | Line net sales, Brink-given (same zeroing rules). **Validation-only (steward rule 2026-07-23)** — canonical net = gross minus discounts/promotions, but those are separate order-level lines with no per-item allocation, so per-item net isn't computable here. Use `item_gross_sales` for item mix. |
 | `price` | Item master price (menu price). |
@@ -77,7 +77,7 @@
 - **Always filter `BusinessDate`** (partition). Cluster fields (`rev_center_name`, `item_name`, parent fields) make filters on them cheap.
 - **Item counts**: filter `line_item_type = 'item'` — otherwise modifiers/fees inflate counts ~2x.
 - **Order-level sales**: use `order_customer` — gross = `gross_sales`, net = calculated `gross_sales - total_discount_amount - total_promotions_amount` (the `net_sales` column is validation-only). Line-level sums won't exactly reconcile to order-level (order-level discounts, rounding).
-- **Line-level net reconstruction (validated 2026-07-23, 90-day window):** best formula = `item/fee/surcharge item_gross_sales + modifier amount + discount/promotion amount`. Matches order-level calculated net exactly for 94% of orders that have lines; aggregate runs ~0.7% HIGH vs order-level (modifier gross is the noisy component — omitting modifiers drops exact match to 80%). Order-level remains the truth.
+- **Line-level reconstruction (revalidated 2026-07-23 after the modifier-gross fix):** gross = `sum(amount)` over `item/fee/surcharge/modifier` lines; net = gross + `discount/promotion` amounts (negative). Matches order-level for **99.99% of orders that have lines** (90d: gross diff −$1.5K, net diff −$0.4K on $55M). Order-level `order_customer` remains the truth for reported sales.
 - **~1.3% of `order_customer` orders have NO rows in this table** — all carry exactly $0 calculated net (fully-voided orders; voided lines are excluded here). Benign for sales, but order counts from `order_lines` undercount vs `order_customer` (validated 2026-07-23 after the 07-22 load incident was repaired).
 - **Combos**: components each carry their own sales; the parent combo line may carry the base price. For "how many Try 2 Combos sold", count distinct `combo_order_line_item_id` where `parent_rev_center_name = 'Try 2 Combo'`. For entrée mix inside combos, use component rows.
 - `'Foutain Beverages'` (sic) in `rev_center_name`; corrected to `'Fountain Beverage'` only in `parent_item_grp_name`.

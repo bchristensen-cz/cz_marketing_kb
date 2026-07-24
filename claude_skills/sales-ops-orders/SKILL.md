@@ -137,11 +137,11 @@ group by 1
 
 ## Gotchas checklist (scan before answering)
 
-- `order_lines.amount` is NOT sales — it mixes tips, fees, and negative discounts. Use `item_gross_sales`.
+- `order_lines.amount` sums to order gross ONLY when filtered to `line_item_type in ('item','fee','surcharge','modifier')` — tip and gift_card lines carry non-sales amounts, discounts/promotions are negative. For item mix, `item_gross_sales` on `line_item_type = 'item'` is still the measure.
 - **Net sales is always calculated** (`gross_sales - total_discount_amount - total_promotions_amount`), never read from the `net_sales` / `item_net_sales` columns — those are Brink-given and kept for validation only (steward rule 2026-07-23). The upcoming `claude` dataset views will expose only the calculated net.
 - Item counts need `line_item_type = 'item'`, else modifiers ~double the count.
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.
-- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level calculated net from `order_customer` is the truth for sales. Quantified 2026-07-23: ~1.3% of orders have no `order_lines` rows (all $0-net fully-voided orders — benign), and line-reconstructed net runs ~0.7% high on the rest (modifier gross noise) — never report sales totals from `order_lines`.
+- Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level calculated net from `order_customer` is the truth for sales. Quantified 2026-07-23 (post modifier-gross fix): ~1.3% of orders have no `order_lines` rows (all $0-net fully-voided orders — benign); on the rest, line reconstruction matches 99.99% of orders (aggregate within ~$1.5K on $55M/90d). Still: report sales totals from `order_customer`, not `order_lines`.
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.
 - `is_guest_order` is loyalty-based (91% of all-time orders are guest); `mapped_cust_id` coverage is ~53% over the last year.
 - `order_count` / `days_since_prev_order` are computed within reload windows — recompute for lifetime analyses.

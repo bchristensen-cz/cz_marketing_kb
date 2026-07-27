@@ -13,8 +13,18 @@
 --   * Brink-given net retained as brink_net_sales (validation only)
 --   * dropped item_net_sales, item_netsales_with_mods, mods_net_sales
 --   * is_catering fixed: destination test now evaluates (was dead code behind a NULL/false branch)
---   * customer_type added: person | kiosk | internal | aggregator (NULL when unidentified)
+--   * customer_type added (order-level; see note at the column)
 --   * order_count / days_since_prev_order moved out to sales_ops.order_sequence
+--
+-- 2026-07-27 changes:
+--   * delete predicate corrected to business_date
+--   * pulse_orders CTE added (scoped + deduped)
+--   * is_guest_order changed from INT64 0/1 to BOOL
+--   * sm_external_user_map now carries the sessionM email; mapped_email falls back to it
+--   * mapped_email_domain added
+--   * customer_type reworked to match on order emails (ezcater / doordash / itsacheckmate)
+--   * FAN-OUT FIX: pulse_orders now dedupes on brink_order_id, not po.id
+--   * order_sequence: customer-level guard excluding ids that ever appear as non-person
 
 declare run_dt datetime default current_datetime('America/Denver');
 declare run_hour int64 default extract(hour from run_dt);
@@ -40,7 +50,7 @@ end if;
 
 
 delete `marketing-data-442316`.sales_ops.order_customer
-where business_date >= start_date;
+where business_date >= start_date;  -- '2026-07-27' updated to business_date
 
 insert into `marketing-data-442316`.sales_ops.order_customer
 
@@ -240,9 +250,13 @@ qualify row_number() over(partition by u.transaction_id order by u.updated_date 
 )
 
 
+-- '2026-07-27' joined sessionM.users to pick up the loyalty email. Verified safe: 0 of
+-- 1,780,888 'cafezupas' mapping rows lack a users row, so the inner join drops nothing.
 , sm_external_user_map as (
-select u.user_id, u.external_user_id
+select u.user_id, u.external_user_id, lower(uu.email) as email
 from `marketing-data-442316`.sessionM.external_user_mappings u
+	join `marketing-data-442316`.`sessionM.users` uu
+	on uu.user_id = u.user_id
 where 1=1
 and u.external_user_id_type = 'cafezupas'
 qualify row_number() over(partition by u.user_id order by u.updated_at desc) = 1
@@ -261,6 +275,7 @@ qualify row_number() over(partition by h.pos_transaction_key order by h.last_upd
 select
 h.pos_transaction_key
 , safe_cast(m.external_user_id as int64) as external_user_id
+, m.email
 from header_trans h
 	left join user_trans t
 	on t.transaction_id = h.transaction_id
@@ -279,6 +294,34 @@ from header_trans h
 )
 
 
+-- '2026-07-27' FAN-OUT FIX: dedupe on brink_order_id, not po.id. po.id was already unique, so
+-- the previous `partition by po.id` was a no-op. The actual defect is two DIFFERENT pulse
+-- orders pointing at one Brink order (e.g. brink_order_id 2279778269187 -> pulse 4545135 and
+-- 4608051), which produced two mart rows, double-counted $263.99 and attributed one order to
+-- two customers. Lowest pulse id wins for now - deterministic and stable across rebuilds.
+-- TODO: replace with a proper brink<->pulse map table that picks more intelligently.
+--
+-- Scoping note: `po.business_date >= start_date` is safe. Verified 2026-07-27 across June -
+-- of the 55 orders where pulse and Brink business_date disagree, pulse is always the LATER
+-- date (lag -1 to -42 days), never earlier, so no in-window Brink order loses its pulse row.
+, pulse_orders as (
+select
+po.id
+, po.business_date
+, po.customer_id
+, po.is_catering
+, po.promise_time
+, po.source
+, po.brink_order_id
+, po.created_at
+from `marketing-data-442316`.pulse.orders po
+where 1=1
+and po.brink_order_id > 0
+and po.business_date >= start_date
+qualify row_number() over(partition by po.brink_order_id order by po.id) = 1
+)
+
+
 select
 bo.Id as brink_order_id
 , po.id as pulse_order_id
@@ -287,23 +330,9 @@ bo.Id as brink_order_id
 -- flagging POS-only catering orders (Catering Online Delivery, EZ Cater, ...) as false.
 , case when lower(bd.name) like '%cater%' or po.is_catering = true then true
 		else coalesce(po.is_catering, false) end as is_catering
-, case when ocs.is_loyalty_user is null then 1 else 0 end as is_guest_order
+, case when ocs.is_loyalty_user is null then true else false end as is_guest_order
 , po.customer_id as pulse_customer_id
 , t.external_user_id as sm_external_user_id
--- '2026-07-24' customer_type: keeps non-person ids out of customer counts / frequency /
--- retention. NULL when the order has no identified customer.
---   kiosk      - shared outdoor-kiosk terminal accounts (NNN-outdoor-N@cafezupas.com)
---   internal   - employee / developer accounts (@cafezupas.com, @tkxel.com, @tkxel.io)
---   aggregator - orphan pulse customer id (referenced on orders, absent from pulse.customers);
---                third-party funnel, dominated by id 19192 (itsacheckmate.com)
---   person     - real guest, including sessionM-only in-store scanners
-, case
-    when coalesce(po.customer_id, t.external_user_id) is null then null
-    when regexp_contains(coalesce(c.email,''), r'(?i)^[0-9]+-outdoor-[0-9]+@cafezupas\.com$') then 'kiosk'
-    when regexp_contains(coalesce(c.email,''), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
-    when po.customer_id is not null and c.id is null then 'aggregator'
-    else 'person'
-  end as customer_type
 , bo.BusinessDate as business_date
 , case when date_diff(date(bo.ClosedTime), bo.BusinessDate, day) > 0 then coalesce(po.promise_time, bo.OpenedTime) else bo.ClosedTime end as order_datetime
 , timestamp(case when date_diff(date(bo.ClosedTime), bo.BusinessDate, day) > 0 then coalesce(po.promise_time, bo.OpenedTime) else bo.ClosedTime end , s.timezone_name) as order_timestamp_utc
@@ -357,8 +386,32 @@ bo.Id as brink_order_id
 , coalesce(p.total_change, 0) as total_change
 , ocs.email
 , ocs.phone
-, coalesce(c.email, ocs.booking_customer_email,ocs.email) as mapped_email
+, coalesce(c.email, ocs.booking_customer_email,ocs.email, t.email) as mapped_email
+, split(lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, t.email)), '@')[safe_offset(1)] as mapped_email_domain
 , coalesce(po.customer_id, t.external_user_id) as mapped_cust_id
+-- '2026-07-24' customer_type: keeps non-person ids out of customer counts / frequency /
+-- retention. NULL when the order has no identified customer.
+--   kiosk      - shared outdoor-kiosk terminal accounts (NNN-outdoor-N@cafezupas.com)
+--   internal   - employee / developer accounts (@cafezupas.com, @tkxel.com, @tkxel.io)
+--   aggregator - third-party ordering funnel (ezcater, doordash, itsacheckmate)
+--   person     - real guest, including sessionM-only in-store scanners
+--
+-- '2026-07-27' DELIBERATELY ORDER-LEVEL, NOT CUSTOMER-LEVEL (steward decision). The dominant
+-- aggregator id 19192 does not exist in pulse.customers at all - it should, and there is an
+-- open ticket with the dev team. Until that record exists there is no reliable customer-level
+-- attribute to classify on, so resolving a single type per mapped_cust_id would just be
+-- confidently wrong. Consequence: a mapped_cust_id CAN carry more than one customer_type
+-- across its orders (30 ids / 108,313 orders in June 2026; 19192 alone is 107,807 aggregator
+-- + 196 person). order_sequence compensates with its own customer-level guard - see below.
+, case
+    when coalesce(po.customer_id, t.external_user_id) is null then null
+    when regexp_contains(coalesce(c.email, ocs.booking_customer_email,ocs.email, ''), r'(?i)^[0-9]+-outdoor-[0-9]+@cafezupas\.com$') then 'kiosk'
+		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%ezcater%' then 'aggregator'
+		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%doordash.com' then 'aggregator'
+		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%itsacheckmate.com' then 'aggregator'
+    when regexp_contains(coalesce(c.email, ocs.booking_customer_email,ocs.email, ''), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
+    else 'person'
+  end as customer_type
 , c.loyalty_signup_date
 -- '2026-07-24' removed this section and added the new sequence table below which will be joined in the view
 -- , case when coalesce(po.customer_id, t.external_user_id) is null then null else row_number() over(partition by coalesce(po.customer_id, t.external_user_id)
@@ -376,9 +429,8 @@ from brink_order bo
 	on boi.orderId = bo.id
 		left join brink_order_item_modifiers boim
 		on boim.orderid = boi.orderid
-			left join `marketing-data-442316`.pulse.orders po
+			left join pulse_orders po
 			on po.brink_order_id = bo.Id
-			and po.brink_order_id > 0
 				left join `marketing-data-442316`.sales_ops.store_info s
 				on s.store_id = bo.FKStoreId
 					left join total_payment p
@@ -402,28 +454,38 @@ from brink_order bo
 													on gc.orderid = bo.id
 ;
 
-
--- KNOWN GRAIN DEFECT (found 2026-07-24): the pulse.orders join above is not guaranteed 1:1.
--- brink_order_id 2279778269187 (2024-09-17, store 154) has two pulse orders (4545135, 4608051)
--- pointing at it, producing two mart rows and double-counting $263.99. 1 order in ~50M, so
--- immaterial to sales, but it breaks the documented "1 row per brink_order_id" guarantee.
--- Fix candidate: dedupe pulse.orders with
---   qualify row_number() over(partition by po.brink_order_id order by po.id) = 1
--- Not applied yet - needs a decision on which pulse order should win. Asana task logged.
-
-
 -- ---------------------------------------------------------------------------
 -- sales_ops.order_sequence
 -- Customer order sequencing, split out of order_customer 2026-07-24 so the window functions
 -- are computed over FULL history every run instead of being scoped to the reload window.
 -- Rebuilt in full on every run of this script (~420 MB / ~97 slot-seconds - measured
--- 2026-07-24). Restricted to customer_type = 'person': kiosk terminals, internal accounts and
--- the third-party aggregator id are not people and would poison sequence/lifetime counts.
+-- 2026-07-24).
+--
+-- Two-layer filter:
+--   1. customer_type = 'person' at the row level.
+--   2. '2026-07-27' CUSTOMER-LEVEL GUARD - drop any mapped_cust_id that appears as a
+--      non-person on ANY order. customer_type is deliberately order-level in the mart (see
+--      the note above), but sequencing is per-customer by definition, so a partly-person id
+--      leaks. Without this guard the aggregator id 19192 kept 196 person-typed orders/month
+--      and surfaced as the single highest-lifetime "customer" in the table at 7,386 orders.
+--      Measured 2026-07-27: the guard removes 965 ids / 11,392 rows (0.16%) and brings the
+--      max lifetime_customer_order_count down to 1,496.
 -- ---------------------------------------------------------------------------
 
+
+-- drop table `marketing-data-442316`.sales_ops.order_sequence;
 create or replace table `marketing-data-442316`.sales_ops.order_sequence
 partition by business_date
-cluster by brink_order_id as
+cluster by brink_order_id, mapped_cust_id as
+
+with non_person_cust as (
+select distinct oc.mapped_cust_id
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.mapped_cust_id is not null
+and oc.customer_type <> 'person'
+)
+
 select
   oc.brink_order_id
 , oc.business_date
@@ -431,9 +493,14 @@ select
 , row_number() over w                                      as customer_order_count
 , date_diff(oc.business_date, lag(oc.business_date) over w, day)  as days_since_prev_order
 , count(*) over(partition by oc.mapped_cust_id) as lifetime_customer_order_count
+-- , min(oc.order_datetime) over(partition by oc.mapped_cust_id) as first_order_datetime
+-- , max(oc.order_datetime) over(partition by oc.mapped_cust_id) as last_order_datetime
 from `marketing-data-442316`.sales_ops.order_customer oc
+	left join non_person_cust np
+	on np.mapped_cust_id = oc.mapped_cust_id
 where 1=1
 and oc.mapped_cust_id is not null
 and oc.customer_type = 'person'
+and np.mapped_cust_id is null
 window w as (partition by oc.mapped_cust_id order by oc.order_datetime, oc.brink_order_id)
 ;

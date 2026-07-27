@@ -9,9 +9,9 @@ Use this table for anything involving *where an order sits in a customer's histo
 | Property | Value |
 |---|---|
 | Grain | 1 row per `brink_order_id`, restricted to orders with an identified **person** customer |
-| Row count | ~10.5M rows, earliest `business_date` **2023-03-06** (see Gotchas) |
+| Row count | ~7.17M rows, earliest `business_date` **2023-03-06** (see Gotchas) |
 | Partitioned by | `business_date` (DAY) — **always filter on it** |
-| Clustered by | `brink_order_id` |
+| Clustered by | `brink_order_id`, `mapped_cust_id` |
 | Refresh | `create or replace` in full on **every run** of the `order_customer` scheduled query — same schedule, same skipped hours (0–3, 5–7 MT). Cost measured 2026-07-24: ~420 MB scanned, ~97 slot-seconds per run. |
 | Source build script | `sql/sales_ops.order_customer.sql` (second statement) |
 | Upstream | `sales_ops.order_customer` only |
@@ -29,7 +29,14 @@ Use this table for anything involving *where an order sits in a customer's histo
 
 ## Scope
 
-Restricted at build to `mapped_cust_id is not null and customer_type = 'person'`. Kiosk terminals, internal accounts, and the orphan third-party aggregator id are excluded — they are not people, and including them produced absurd sequences (aggregator id `19192` had a lifetime count of **2,481,596**).
+Two-layer filter at build:
+
+1. **Row level** — `mapped_cust_id is not null and customer_type = 'person'`.
+2. **Customer level (added 2026-07-27)** — drop any `mapped_cust_id` that appears as a non-person on *any* order, anywhere in history.
+
+The second layer exists because `customer_type` is deliberately order-level in `order_customer` (the dominant aggregator id `19192` is missing from `pulse.customers`, so there is no reliable customer-level attribute — dev ticket open). Sequencing, though, is per-customer by definition, so a partly-person id leaks straight through a row-level filter. Without the guard, `19192` kept 196 person-typed orders per month and surfaced as **the single highest-lifetime "customer" in the table at 7,386 orders**.
+
+Measured 2026-07-27: the guard removes 965 ids / 11,392 rows (0.16%) and brings the maximum `lifetime_customer_order_count` down to **1,496** — a plausible superfan rather than an aggregator.
 
 Consequence: **this table does not cover every order.** Roughly 47% of orders have no identified customer, and a further ~38% of identified orders are non-person. Never compute sales or order totals here — join back to `order_customer` for those, or use it as the source and this table as the enrichment.
 
@@ -62,4 +69,5 @@ Join on **both** `brink_order_id` and `business_date` so the optimizer can prune
 - Sequence ordering uses `order_datetime` (store-local). For catering and advance orders that closed on a later day, `order_datetime` falls back to `promise_time` — so sequence order can differ slightly from `business_date` order.
 - Rebuilt in full every run, so values are stable and consistent across the whole table at any point in time — but they **can change between runs** if a backfill inserts an order into the middle of a customer's history. Don't cache sequence numbers in downstream saved results.
 - `lifetime_customer_order_count` counts only orders present in this table (person-identified, 2023-03-06 forward).
-- As of 2026-07-24 the live table was still built from the pre-`customer_type` definition (all identified ids, 10,474,378 rows including one duplicate from the `order_customer` pulse fan-out defect). It picks up the `customer_type = 'person'` restriction on the next scheduled run.
+- **A customer excluded by the customer-level guard has no rows at all**, even for their clearly-personal orders. 965 ids are affected — mostly staff who sometimes ordered with a work email. If you're analysing employee ordering behaviour specifically, work from `order_customer` directly.
+- The `order_customer` pulse fan-out defect put one duplicate `brink_order_id` in this table. Fixed in the build script 2026-07-27; clears on the next full rebuild.

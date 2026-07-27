@@ -98,7 +98,7 @@ Practical consequences:
 
 - `count(distinct mapped_cust_id) where customer_type = 'person'` slightly **over**counts — an id can qualify on a handful of its orders.
 - Filtering orders by `customer_type = 'person'` is still correct and is the documented rule.
-- `order_sequence` applies its own customer-level guard so sequencing isn't affected — see its dictionary.
+- `order_sequence` carries `customer_type` per order and does **no** pre-filtering (changed 2026-07-27) — its sequence and lifetime counts span all of a customer's orders regardless of type. See its dictionary before using them.
 
 ### Financials (all FLOAT, dollars)
 
@@ -128,7 +128,7 @@ Practical consequences:
 
 ### Customer behavior
 
-Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `brink_order_id`). See `data_dictionaries/sales_ops.order_sequence.md`. The sequence is now computed over full history every run, so the old "reload-window-scoped, treat as approximate" caveat no longer applies.
+Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `brink_order_id` + `business_date`). See `data_dictionaries/sales_ops.order_sequence.md`. The sequence is now computed over full history every run, so the old "reload-window-scoped, treat as approximate" caveat no longer applies — but as of 2026-07-27 the table is **not** filtered to `customer_type = 'person'`, so filter it yourself.
 
 ## Gotchas
 

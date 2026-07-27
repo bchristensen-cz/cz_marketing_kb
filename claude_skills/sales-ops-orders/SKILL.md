@@ -17,7 +17,7 @@ Project: `marketing-data-442316`. The three approved tables for order/sales anal
 
 - **`sales_ops.order_customer`** — one row per order. Sales, channel, customer identity. Default table for sales/order/customer questions.
 - **`sales_ops.order_lines`** — one row per line element. Menu mix, items, modifiers, combos.
-- **`sales_ops.order_sequence`** — one row per identified-person order. Order sequencing, recency, lifetime counts.
+- **`sales_ops.order_sequence`** — one row per order that has a `mapped_cust_id` (all customer types). Order sequencing, recency, lifetime counts.
 
 Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_ops.order_lines.md`, `sales_ops.order_sequence.md`. Read them before writing non-trivial queries.
 
@@ -44,9 +44,9 @@ Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_
 | Catering | `is_catering = true` for the business line; `revenue_category = 'Catering'` for channel reporting (see gotchas — they differ slightly) |
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Digital source | `order_source` (NULL = in-store POS) |
-| First-time order | `order_sequence.customer_order_count = 1` — but only back to 2023-03-06 (see gotchas) |
-| Repeat order | `order_sequence.customer_order_count > 1` |
-| Lifetime orders per customer | `order_sequence.lifetime_customer_order_count` |
+| First-time order | `order_sequence.customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 (see gotchas) |
+| Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
+| Lifetime orders per customer | `order_sequence.lifetime_customer_order_count` **with `customer_type = 'person'`** |
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)` |
 | Item sales | `sum(item_gross_sales)` from `order_lines`. Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart — use gross for item mix |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
@@ -143,11 +143,14 @@ order by 1
 ```
 
 **First-time vs repeat orders (last 30 days):**
+
+`order_sequence` is not pre-filtered, so the `customer_type` test belongs in the CASE — without it every aggregator and kiosk order lands in "Repeat" and swamps the split.
 ```sql
 select
 oc.business_date
 , case
     when os.brink_order_id is null then 'Unidentified'
+    when os.customer_type <> 'person' then 'Non-person'
     when os.customer_order_count = 1 then 'First-time'
     else 'Repeat'
   end as guest_type
@@ -222,8 +225,9 @@ If a question needs guest-checkout identity, say the mart can't answer it and po
 - **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it.
 - **Grain defect (1 order in ~50M):** `brink_order_id` 2279778269187 has two rows in `order_customer` — two pulse orders point at one Brink order, double-counting $263.99 across two customers. Immaterial to totals; use `count(distinct brink_order_id)` if exact uniqueness matters.
 - **`order_sequence` history starts 2023-03-06**, not 2018. `customer_order_count = 1` means "first order since March 2023", not first-ever. Say so when presenting first-time-guest numbers.
-- **`order_sequence` is a `left join`, never inner** — ~2/3 of orders have no row (unidentified or non-person) and an inner join silently drops them.
-- **`order_sequence` also excludes 965 customer ids entirely** via its customer-level guard (any id ever seen as non-person). Mostly staff who occasionally ordered with a work email. For employee ordering behaviour, work from `order_customer` directly. The guard is **temporary** — it exists because `19192` has no `pulse.customers` record; once that's fixed upstream the id classifies as `aggregator` on every order and the guard should be revisited.
+- **`order_sequence` is a `left join`, never inner** — ~47% of orders have no `mapped_cust_id` and so no row; an inner join silently drops them.
+- **`order_sequence` is NOT pre-filtered (changed 2026-07-27).** It holds every order with a `mapped_cust_id`, all customer types, and carries `customer_type` as a column. You must filter `customer_type = 'person'` yourself. Earlier versions were person-only — saved queries written against those are now wrong.
+- **Sequence numbers are computed across all of a customer's orders, then you filter.** Filtering `customer_type = 'person'` selects rows but does not renumber them, so a mixed id (30 in June 2026) shows million-scale `customer_order_count` / `lifetime_customer_order_count` on its person rows — `19192` sits around 2.48M. Treat those as unreliable; recompute the window over person orders if you need true per-person sequencing.
 - `order_lines.amount` sums to order gross ONLY when filtered to `line_item_type in ('item','fee','surcharge','modifier')` — tip and gift_card lines carry non-sales amounts, discounts/promotions are negative. For item mix, `item_gross_sales` on `line_item_type = 'item'` is still the measure.
 - Item counts need `line_item_type = 'item'`, else modifiers ~double the count.
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.

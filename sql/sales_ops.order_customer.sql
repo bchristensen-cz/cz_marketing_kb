@@ -298,7 +298,8 @@ from header_trans h
 -- the previous `partition by po.id` was a no-op. The actual defect is two DIFFERENT pulse
 -- orders pointing at one Brink order (e.g. brink_order_id 2279778269187 -> pulse 4545135 and
 -- 4608051), which produced two mart rows, double-counted $263.99 and attributed one order to
--- two customers. Lowest pulse id wins for now - deterministic and stable across rebuilds.
+-- two customers. HIGHEST pulse id wins (`order by po.id desc`) - steward's call: the later
+-- pulse order is the one actually tied to the real order.
 -- TODO: replace with a proper brink<->pulse map table that picks more intelligently.
 --
 -- Scoping note: `po.business_date >= start_date` is safe. Verified 2026-07-27 across June -
@@ -318,7 +319,7 @@ from `marketing-data-442316`.pulse.orders po
 where 1=1
 and po.brink_order_id > 0
 and po.business_date >= start_date
-qualify row_number() over(partition by po.brink_order_id order by po.id) = 1
+qualify row_number() over(partition by po.brink_order_id order by po.id desc) = 1
 )
 
 
@@ -393,7 +394,9 @@ bo.Id as brink_order_id
 -- retention. NULL when the order has no identified customer.
 --   kiosk      - shared outdoor-kiosk terminal accounts (NNN-outdoor-N@cafezupas.com)
 --   internal   - employee / developer accounts (@cafezupas.com, @tkxel.com, @tkxel.io)
---   aggregator - third-party ordering funnel (ezcater, doordash, itsacheckmate)
+--   aggregator - third-party ordering funnel, matched on the order email: ezcater,
+--                doordash.com / guest.doordash.com, itsacheckmate.com. Dominated by pulse
+--                id 19192. (Matched by EMAIL, not by the old orphan-pulse-id test.)
 --   person     - real guest, including sessionM-only in-store scanners
 --
 -- '2026-07-27' DELIBERATELY ORDER-LEVEL, NOT CUSTOMER-LEVEL (steward decision). The dominant
@@ -461,23 +464,18 @@ from brink_order bo
 -- Rebuilt in full on every run of this script (~420 MB / ~97 slot-seconds - measured
 -- 2026-07-24).
 --
--- Two-layer filter:
---   1. customer_type = 'person' at the row level.
---   2. '2026-07-27' CUSTOMER-LEVEL GUARD - drop any mapped_cust_id that appears as a
---      non-person on ANY order. customer_type is deliberately order-level in the mart (see
---      the note above), but sequencing is per-customer by definition, so a partly-person id
---      leaks. Without this guard the aggregator id 19192 kept 196 person-typed orders/month
---      and surfaced as the single highest-lifetime "customer" in the table at 7,386 orders.
---      Measured 2026-07-27: the guard removes 965 ids / 11,392 rows (0.16%) and brings the
---      max lifetime_customer_order_count down to 1,496.
+-- '2026-07-27 SCOPE CHANGE (steward decision): NO customer_type filter here. Every order
+-- with a mapped_cust_id is represented, and customer_type is carried as a column so the
+-- caller filters. Rationale: don't bake compensation for upstream bad data into the mart -
+-- the earlier person-filter plus customer-level guard was chasing pulse's missing customer
+-- record for id 19192, and that belongs in the dev fix, not here.
 --
---      TEMPORARY. When the dev team fixes pulse.customers / pulse.order_customers, 19192
---      gets a real record with a Checkmate email, c.email resolves on all its orders, and
---      every one classifies as aggregator - the leak closes at the source and the row-level
---      filter is enough for that id. What is left is ~964 genuinely mixed ids (mostly staff
---      alternating work and personal emails), and excluding those from sequencing is a
---      separate call. REVISIT THIS GUARD once the pulse fix lands: left in place it quietly
---      drops real customers from every cohort and retention analysis.
+-- CONSEQUENCE - read before using the lifetime columns. The window functions run over ALL
+-- of a customer's orders regardless of type, so for non-person ids the counts are enormous
+-- and meaningless: 19192 carries lifetime_customer_order_count ~2.48M. Filtering
+-- customer_type = 'person' AFTER the fact selects rows but does NOT renumber them, so a
+-- mixed id still shows million-scale sequence and lifetime values on its person rows.
+-- Canonical rule for customer metrics is unchanged: filter customer_type = 'person'.
 -- ---------------------------------------------------------------------------
 
 
@@ -485,30 +483,18 @@ from brink_order bo
 create or replace table `marketing-data-442316`.sales_ops.order_sequence
 partition by business_date
 cluster by brink_order_id, mapped_cust_id as
-
-with non_person_cust as (
-select distinct oc.mapped_cust_id
-from `marketing-data-442316`.sales_ops.order_customer oc
-where 1=1
-and oc.mapped_cust_id is not null
-and oc.customer_type <> 'person'
-)
-
 select
   oc.brink_order_id
 , oc.business_date
 , oc.mapped_cust_id
+, oc.customer_type
 , row_number() over w                                      as customer_order_count
 , date_diff(oc.business_date, lag(oc.business_date) over w, day)  as days_since_prev_order
 , count(*) over(partition by oc.mapped_cust_id) as lifetime_customer_order_count
 -- , min(oc.order_datetime) over(partition by oc.mapped_cust_id) as first_order_datetime
 -- , max(oc.order_datetime) over(partition by oc.mapped_cust_id) as last_order_datetime
 from `marketing-data-442316`.sales_ops.order_customer oc
-	left join non_person_cust np
-	on np.mapped_cust_id = oc.mapped_cust_id
 where 1=1
 and oc.mapped_cust_id is not null
-and oc.customer_type = 'person'
-and np.mapped_cust_id is null
 window w as (partition by oc.mapped_cust_id order by oc.order_datetime, oc.brink_order_id)
 ;

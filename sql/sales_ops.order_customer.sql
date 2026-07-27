@@ -470,6 +470,14 @@ from brink_order bo
 --      and surfaced as the single highest-lifetime "customer" in the table at 7,386 orders.
 --      Measured 2026-07-27: the guard removes 965 ids / 11,392 rows (0.16%) and brings the
 --      max lifetime_customer_order_count down to 1,496.
+--
+--      TEMPORARY. When the dev team fixes pulse.customers / pulse.order_customers, 19192
+--      gets a real record with a Checkmate email, c.email resolves on all its orders, and
+--      every one classifies as aggregator - the leak closes at the source and the row-level
+--      filter is enough for that id. What is left is ~964 genuinely mixed ids (mostly staff
+--      alternating work and personal emails), and excluding those from sequencing is a
+--      separate call. REVISIT THIS GUARD once the pulse fix lands: left in place it quietly
+--      drops real customers from every cohort and retention analysis.
 -- ---------------------------------------------------------------------------
 
 

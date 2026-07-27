@@ -38,6 +38,12 @@ The second layer exists because `customer_type` is deliberately order-level in `
 
 Measured 2026-07-27: the guard removes 965 ids / 11,392 rows (0.16%) and brings the maximum `lifetime_customer_order_count` down to **1,496** — a plausible superfan rather than an aggregator.
 
+> **The guard is a temporary compensation, not a permanent design.** Its main justification disappears once the dev team fixes `pulse.customers` / `pulse.order_customers`. When `19192` has a proper customer record with a Checkmate email, `c.email` resolves on every one of its orders and all 108K classify as `aggregator` — the 196 person-typed rows per month stop existing, and the row-level filter alone is sufficient for that id.
+>
+> What remains after that fix is the long tail: ~964 ids that are genuinely mixed, mostly staff who sometimes ordered with a work email and sometimes personally. Whether those should be excluded from sequencing is a separate judgement call. **Revisit the guard when the pulse fix lands** — keeping it indefinitely silently drops real customers from every cohort and retention analysis.
+
+Note the guard only *adds* exclusions for **mixed-type** ids. An id that is non-person on all of its orders is already removed by the row-level filter.
+
 Consequence: **this table does not cover every order.** Roughly 47% of orders have no identified customer, and a further ~38% of identified orders are non-person. Never compute sales or order totals here — join back to `order_customer` for those, or use it as the source and this table as the enrichment.
 
 ## Join pattern

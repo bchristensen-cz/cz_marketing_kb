@@ -21,7 +21,7 @@ The one-time setup each user needs is the project-instructions snippet in `CLIEN
 
 ```
 claude_skills/        Skills — how to query each domain (canonical definitions, joins, gotchas)
-  sales-ops-orders/   Order & sales data (order_customer, order_lines)
+  sales-ops-orders/   Order & sales data (order_customer, order_lines, order_sequence)
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
@@ -30,7 +30,7 @@ sql/                  Build scripts for data marts + validated query templates
 ## Ground rules
 
 1. Only query tables documented here. Upstream raw datasets (`brink.*`, `pulse.*`, `sessionM.*`) contain voids, duplicates, and traps — the marts exist so nobody has to relearn them.
-2. Always filter on the partition column (`BusinessDate`) — these tables are large.
+2. Always filter on the partition column — these tables are large. It's `business_date` on `order_customer` and `order_sequence`, `BusinessDate` on `order_lines` (rename pending).
 3. Use the canonical metric definitions in the skills. Don't invent alternate logic.
 4. Write ALL SQL in the steward's format (see "SQL style" in `claude_skills/sales-ops-orders/SKILL.md`): fully qualified table names, lowercase whenever possible, leading commas, `where 1=1` + one `and` per line, joins with `on` on the next line. The steward diagnoses user-generated SQL — it must be instantly readable in his layout.
 5. Found a gap or a new gotcha? **Don't edit the repo** — only the data steward (Brent) commits. Log it as an Asana task on the **Claude Data** board (workspace cafezupas.com, project `1216769551099591`), titled `KB finding: <short title>`, with what you observed (including the query) and the proposed change. The steward reviews, merges vetted findings into the repo, and pushes — the next session's clone picks it up automatically.
@@ -41,6 +41,7 @@ sql/                  Build scripts for data marts + validated query templates
 |---|---|---|
 | `marketing-data-442316.sales_ops.order_customer` | 1 row per order | Sales, orders, channels, customers, loyalty |
 | `marketing-data-442316.sales_ops.order_lines` | 1 row per line element | Menu mix, items, modifiers, combos |
+| `marketing-data-442316.sales_ops.order_sequence` | 1 row per identified-person order | Order sequencing, first-time vs repeat, recency, lifetime counts |
 | `marketing-data-442316.sales_ops.store_info` | 1 row per store | Store attributes (name, state, timezone) |
 | `marketing-data-442316.braze.*` (69 tables) | 1 row per message event | Campaign activity & engagement — use the `braze-campaigns` skill's templates, don't hand-roll unions |
 

@@ -158,11 +158,55 @@ force a full 1.37M-profile push to Braze daily. The export job should send only 
 hash moved since the last successful send, and let Braze compute recency from
 `last_order_date`.
 
+## Braze coverage — why 179,593 customers have no profile (investigated 2026-07-28)
+
+13% of person customers (179,593 of 1,374,213) have no matching `braze.users` row. This is
+**not** a property of those customers — it's a sync boundary.
+
+**Braze only began receiving non-loyalty customer profiles in November 2023.** Missing rate
+for customers acquired in a given month, split by whether they ever enrolled in loyalty:
+
+| First order month | Non-loyalty customers | % missing (non-loyalty) | % missing (loyalty) |
+|---|---|---|---|
+| 2023-03 | 3,374 | **98.8%** | 0.4% |
+| 2023-04 | 9,744 | **99.2%** | 0.8% |
+| 2023-05 | 21,496 | **98.0%** | 0.5% |
+| 2023-06 | 29,282 | 79.9% | 0.3% |
+| 2023-07 | 36,110 | 59.0% | 0.3% |
+| 2023-08 | 41,921 | 55.8% | 0.2% |
+| 2023-09 | 33,081 | 67.6% | 0.2% |
+| 2023-10 | 33,360 | 34.5% | 0.2% |
+| **2023-11** | 28,072 | **0.2%** | 0.2% |
+| 2023-12 | 23,853 | 0.7% | 4.5% |
+| 2024-01 → 2024-06 | ~51,000 | 0.6–1.3% | 4.3–6.2% |
+
+Loyalty members were synced from the start (~0.2–0.8% missing through 2023). Non-loyalty
+digital customers were not, and the pre-November-2023 backlog was **never backfilled**. That
+one cohort — 2023, no loyalty — accounts for **136,243 of the 179,593 gap (76%)**; the
+single-order slice alone is 123,390.
+
+Two consequences:
+
+- The gap is **static and shrinking as a share**, not growing. Post-2023 acquisition is
+  95–99% covered. Don't model it as ongoing leakage.
+- **A second, opposite problem starts in December 2023**: *loyalty* member coverage degrades
+  from ~0.2% missing to a steady **4–6%**, and it persists through 2026 (2026 loyalty
+  cohorts are 3.6–7.3% missing). Post-2023, a loyalty member is *more* likely to be missing
+  from Braze than a non-loyalty customer. That inversion is unexplained and is probably a
+  profile merge/deletion or sync defect — it is a live issue, unlike the 2023 backlog.
+  Logged as its own Asana task.
+
+Rejected hypotheses: account age alone (2024/2025/2026 are all ~4.5%, flat), zero-order
+customers (every row here has ≥1 order), and SessionM-only identity (99.5% of the 263,716
+SessionM-only customers *are* in Braze — only 1,227 are missing).
+
 ## Braze export contract (planned)
 
-- **Key:** `braze_external_id`. 13% of rows (179,593) have no matching `braze.users`
-  profile — decide whether the export creates them or skips them. Creating 180K profiles
-  has billing implications.
+- **Key:** `braze_external_id`. 179,593 rows (13%) have no matching `braze.users` profile —
+  decide whether the export creates them or skips them. Creating 180K profiles has billing
+  implications. See the coverage section above: 76% of them are one stale 2023 cohort, and
+  123,390 are single-order customers who last ordered years ago — a strong argument for
+  *skipping* rather than creating.
 - **Array cap:** Braze allows 25 elements per array attribute. Both JSON store columns are
   truncated to the top 25 stores by order count. 16 customers exceeded 25 stores on
   2026-07-28 (max 89), so this is a real but tiny truncation. Longest serialized value
@@ -216,12 +260,26 @@ Also checked: zero rows with a null/zero `lifetime_store_count`, zero null
 ## Roadmap
 
 - [ ] Deploy: create the scheduled query (5am MT proposed), then remove the DRAFT banner.
-- [ ] v2 — **menu-category attributes** from `order_lines`: `first_purch_cat` /
-      `last_purch_cat` in the existing `Bowls-Soups` style. Note the current Braze
-      `first_purch_cat_update` feed covers only **497 users** — it's a pilot, and this table
-      should absorb and supersede it. Requires settling the Try 2 Combo question (a combo's
-      category depends on which line shape you count) — see the combo line taxonomy in the
-      `sales-ops-orders` skill.
+- [ ] v2 — **menu-category attributes** from `order_lines`. Steward specified `item_type`
+      (2026-07-28). Two open problems, both measured on June 2026 (`line_item_type = 'item'`,
+      store 1111 excluded, top line per order by `item_gross_sales`, junk types dropped):
+      - **`item_type` is too coarse to segment on.** 72.7% of orders resolve to `Entree` and
+        17.2% to `Combos` — 90% in two buckets. The full list is `Entree`, `Combos`,
+        `Desserts` (6.7%), `Beverage` (1.2%), `Kids Meals` (0.9%), `Party Trays & Food`,
+        `Box Lunches`, `Sides/Misc Items`, `Cater Desserts`, `Cater Beverages`, plus
+        `Non Food/Bev Mis` and `Modifiers` (both must be excluded — `Non Food/Bev Mis` is
+        587K lines at $0 gross).
+      - **`Combos` is an artifact, not a preference.** A Try 2 Combo order's top line is
+        `item_type = 'Combos'`, which says nothing about what the guest ate. The dish is one
+        level down: `rev_center_name` splits `Entree` into `Sandwiches` (353K lines),
+        `Soups` (318K), `Salads` (285K), `Bowls` (280K), `Kids Meals` (121K) — and that is
+        also the grain the existing Braze `first_purch_cat` uses (`Bowls-Soups`,
+        `Soups-Sandwiches`). Recommend carrying **both** `item_type` and `rev_center_name`,
+        and resolving combos down to their component rev centers.
+      - The Braze `first_purch_cat_update` feed covers only **497 users** — it's a pilot, and
+        this table should absorb and supersede it.
+      - Still requires settling which combo line shape to count — see the combo line
+        taxonomy in the `sales-ops-orders` skill.
 - [ ] v2 — pull existing `braze.users.custom_attributes` (`churn_factor`, `points_balance`,
       `points_to_expire_EOM`, `sessionM_userid`, `amperity_id`) onto the row so Braze has one
       source. Read with `lax_string()` / `lax_float64()`.

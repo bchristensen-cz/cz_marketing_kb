@@ -80,6 +80,15 @@
 - **Line-level reconstruction (revalidated 2026-07-23 after the modifier-gross fix):** gross = `sum(amount)` over `item/fee/surcharge/modifier` lines; net = gross + `discount/promotion` amounts (negative). Matches order-level for **99.99% of orders that have lines** (90d: gross diff −$1.5K, net diff −$0.4K on $55M). Order-level `order_customer` remains the truth for reported sales.
 - **~1.3% of `order_customer` orders have NO rows in this table** — all carry exactly $0 calculated net (fully-voided orders; voided lines are excluded here). Benign for sales, but order counts from `order_lines` undercount vs `order_customer` (validated 2026-07-23 after the 07-22 load incident was repaired).
 - **Combos**: components each carry their own sales; the parent combo line may carry the base price. For "how many Try 2 Combos sold", count distinct `combo_order_line_item_id` where `parent_rev_center_name = 'Try 2 Combo'`. For entrée mix inside combos, use component rows.
+- **An entrée has THREE line shapes, and `line_item_type = 'item'` ≠ standalone** (verified 2026-07-28, Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27, store 1111 excluded):
+
+  | Shape | Filter | Lines | Gross |
+  |---|---|---|---|
+  | Standalone | `line_item_type='item'` and `composite_item_id is null` | 24,125 | $215,890 |
+  | Combo component (priced) | `line_item_type='item'` and `composite_item_id is not null` | 47,461 | $315,280 |
+  | Combo slot (zero-priced) | `line_item_type='modifier'`, parent `Try 2 Combo` | 37,623 | $386 |
+
+  The two combo shapes are **mutually exclusive per `combo_order_line_item_id`**, so combo units = 47,461 + 37,623 = 85,084 with no double count; combos were ~78% of units. Both shapes occur across all 88 stores in both months and both combo compositions — it's a per-combo-slot POS structure, not a store, size, or date split. **Priced combo components hold more gross than standalone**, so don't assume revenue sits only in standalone lines. Catering Box Lunches also emit zero-priced `modifier` entrée lines (`parent_rev_center_name = 'Box Lunches'`).
 - `'Foutain Beverages'` (sic) in `rev_center_name`; corrected to `'Fountain Beverage'` only in `parent_item_grp_name`.
 - `item_type` and `rev_center_name` fall back to raw `description` / NULL for a small tail (~7K rows/yr NULL) — filter to known buckets for clean rollups.
 - No `order_timestamp_utc` here — join to `order_customer` if you need UTC.

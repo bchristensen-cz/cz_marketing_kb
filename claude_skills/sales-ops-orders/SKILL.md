@@ -13,6 +13,8 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 >
 > One fix is written but **not yet redeployed**: the `pulse.orders` fan-out dedupe (Asana 1216918745136203). Until the next full rebuild, `brink_order_id` 2279778269187 still has two rows.
 
+> **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Five scope items — store 1111, date range, catering, Try 2 Combo inclusion, and named-product resolution — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
+
 Project: `marketing-data-442316`. The three approved tables for order/sales analysis:
 
 - **`sales_ops.order_customer`** — one row per order. Sales, channel, customer identity. Default table for sales/order/customer questions.
@@ -51,6 +53,22 @@ Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_
 | Item sales | `sum(item_gross_sales)` from `order_lines`. Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart — use gross for item mix |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
+### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
+
+Do not guess these, and do not rebuild the channel rollup yourself. Live values on a normal business day:
+
+| `order_source` | Usual `revenue_category` | Note |
+|---|---|---|
+| `NULL` | In-Store (also Fundraiser, rare Third_Party) | In-store POS order |
+| `Checkmate` | Third_Party | itsacheckmate aggregator feed (DoorDash/UberEats/GrubHub/Postmates) |
+| `iOS` / `Android` | Digital | Native app |
+| `Mobile Web` / `Web` | Digital (also Catering) | Web ordering; `Web` + Catering = online catering |
+| `Outdoor Kiosk` | **In-Store** | Shared kiosk terminal — pairs with `customer_type = 'kiosk'`. Do NOT count as Digital |
+| `Operator` | Catering (some Digital/In-Store) | Phone/manual order entry |
+| `ezcater` | Catering | ezCater marketplace |
+
+**Anti-pattern — do not reconstruct `revenue_category` from `destination`.** `revenue_category` is the canonical rollup and is already on `order_customer`. Hand-rolled `case when destination like '%Cater%' … end` classifiers were observed in analyst SQL 2026-07-27; they drift from the mart and are only needed on the legacy `OrderCustomer` table, which you should not be using. If a destination isn't landing in the category you expect, raise it as a `KB finding:` task instead of writing your own CASE.
+
 ### The `customer_type` rule (steward rule 2026-07-24)
 
 `order_customer.customer_type` classifies the customer **on each order** as `person`, `kiosk`, `internal`, or `aggregator` (NULL when unidentified). **38% of identified orders belong to non-person ids** — shared outdoor-kiosk terminal accounts, employee/developer accounts, and the third-party ordering funnel (ezcater / doordash / itsacheckmate), dominated by pulse id `19192` at ~108K orders a month across 89 stores.
@@ -62,12 +80,71 @@ State which you did whenever it affects the answer.
 
 **It's order-level, not customer-level** (steward decision 2026-07-27). The same `mapped_cust_id` can carry different types across its orders — June 2026: 30 ids / 108,313 orders, with `19192` splitting 107,807 `aggregator` + 196 `person`. This is deliberate: `19192` doesn't exist in `pulse.customers` (dev ticket open), so there's no reliable customer-level attribute to collapse onto. Practical effect: `count(distinct mapped_cust_id) where customer_type = 'person'` slightly overcounts. Filtering *orders* by `customer_type = 'person'` is still the correct rule. `order_sequence` applies its own customer-level guard, so sequencing and lifetime counts are unaffected.
 
-**Required clarifications (steward rule 2026-07-23):** if the user hasn't already stated them, ASK before querying — do not assume defaults:
+## Pre-query clarification protocol (steward rule 2026-07-28 — MANDATORY)
 
-1. **Date range** — which dates the question covers.
-2. **Catering** — included or excluded.
+**Before running the query that answers the question, confirm scope.** Every one of these has burned a real answer. Ask them together in ONE message (don't interrogate the user one item at a time), then query. If the user has already stated an item, don't re-ask it.
 
-Not up for discussion: **store 1111 is ALWAYS excluded** (test/training store — add `store_id <> 1111` on whichever table you're querying; never include it, don't ask). Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
+### 1. Store 1111 — never ask, always exclude
+
+**`store_id <> 1111`** on whichever table you're querying. Test/training store. Not a question, not a default the user can override, and don't raise it as an assumption — just do it and note it in the assumptions line.
+
+### 2. Date range — ask
+
+Which dates the question covers. Never assume "last 30 days" or "this month" from silence. Also confirm the interpretation when a range is fuzzy ("May" = `2026-05-01` to `2026-05-31`; "last week" = the most recent **Mon–Sat**, see the business-week gotcha).
+
+### 3. Catering — ask
+
+Included or excluded, defined as **`is_catering = true` / `= false`** (BOOLEAN — `is_catering = 0` fails). It's a superset of `revenue_category = 'Catering'`; see the gotcha. Catering skews item questions hard: catering trays/box lunches carry the same `item_name` as the retail item at very different volumes and prices, so an unstated choice here silently changes the answer.
+
+### 4. Try 2 Combos — ask whenever the question involves soups, sandwiches, or salads
+
+Any question naming a soup, sandwich, or salad (or the `Soups` / `Sandwiches` / `Salads` revenue centers, or `item_type = 'Entree'`) must confirm: **does the user want only items sold standalone, or also the ones bundled inside a Try 2 Combo?**
+
+This is not a rounding difference. For Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27: **24,125 standalone vs 85,084 inside combos** — combos are ~78% of units. Answering the wrong one is off by 4x. See the combo line taxonomy below for the exact SQL, and **present the split** rather than a single blended number whenever combos are included.
+
+### 5. Named products — resolve the name against the data FIRST, then confirm
+
+When the user asks about a specific product by name, **do not guess the string and go straight to the metric query.** `item_name` values don't match how people speak, one spoken name can span several rows (sizes, catering variants, LTO renames, seasonal spellings), and a wrong guess returns a clean-looking wrong number — or zero rows presented as "no sales."
+
+Run a cheap discovery query first, show the user the list, and get confirmation:
+
+```sql
+select
+ol.item_name
+, ol.rev_center_name
+, ol.item_type
+, count(*) as lines
+, round(sum(ol.item_gross_sales), 0) as gross_sales
+from `marketing-data-442316`.sales_ops.order_lines ol
+where 1=1
+and ol.BusinessDate between @start and @end
+and ol.store_id <> 1111
+and lower(ol.item_name) like '%grilled cheese%'   -- broadest distinctive fragment, lowercased
+group by 1, 2, 3
+order by 4 desc
+```
+
+- Match on the **shortest distinctive fragment**, lowercased on both sides. `like '%ultimate grilled cheese%'` misses `Ultimate Grilled Cheese Box`; `like '%grilled cheese%'` finds the family.
+- `item_name` is a **cluster field** — these filters are cheap. Still filter `BusinessDate`.
+- Show the candidate names with their volumes and revenue centers so the user can see what they're choosing between, then ask which to include. Zero rows = say so and widen the fragment; never report `$0`.
+- Only after the name list is confirmed, run the metric query against the agreed `item_name in (...)` set.
+
+**Worked example (verified 2026-07-28, 2026-05-03 → 2026-06-27, store 1111 excluded).** "Grilled cheese" resolves to **four** different items, which is exactly why this step exists:
+
+| `item_name` | Standalone | Combo component | Bundle slot ($0)\* |
+|---|---|---|---|
+| `Brisket Grilled Cheese` | 28,891 | 44,874 | 31,181 |
+| `Ultimate Grilled Cheese` | 24,125 | 47,461 | 39,113 |
+| `Grilled Cheese Sandwich` | **52** | 28,340 | 65,041 |
+| `Ultimate Grilled Cheese Box` | 43 | — | — |
+
+\* All zero-priced `modifier` lines, both catering flags — i.e. Try 2 Combo **plus** Box Lunches. The Try 2 Combo–only subset for Ultimate Grilled Cheese is 37,623 (the figure used in the taxonomy below); the remaining 1,490 are Box Lunches. Scope your `parent_rev_center_name` filter deliberately.
+
+Note `Grilled Cheese Sandwich` is effectively a **combo-only item** — 52 standalone lines against 93K combo appearances. If a user says "grilled cheese" and you silently pick one name, you can be off by an order of magnitude or answer about the wrong sandwich entirely.
+
+**Also: `Ultimate Grilled Cheese Box` carries `is_catering = false`** despite being the catering box product. So `is_catering = false` does **not** reliably strip catering-only SKUs — the catering question (item 3) and the name question (item 5) are independent, and you need both.
+
+Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 
 ## SQL style (steward rule 2026-07-23 — MANDATORY)
 
@@ -186,6 +263,43 @@ order by 3 desc
 limit 25
 ```
 
+**Entrée units split standalone vs inside a Try 2 Combo (verified 2026-07-28):**
+
+An entrée appears in `order_lines` in **three** distinct shapes. Getting these wrong is the single easiest way to produce a confidently wrong item number — see the taxonomy note below.
+
+```sql
+select
+date_trunc(ol.BusinessDate, week(monday)) as week
+, case
+    when ol.line_item_type = 'item' and ol.composite_item_id is null then 'Standalone'
+    when ol.line_item_type = 'item' and ol.composite_item_id is not null then 'Combo component (priced)'
+    when ol.line_item_type = 'modifier' then 'Combo slot (zero-priced)'
+  end as sale_shape
+, sum(ol.qty) as units
+, round(sum(ol.item_gross_sales), 2) as gross_sales
+from `marketing-data-442316`.sales_ops.order_lines ol
+where 1=1
+and ol.BusinessDate between @start and @end
+and ol.store_id <> 1111
+and ol.item_name = 'Ultimate Grilled Cheese'
+and ol.is_catering = false
+group by 1, 2
+order by 1, 2
+```
+
+### Combo line taxonomy — the three shapes (steward finding 2026-07-28)
+
+| Shape | Filter | Carries revenue? |
+|---|---|---|
+| **Standalone** | `line_item_type = 'item'` and `composite_item_id is null` | Yes — full menu price |
+| **Combo component (priced)** | `line_item_type = 'item'` and `composite_item_id is not null`, `parent_rev_center_name = 'Try 2 Combo'` | **Yes** — real allocated price (~$6.64/line for UGC) |
+| **Combo slot (zero-priced)** | `line_item_type = 'modifier'` | No — ~$0.01/line; the entrée recorded as a modifier selection |
+
+- **`line_item_type = 'item'` is NOT the same as "standalone."** For Ultimate Grilled Cheese over 2026-05-03 → 2026-06-27: 71,586 `item` lines, but only **24,125** were standalone — the other **47,461** were priced combo components. Treating all `item` lines as standalone overstates standalone units ~3x and understates combo units.
+- **The two combo shapes are mutually exclusive per `combo_order_line_item_id`** (verified: 47,461 groups have exactly one priced component line and zero modifier lines; 37,623 have exactly one modifier line and zero component lines). So **combo units = component lines + modifier lines, with no double-counting.** Both shapes appear across all 88 stores in both months and both combo types, so this is a per-combo-slot POS structure, not a config migration or a store/size split.
+- **Revenue lives in the first two shapes, not just the first.** The priced combo components carried $315,280 of gross for UGC in that window vs $215,890 standalone — so "essentially all revenue is in standalone lines" is false. For revenue-per-unit, divide by standalone + component lines; exclude the zero-priced modifier lines.
+- Box Lunches (catering) also surface entrées as zero-priced `modifier` lines with `parent_rev_center_name = 'Box Lunches'` — another reason to settle the catering question up front.
+
 **Try 2 Combo count and composition:**
 ```sql
 select
@@ -205,10 +319,14 @@ order by 2 desc
 Guest checkout (web/mobile-web ordering without signing in) went live around **2026-06-25**, with the first orders landing **2026-06-29**. A guest-checkout order looks like this on `order_customer`:
 
 ```sql
-and oc.order_source in ('mobile_web_source', 'web_source')   -- `source` on the legacy table
+and oc.order_source in ('Web', 'Mobile Web')   -- `source` on the legacy table
 and oc.email is null
 and oc.mapped_email is null
 ```
+
+> **Corrected 2026-07-28.** This block previously said `order_source in ('mobile_web_source', 'web_source')`. **Those values do not exist** — the filter silently returned **zero rows**, so any answer built on it reported "no guest-checkout orders" rather than failing. The real values are `'Web'` and `'Mobile Web'` (verified against `business_date = 2026-07-27`, and they always matched `data_dictionaries/sales_ops.order_customer.md`). If you produced a guest-checkout number before this date, recheck it.
+>
+> **Where the bad values came from** — they are the *raw pulse* values. `sql/sales_ops.order_customer.sql` lines 358–359 map `po.source = 'mobile_web_source' → 'Mobile Web'` and `'web_source' → 'Web'`. Someone documented the upstream side of the mapping instead of the mart side. General lesson: **filter values you write must come from the mart's own dictionary, never from a build script's source expressions** — the whole point of the mart is that it renamed them.
 
 **The mart carries no email or identity for these orders**, so you cannot tell a brand-new guest from a lapsed known customer using the approved tables alone. The two known workarounds both leave the walls and are therefore **not approved for business answers**:
 
@@ -220,8 +338,11 @@ If a question needs guest-checkout identity, say the mart can't answer it and po
 ## Gotchas checklist (scan before answering)
 
 - **Partition columns differ by table**: `order_customer.business_date` and `order_sequence.business_date` vs `order_lines.BusinessDate`. A rename of `order_lines` is planned; until then, spell both correctly or the query fails or scans everything.
+  - **It's the underscore, not the capitals.** BigQuery column references are case-insensitive, so `ol.businessdate` resolves fine against `BusinessDate`. The failure mode is mixing the two *names*: writing `BusinessDate` against `order_customer` gives `Unrecognized name: BusinessDate; Did you mean business_date?` (observed in an analyst MCP session 2026-07-27). Read the error literally — it names the table's real column.
+- **`order_lines` has no `order_id`** — this now leads the gotcha list because it is the single most-repeated error in the query log: `Name order_id not found inside ol`, hit three more times on 2026-07-27/28 by the same analyst. The order key is `brink_order_id` on every one of these tables.
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
 - **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
+- **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
 - **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it.
 - **Grain defect (1 order in ~50M):** `brink_order_id` 2279778269187 has two rows in `order_customer` — two pulse orders point at one Brink order, double-counting $263.99 across two customers. Immaterial to totals; use `count(distinct brink_order_id)` if exact uniqueness matters.
 - **`order_sequence` history starts 2023-03-06**, not 2018. `customer_order_count = 1` means "first order since March 2023", not first-ever. Say so when presenting first-time-guest numbers.
@@ -230,6 +351,9 @@ If a question needs guest-checkout identity, say the mart can't answer it and po
 - **Sequence numbers are computed across all of a customer's orders, then you filter.** Filtering `customer_type = 'person'` selects rows but does not renumber them, so a mixed id (30 in June 2026) shows million-scale `customer_order_count` / `lifetime_customer_order_count` on its person rows — `19192` sits around 2.48M. Treat those as unreliable; recompute the window over person orders if you need true per-person sequencing.
 - `order_lines.amount` sums to order gross ONLY when filtered to `line_item_type in ('item','fee','surcharge','modifier')` — tip and gift_card lines carry non-sales amounts, discounts/promotions are negative. For item mix, `item_gross_sales` on `line_item_type = 'item'` is still the measure.
 - Item counts need `line_item_type = 'item'`, else modifiers ~double the count.
+- **`line_item_type = 'item'` does not mean "sold standalone"** (verified 2026-07-28). It includes priced Try 2 Combo component lines, which for Ultimate Grilled Cheese were 66% of all `item` lines. Split on `composite_item_id is null` to isolate true standalone sales. See the combo line taxonomy in Recipes — an answer built on the wrong shape is off by multiples, not percentages.
+- **Ask about Try 2 Combo inclusion on every soup / sandwich / salad question** before querying (pre-query protocol item 4). Combos were ~78% of Ultimate Grilled Cheese units.
+- **Resolve product names with a `like` discovery query before measuring them** (pre-query protocol item 5). Never hard-code a guessed `item_name`; a near-miss returns a clean wrong number or a silent zero.
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.
 - Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level `net_sales` from `order_customer` is the truth for sales. Quantified 2026-07-23 (post modifier-gross fix): ~1.3% of orders have no `order_lines` rows (all $0-net fully-voided orders — benign); on the rest, line reconstruction matches 99.99% of orders (aggregate within ~$1.5K on $55M/90d). Still: report sales totals from `order_customer`, not `order_lines`.
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.

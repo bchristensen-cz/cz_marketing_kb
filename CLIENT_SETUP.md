@@ -64,36 +64,83 @@ menu, items, stores, campaigns, Braze, BigQuery):
    answer from general knowledge, do not guess table or column names, and
    do not query BigQuery. A failed clone is a hard stop, not a reason to
    improvise.
-7. Always show me the SQL you ran.
+7. Always show me the SQL.
 ```
 
 ---
 
-## Step 3 — Always start your chats inside that project
+## Step 3 — Paste the global backstop
 
-This is the one thing that actually goes wrong.
+Step 2 only protects chats **inside** that project. This step protects everything else.
 
-Project instructions only load for chats **inside** the project. If you start a normal chat, Claude never pulls the knowledge base, and it may confidently invent table names and give you a wrong number that looks completely reasonable.
+Go to **Settings → General → "Instructions for Claude"** and add the block below (keep anything already there). Unlike project instructions, this applies to every chat and every Cowork session you ever start — so if you forget to open the project, the guardrails still hold.
 
-So: open the project first, then ask. If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it, then re-ask your question.
+```
+# Cafe Zupas company data
+
+For any question about Cafe Zupas business data — sales, orders, customers,
+menu, items, stores, campaigns, Braze, BigQuery — the only approved source
+of query logic is the knowledge base at:
+https://github.com/bchristensen-cz/cz_marketing_kb
+
+Clone it fresh each session (git clone --depth 1) into temporary working
+space, then follow its README and the relevant skill in claude_skills/
+verbatim. State the commit hash in your first data answer.
+
+Never answer these questions from general knowledge, from memory of a past
+session, or from a saved copy. Never guess table or column names. If you
+cannot clone the knowledge base, say so and stop — do not query BigQuery.
+
+This applies only to Cafe Zupas data questions; ignore it otherwise.
+```
+
+This is intentionally a **backstop, not a duplicate**. It names the repo and enforces the refusal, then hands off to the clone for all real logic. Don't paste the full protocol here — two copies of the same rules will eventually drift and produce inconsistent answers that are very hard to diagnose. Keep the detail in Step 2 and in the repo.
+
+It's also deliberately conditional ("only Cafe Zupas data questions"). Without that line it would fire on unrelated work — drafting an email, brainstorming a campaign name — and Claude would start cloning repositories for no reason.
 
 ---
 
-## Step 4 — Verify it's working
+## Step 4 — Always start your chats inside the project
 
-Ask your new project something simple, like:
+Even with the Step 3 backstop, the project is where the full protocol lives. Habit still matters: **open the project first, then ask.**
+
+If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it, then re-ask your question.
+
+---
+
+## Step 5 — Verify it's working
+
+Run these three checks once, in order. They take a couple of minutes and catch every common setup mistake.
+
+### Check 1 — the project path
+
+Inside your project, ask:
 
 > sales for ultimate grilled cheese from May 3rd to June 27th
 
-**Working correctly** — Claude will:
+**Pass:** Claude mentions a knowledge-base version (a short commit hash like `4098868`), then **asks you clarifying questions before querying** — the date range, whether to include catering, whether to include items sold inside Try 2 Combos, and which exact product names you mean. SQL is shown when it eventually runs.
 
-- mention the knowledge base version (a short commit hash like `ec9e1c2`)
-- **ask you clarifying questions before querying** — the date range, whether to include catering, whether to include items sold inside Try 2 Combos, and which exact product names to use
-- show you the SQL
-
-**Not working** — Claude gives you a number immediately with no clarifying questions, or no SQL, or no commit hash. That means the instructions didn't load. Re-check Steps 2 and 3.
+**Fail:** an immediate number with no questions, no commit hash, or no SQL. The project instructions didn't load — recheck Step 2.
 
 Being asked questions instead of handed a number is the system working as designed. Those questions exist because each one has produced a materially wrong answer before — combos alone can swing an item number by 4x.
+
+### Check 2 — the backstop path
+
+Start a **brand-new chat outside any project** and ask the same question.
+
+**Pass:** Claude still pulls the knowledge base and still refuses to answer from general knowledge. It may be a little less thorough than inside the project, but it must not invent table names or produce a bare number.
+
+**Fail:** Claude answers straight away, or names tables without cloning anything. The global instructions didn't take — recheck Step 3.
+
+### Check 3 — the backstop stays quiet
+
+In that same non-project chat, ask something unrelated:
+
+> write me a short thank-you note to a vendor
+
+**Pass:** you get a thank-you note, with no mention of BigQuery, git, or the knowledge base.
+
+**Fail:** Claude tries to clone the repo or brings up data tooling. The conditional line at the end of the Step 3 block is missing or was edited — re-paste it exactly.
 
 ---
 

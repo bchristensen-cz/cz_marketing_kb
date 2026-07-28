@@ -18,6 +18,8 @@ This KB is **pull-based**: every Claude session works from a fresh clone of `mai
 
 The one-time setup each user needs is the project-instructions snippet in `CLIENT_SETUP.md` — it's deliberately tiny and never changes, so it can't go stale.
 
+Provisioning a new person (Claude seat, BigQuery access, Asana, verification, question-wording tips) is the steward's runbook in `ADMIN_ONBOARDING.md`.
+
 ## Structure
 
 ```

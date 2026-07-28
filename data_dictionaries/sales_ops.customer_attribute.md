@@ -136,7 +136,14 @@ assumption breaks and the array will double-count that store — re-run the chec
 
 ### Trailing windows
 
-Anchored on `attribute_asof_date`, inclusive of today: `business_date > asof_date - N`.
+Anchored on `attribute_asof_date`: `business_date > attribute_asof_date - N`.
+
+**`attribute_asof_date` is the day *before* the build runs** (steward decision 2026-07-28).
+The job runs at 5am MT and stores don't open until ~10am, so anchoring on the run date would
+make `orders_l30` cover 29 real business days plus an empty stub — and a mid-afternoon
+re-run would silently produce different numbers. Anchoring to the last complete business day
+makes every window whole-day and independent of run time. So a build on 2026-07-28 carries
+`attribute_asof_date = 2026-07-27`, and `orders_l30` covers 2026-06-28 → 2026-07-27.
 
 | Column | Type | Description |
 |---|---|---|
@@ -148,7 +155,7 @@ These are the columns that force the daily full recompute.
 ### Housekeeping
 | Column | Type | Description |
 |---|---|---|
-| `attribute_asof_date` | DATE | The date the windows are anchored to. Every row shares it. |
+| `attribute_asof_date` | DATE | The last complete business day the windows are anchored to — **`run_date - 1`**, not the run date. Every row shares it. Check it to detect a stale build. |
 | `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. |
 | `updated_at` | TIMESTAMP | Build time. |
 
@@ -247,9 +254,13 @@ Also checked: zero rows with a null/zero `lifetime_store_count`, zero null
 - **Catering is included** in every lifetime and window total. Net it out with
   `lifetime_catering_order_count` if the question excludes catering.
 - **Windows are anchored on `attribute_asof_date`, not on query time.** If the build fails
-  and the table goes stale, `orders_l30` is silently a window ending on a past date. Check
-  `attribute_asof_date` before trusting the window columns — the equivalent of the
-  `max(business_date)` check on the fact tables.
+  and the table goes stale, `orders_l30` is silently a window ending on a past date and the
+  numbers still *look* fine. Check `attribute_asof_date` before trusting the window columns
+  — the equivalent of the `max(business_date)` check on the fact tables. Expected value is
+  yesterday; anything older means the build didn't run.
+- **`days_since_last_order` is measured from `attribute_asof_date`, not from today.** On a
+  healthy build that's off by one day from "now"; on a stale build it's off by however long
+  the build has been broken.
 - **Build ordering matters.** This table must run after the 4am `order_customer` reload. If
   it runs during the reload window it will aggregate a partially-deleted table.
 - 844 customers (0.06%) have no `mapped_email` — they're SessionM in-store scanners with no
@@ -260,8 +271,10 @@ Also checked: zero rows with a null/zero `lifetime_store_count`, zero null
 ## Roadmap
 
 - [ ] Deploy: create the scheduled query (5am MT proposed), then remove the DRAFT banner.
-- [ ] v2 — **menu-category attributes** from `order_lines`. Steward specified `item_type`
-      (2026-07-28). Two open problems, both measured on June 2026 (`line_item_type = 'item'`,
+- [ ] v2 — **menu-category attributes** from `order_lines`. **Decided 2026-07-28: carry
+      BOTH `item_type` and `rev_center_name`**, and resolve Try 2 Combos down to their
+      component rev centers rather than leaving them as `Combos`. Evidence, measured on
+      June 2026 (`line_item_type = 'item'`,
       store 1111 excluded, top line per order by `item_gross_sales`, junk types dropped):
       - **`item_type` is too coarse to segment on.** 72.7% of orders resolve to `Entree` and
         17.2% to `Combos` — 90% in two buckets. The full list is `Entree`, `Combos`,

@@ -32,7 +32,13 @@
 --     lifetime_catering_order_count carried alongside so downstream can net it out.
 
 declare run_dt datetime default current_datetime('America/Denver');
-declare asof_date date default date(run_dt);
+declare run_date date default date(run_dt);
+-- Anchored to YESTERDAY, not the run date (steward decision 2026-07-28). The job runs at
+-- 5am MT but stores don't open until ~10am, so anchoring on today would make orders_l30
+-- span 29 real business days plus an empty stub, and re-running the job in the afternoon
+-- would silently change the answer. Anchoring to the last complete day makes every window
+-- whole-day and independent of run time.
+declare asof_date date default date_sub(run_date, interval 1 day);
 declare history_start date default date '2018-08-07';
 
 -- ---------------------------------------------------------------------------

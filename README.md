@@ -14,6 +14,7 @@ This KB is **pull-based**: every Claude session works from a fresh clone of `mai
 2. Read this README, then the relevant skill in `claude_skills/`, then the data dictionaries it references — from the fresh clone only.
 3. **State the KB version** in the first data answer of the session (`git log -1 --format='%h %ad'`), so stale copies are visible.
 4. Users never push, fork, or edit this repo. Findings go to the steward via Asana (see Ground rules).
+5. **A failed clone is a hard stop.** If the clone doesn't succeed, say the KB is unavailable and stop — do not answer from general knowledge, do not guess table or column names, and do not query BigQuery. There is deliberately no local fallback: the walls in these skills (approved tables only, canonical definitions, partition filters, the pre-query clarification protocol) exist precisely because unguided querying of this warehouse produces confident wrong answers. Answering without the KB is worse than not answering.
 
 The one-time setup each user needs is the project-instructions snippet in `CLIENT_SETUP.md` — it's deliberately tiny and never changes, so it can't go stale.
 

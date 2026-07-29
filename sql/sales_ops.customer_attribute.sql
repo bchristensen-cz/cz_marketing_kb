@@ -5,7 +5,10 @@
 -- Purpose: customer base table holding lifetime + trailing-window aggregates. Feeds
 -- (a) analyst segmentation in BigQuery and (b) a daily custom_attributes push to Braze.
 --
--- STATUS 2026-07-28: DRAFT - NOT DEPLOYED. No scheduled query exists yet.
+-- STATUS 2026-07-29: LIVE. Deployed as a scheduled query running daily at 5am MT.
+-- 5am is deliberate: order_customer's 4am job is delete-then-insert, so a build landing
+-- inside that window would aggregate a partially-deleted table and undercount silently.
+-- Do not move this earlier.
 --
 -- Design decisions (steward, 2026-07-28):
 --   * FULL create-or-replace every run, not a MERGE. Measured cost is ~1.4 GB / run

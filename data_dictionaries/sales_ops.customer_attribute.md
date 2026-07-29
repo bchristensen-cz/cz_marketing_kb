@@ -1,11 +1,11 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.customer_attribute`
 
-> ## 🚧 DRAFT — NOT DEPLOYED (2026-07-28)
+> ## ✅ LIVE since 2026-07-29
 >
-> The build script exists at `sql/sales_ops.customer_attribute.sql`; **no table and no
-> scheduled query exist yet.** The SELECT body has been validated against live data (see
-> Validation below) but nothing has been written. Do not answer business questions from
-> this table until this banner is removed.
+> Deployed as a scheduled query running **daily at 5am MT**. First build completed
+> 2026-07-29 05:00 MT with `attribute_asof_date = 2026-07-28`, 1,375,117 rows, 687 MB.
+> Verified against live `order_customer` on the same filters — exact match on orders, net
+> sales, and both trailing windows (see Validation). Approved for business answers.
 
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
@@ -20,11 +20,11 @@ Two consumers:
 | Property | Value |
 |---|---|
 | Grain | 1 row per `mapped_cust_id` where `customer_type = 'person'` |
-| Row count | **1,374,213** (as of 2026-07-28) |
+| Row count | **1,375,117** · 687 MB (build of 2026-07-29) |
 | Partitioned by | none — it's a ~1.4M-row dimension, partitioning buys nothing |
 | Clustered by | `mapped_cust_id` |
-| Refresh | Daily, full `create or replace`. Schedule TBD — must run **after** the 4am `order_customer` reload completes; 5am MT proposed |
-| Cost | ~3.8 GB scanned / ~985 slot-seconds per run (measured 2026-07-28) ≈ $0.019/run |
+| Refresh | **Daily at 5am MT**, full `create or replace`. Deliberately after the 4am `order_customer` reload — see Gotchas. |
+| Cost | ~3.8 GB scanned / ~985 slot-seconds per run ≈ $0.019/run |
 | Source build script | `sql/sales_ops.customer_attribute.sql` |
 | Upstream | `sales_ops.order_customer` **only** |
 
@@ -68,7 +68,7 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 |---|---|---|
 | `mapped_cust_id` | INT64 | Canonical customer key. Primary key of this table. |
 | `braze_external_id` | STRING | `cast(mapped_cust_id as string)` — the Braze `external_id`. 87% (1,194,620 of 1,374,213) match an existing `braze.users` row. |
-| `mapped_email` | STRING | Most recent non-null email across the customer's orders. NULL for 844 customers (0.06%). |
+| `mapped_email` | STRING | Most recent non-null email across the customer's orders. **100% populated** in the 2026-07-29 build. Was 844 NULLs on 2026-07-28, so this is not guaranteed to stay at zero — don't assume non-null without checking. |
 | `mapped_email_domain` | STRING | Domain of the same order's email. |
 
 ### Lifetime volume
@@ -223,27 +223,58 @@ SessionM-only customers *are* in Braze — only 1,227 are missing).
   attributes aren't turned on.
 - **Delta sends:** use `attribute_hash`, not a full daily push.
 
-## Validation (2026-07-28, SELECT body run against live data)
+## Validation
 
-Aggregates reconcile **exactly** to `order_customer` under the same filters
-(`business_date` 2018-08-07 → 2026-07-28, `store_id <> 1111`, `mapped_cust_id is not null`,
-`customer_type = 'person'`):
+### Post-deploy, against the live table (2026-07-29)
+
+The deployed table reconciles **exactly** to `order_customer` under the same filters
+(`business_date` 2018-08-07 → `attribute_asof_date`, `store_id <> 1111`,
+`mapped_cust_id is not null`, `customer_type = 'person'`):
 
 | Measure | `customer_attribute` | `order_customer` | Match |
 |---|---|---|---|
-| Rows / distinct customers | 1,374,213 / 1,374,213 | 1,374,213 | ✅ |
-| Total orders | 7,183,544 | 7,183,544 | ✅ |
-| Total net sales | $214,469,109.31 | $214,469,109.31 | ✅ |
-| Orders L30 | 210,167 | 210,167 | ✅ |
-| Orders L365 | 2,717,354 | 2,717,354 | ✅ |
+| Rows / distinct customers | 1,375,117 / 1,375,117 | 1,375,117 | ✅ |
+| Total orders | 7,181,272 | 7,181,272 | ✅ |
+| Total net sales | $214,426,387.42 | $214,426,387.42 | ✅ |
+| Orders L30 | 207,895 | 207,895 | ✅ |
+| Orders L365 | 2,715,082 | 2,715,082 | ✅ |
 
-Also checked: zero rows with a null/zero `lifetime_store_count`, zero null
-`first_order_revenue_category`, one row per customer (no join fan-out).
+Also confirmed: `attribute_asof_date = 2026-07-28` (yesterday — the anchor rule works), one
+row per customer, zero null/zero `lifetime_store_count`, zero null `primary_store_name`,
+schema matches the build script exactly (38 columns, clustered on `mapped_cust_id`).
+
+**Re-run this reconciliation any time the table is rebuilt after an `order_customer`
+change** — it's a two-query check and it's the only thing that catches a silent aggregation
+break.
+
+### Reconciliation query
+
+```sql
+select
+  count(*) as orders
+, count(distinct oc.mapped_cust_id) as customers
+, round(sum(oc.net_sales), 2) as net_sales
+, countif(oc.business_date > date_sub(date '2026-07-28', interval 30 day)) as orders_l30
+, countif(oc.business_date > date_sub(date '2026-07-28', interval 365 day)) as orders_l365
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.business_date between date '2018-08-07' and date '2026-07-28'   -- = attribute_asof_date
+and oc.store_id <> 1111
+and oc.mapped_cust_id is not null
+and oc.customer_type = 'person'
+```
+
+### Pre-deploy note on drift
+
+The 2026-07-28 pre-deploy run of the SELECT body gave 1,374,213 customers / 7,183,544 orders
+/ $214,469,109.31. The live build a day later gives 904 **more** customers and 2,272
+**fewer** orders. That is expected, not a defect: `order_customer`'s 4am reload restates the
+last 8 days (5 weeks on Mondays), so historical order counts move slightly between runs.
+**Don't treat any single-run figure from this table as a fixed number** — including in saved
+results or dashboards that are supposed to tie to a prior report.
 
 ## Gotchas
 
-- **NOT DEPLOYED.** See the banner. A commit to this repo does not create the table or the
-  scheduled query.
 - **Person-only by construction.** There is no `customer_type` column and no non-person
   rows. Don't reconstruct company-wide sales from this table — it excludes ~47% of orders
   (unidentified) plus all kiosk / internal / aggregator orders. **Sales totals still come
@@ -261,16 +292,21 @@ Also checked: zero rows with a null/zero `lifetime_store_count`, zero null
 - **`days_since_last_order` is measured from `attribute_asof_date`, not from today.** On a
   healthy build that's off by one day from "now"; on a stale build it's off by however long
   the build has been broken.
-- **Build ordering matters.** This table must run after the 4am `order_customer` reload. If
-  it runs during the reload window it will aggregate a partially-deleted table.
-- 844 customers (0.06%) have no `mapped_email` — they're SessionM in-store scanners with no
-  email on any order. They still get a row.
+- **Build ordering matters — 5am is not arbitrary.** `order_customer`'s 4am job runs
+  `delete … where business_date >= start_date` then `insert`. A build that lands inside that
+  window aggregates a partially-deleted table and silently undercounts recent orders with no
+  error. If the 4am job ever slows down or the 5am slot moves earlier, this breaks quietly.
+  The reconciliation query above is the detector.
+- **`order_customer` restates history, so this table's numbers move.** The 4am reload
+  rewrites the last 8 days (5 weeks on Mondays, ~13 months on the 1st). A customer's
+  `lifetime_order_count` can therefore change without them ordering. Don't cache these values
+  downstream and expect them to tie.
 - The known `order_customer` grain defect (`brink_order_id` 2279778269187 has two rows)
   inflates one customer's lifetime count by 1. Clears on the next `order_customer` rebuild.
 
 ## Roadmap
 
-- [ ] Deploy: create the scheduled query (5am MT proposed), then remove the DRAFT banner.
+- [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT.
 - [ ] v2 — **menu-category attributes** from `order_lines`. **Decided 2026-07-28: carry
       BOTH `item_type` and `rev_center_name`**, and resolve Try 2 Combos down to their
       component rev centers rather than leaving them as `Combos`. Evidence, measured on

@@ -186,7 +186,33 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   order by 1
   ```
 
-  Healthy is **~28–33% `pct_sm_linked`**. Anything under 15% means that day is corrupted.
+  Healthy is **~28–33% `pct_sm_linked`**, **excluding the current business date** — see below.
+  Anything under 15% on a *completed* day means that day is corrupted.
+
+- **🔑 SessionM loads ONCE PER DAY (~03:00 MT), so today's orders have no loyalty identity**
+  (steward-confirmed 2026-07-29). This is normal and permanent, not a defect.
+
+  | `business_date` | Brink orders | SessionM-linked | `pct_sm_linked` |
+  |---|---|---|---|
+  | Yesterday (2026-07-28) | 26,258 | 7,868 | **30.0%** ✅ |
+  | **Today (2026-07-29, 13:20 MT)** | 9,758 | **195** | **2.0%** — expected |
+
+  A day's transactions all land in the next morning's ~03:00 load, so **yesterday and older are
+  fully covered; today is not assessable for loyalty identity at all.** Consequences:
+
+  - **The detector above will false-positive on today's date every single day.** Always exclude
+    the current `business_date`. (This nearly produced a P1 raised against the ETL team over
+    entirely normal behaviour — the mistake was inferring ingestion cadence from
+    `last_updated_at` / `etl_time`, neither of which reflects the SessionM extract.)
+  - **Never answer a customer-grain question about today.** `mapped_cust_id`, person counts,
+    first-time vs repeat and anything from `order_sequence` / `customer_attribute` are all
+    ~98% under-identified for today. Sales, order counts and channel mix are fine — those come
+    from Brink, which loads intraday.
+  - This is why the load chain is ordered **SessionM ~03:00 → `order_customer` 04:00 reload →
+    `customer_attribute` 05:00**, and why `customer_attribute.attribute_asof_date` is
+    `run_date - 1`. Anchoring the trailing windows on *today* would have read a day with ~2%
+    loyalty identity and silently understated every customer metric. Don't "improve" that
+    anchor to today.
 
 - **`mapped_cust_id` can migrate between customers without a new order** (audited 2026-07-29).
   `sm_external_user_map` keeps one `external_user_id` per SessionM `user_id`, chosen by

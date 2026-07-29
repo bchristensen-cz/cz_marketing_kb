@@ -460,8 +460,22 @@ group by 1
 order by 1
 ```
 
-Healthy is **~28–33%**. Under 15% means that date is corrupted — **say so in the answer and
-exclude or caveat those dates** rather than reporting the number as-is.
+Healthy is **~28–33%**. Under 15% on a **completed** day means that date is corrupted — **say so
+in the answer and exclude or caveat those dates** rather than reporting the number as-is.
+
+> ### 🔑 Exclude today — SessionM loads once per day (~03:00 MT)
+>
+> **Today's date will always read ~2% and that is normal.** SessionM data for a given day lands
+> in the *next* morning's load, so today's orders have essentially no loyalty identity:
+> 2026-07-29 at 13:20 MT had 9,758 Brink orders and 195 SessionM links, against 7,868 (30.0%)
+> for 2026-07-28.
+>
+> - **Never apply the 15% rule to the current business date** — it is a guaranteed false positive.
+> - **Never answer a customer-grain question about today.** Customer counts, `mapped_cust_id`,
+>   first-time vs repeat, and anything from `order_sequence` / `customer_attribute` are ~98%
+>   under-identified for today. If asked about today, answer through **yesterday** and say why.
+> - **Sales, order counts and channel mix for today are fine** — those come from Brink, which
+>   loads intraday every hour.
 
 ## Gotchas checklist (scan before answering)
 

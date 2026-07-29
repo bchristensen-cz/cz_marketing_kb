@@ -8,6 +8,38 @@ Chain under audit: `user_point_transactions` + `transaction_discounts` +
 `transaction_headers` (`header_trans`) and `external_user_mappings` ⨝ `users`
 (`sm_external_user_map`) → `cust_trans` → `order_customer.sm_external_user_id`.
 
+## SessionM loads once per day (~03:00 MT) — the fact that frames everything here
+
+**Steward-confirmed 2026-07-29.** A day's SessionM transactions land in the *next* morning's
+load. So `business_date = today` has essentially no loyalty identity, and yesterday-and-older are
+fully covered.
+
+| `business_date` | Brink orders | SessionM-linked | `pct_sm_linked` |
+|---|---|---|---|
+| 2026-07-28 (yesterday) | 26,258 | 7,868 | **30.0%** |
+| 2026-07-29 (today, 13:20 MT) | 9,758 | **195** | **2.0%** |
+
+**This is not a defect and must not be treated as one.** During this audit I inferred an *hourly*
+cadence from `last_updated_at` (and then `etl_time`) spanning hours 0–23 on normal days, read
+today's 203 headers as a stall, and nearly filed a P1 against the ETL team. Neither column
+reflects the SessionM extract cadence — `last_updated_at` is SessionM's own record-update time and
+the `etl_time` spread is merge activity. **Lesson: ingestion cadence is not inferable from row
+timestamps. Ask.**
+
+What it means operationally:
+
+- The `pct_sm_linked` detector **false-positives on today's date every single day**. Always
+  exclude the current `business_date`.
+- **Today is not assessable for loyalty identity at all** — no customer-grain answer should cover
+  it. Sales and order counts for today are fine (Brink loads intraday).
+- It validates the load chain order — **SessionM ~03:00 → `order_customer` 04:00 →
+  `customer_attribute` 05:00** — and `customer_attribute.attribute_asof_date = run_date - 1`.
+  Anchoring those trailing windows on today would have read a ~2%-identified day and understated
+  every customer metric. That decision was made for a different reason (whole business days) and
+  turns out to be load-bearing for this one too.
+
+---
+
 ## Re-verification after the 2026-07-29 full-history rebuild ✅
 
 Brent deployed the `>=` fix plus `lower()` normalization throughout and rebuilt the whole table.
@@ -28,6 +60,26 @@ Re-audited post-rebuild — **everything verified clean:**
 Fixes applied in that deploy: `create_date >= start_date`; `lower()` on `user_id` in all three
 `all_trans_users` branches and in `sm_external_user_map`; `lower()` on `mapped_email`, `email`,
 `cust_trans.email`; and all five `customer_type` branches normalized to lowercase comparison.
+
+### `cust_trans` rewrite — deployed and verified equivalent (2026-07-29)
+
+The `user_trans` CTE was removed and `cust_trans` now inner-joins `header_trans` →
+`all_trans_users` → `sm_external_user_map`, deduping once on `pos_transaction_key`. Verified
+against the live table after the rebuild:
+
+| Check | Result |
+|---|---|
+| Grain | **50,321,698 rows = 50,321,698 distinct `brink_order_id`, 0 duplicates** — the inner joins did **not** fan out |
+| SessionM links, 7/18–7/28 | **Identical to pre-rewrite** on every day (6,591 · 7,747 · 7,927 · 8,343 · 8,085 · 7,800 · 6,293 · 7,657 · 7,868) |
+| History span | 2018-08-07 → 2026-07-29, continuous |
+
+Exactly the predicted outcome: no change in output, simpler structure. The predicted-equivalence
+held, which is the point — the rewrite was for robustness, not recovery.
+
+**Note the new structure also contains the `sm_external_user_map` fan-out risk.** Because
+`cust_trans` now ends with `qualify … partition by h.pos_transaction_key`, duplicate lowered
+`user_id` keys can no longer duplicate orders — at worst they'd change *which* `external_user_id`
+wins. Still worth partitioning that CTE on `lower(u.user_id)`, but it is no longer a fan-out path.
 
 **Resolved by this deploy:** findings #1 (boundary day) and #3 (casing asymmetry), plus the
 `pulse.orders` grain defect. **Still open:** #4 (`user_trans` tiebreak ignores resolvability),

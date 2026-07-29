@@ -26,6 +26,7 @@ Provisioning a new person (Claude seat, BigQuery access, Asana, verification, qu
 claude_skills/        Skills — how to query each domain (canonical definitions, joins, gotchas)
   sales-ops-orders/   Order & sales data (order_customer, order_lines, order_sequence)
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
+  sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
 ```
@@ -47,5 +48,15 @@ sql/                  Build scripts for data marts + validated query templates
 | `marketing-data-442316.sales_ops.order_sequence` | 1 row per identified-person order | Order sequencing, first-time vs repeat, recency, lifetime counts |
 | `marketing-data-442316.sales_ops.store_info` | 1 row per store | Store attributes (name, state, timezone) |
 | `marketing-data-442316.braze.*` (69 tables) | 1 row per message event | Campaign activity & engagement — use the `braze-campaigns` skill's templates, don't hand-roll unions |
+| `marketing-data-442316.claude.loyalty_user` | 1 row per loyalty member | Loyalty identity, program (catering vs individual), tiers |
+| `marketing-data-442316.claude.loyalty_points_balance` | 1 row per member per point account | Current points balance, outstanding liability |
+| `marketing-data-442316.claude.loyalty_points_expiring` | 1 row per member per expiry date | Points about to expire, expiration forecasting |
+| `marketing-data-442316.claude.loyalty_points_activity` | 1 row per point transaction | Points issued / redeemed / expired over time |
+| `marketing-data-442316.claude.loyalty_offer_usage` | 1 row per offer issued to a member | Offer & reward redemption rates |
+| `marketing-data-442316.claude.loyalty_campaign_participation` | 1 row per campaign event | Loyalty campaign participation, achievements — **always filter `create_date`** |
+
+Loyalty questions use the `sessionm-loyalty` skill. Note the partition columns differ by domain:
+`business_date` (order_customer, order_sequence), `BusinessDate` (order_lines), `create_date`
+(loyalty_campaign_participation), and `activity_date` for filtering loyalty_points_activity.
 
 More marts are being added in the `claude` dataset — documented here as they land.

@@ -67,7 +67,7 @@
 |---|---|---|
 | `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater` **or** the pulse order is flagged catering. **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. |
 | `customer_type` | STRING | **New 2026-07-24.** Classifies the customer **on this order**. NULL when the order has no identified customer. Order-level, not customer-level — see the table below. |
-| `is_guest_order` | BOOLEAN | TRUE = no loyalty user linked (via `pulse.customers.loyalty_user_id`). **Changed from INTEGER 0/1 to BOOLEAN on 2026-07-27** — `is_guest_order = 1` no longer works, use `is_guest_order = true`. |
+| `is_guest_order` | BOOLEAN (nullable) | **Redefined 2026-07-29.** Guest checkout is a **digital/Pulse concept only**. TRUE = digital order placed without a loyalty account; FALSE = digital order by a loyalty member; **NULL = in-store POS order, where the distinction does not exist.** Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
 | `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
 
 #### `customer_type` values
@@ -261,6 +261,69 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   of that table is uppercase) but **not** to `user_point_transactions` or
   `transaction_payments`, while `external_user_mappings.user_id` is 100% lowercase. Costs ~155
   loyalty links/month. Minor, but the same silent-identity-loss class as the fixed defect.
+
+- **✅ `is_guest_order` FIXED 2026-07-29 — it previously meant "POS order", not "guest".**
+
+  The build read `case when ocs.is_loyalty_user is null then true else false end`. But
+  `pulse.order_customers.is_loyalty_user` is a **non-nullable boolean** — 4,224,215 true /
+  3,669,122 false / **0 null** — so `is null` could only fire when the pulse row was *absent*.
+  The column was an exact alias for `pulse_order_id is null`.
+
+  | June 2026 (store 1111 excluded) | Orders |
+  |---|---|
+  | All orders | 713,139 |
+  | POS-only (`pulse_order_id is null`) | 425,630 |
+  | Flagged `is_guest_order = true` | **425,630** — identical set |
+  | Digital orders flagged guest | **0** |
+  | Loyalty-scanned POS orders flagged guest | 94,754 ($2.21M net) |
+
+  Every real digital guest was labelled a member; 94,754 loyalty scanners were labelled guests.
+  **Any pre-2026-07-29 analysis that split on `is_guest_order` split on channel, not loyalty.**
+
+  **New definition (steward):** guest checkout is a digital/Pulse concept. In-store POS orders
+  have no guest/member distinction, so the flag is **NULL** there — `is_guest_order = false` no
+  longer sweeps them in. Boolean filters must handle three states:
+
+  ```sql
+  -- digital guests
+  where oc.is_guest_order = true
+  -- digital members
+  where oc.is_guest_order = false
+  -- everything that isn't a digital order
+  where oc.is_guest_order is null
+  ```
+
+  ⚠️ **The near-miss:** the first proposed fix added `ocs.order_id is not null` to the old
+  predicate. That removes the only case that ever satisfied `is null`, so the column would have
+  been `false` on **every order** — verified 0 matching rows across all 7,893,337
+  `pulse.order_customers` rows. When a boolean column looks wrong, check the source column's
+  null rate before patching the null test.
+
+  Validation that `is_loyalty_user = false` is the right signal: it holds flat at 49–51% of
+  pulse orders Jan–Jun 2026, then steps to **56.2% in July** — matching guest checkout going
+  live 2026-07-01.
+
+- **⚠️ `mapped_cust_id` is NOT a valid join key to `claude.loyalty_user`** (steward 2026-07-29).
+  `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)` mixes two id spaces, so
+  joining it to `loyalty_user.sm_external_user_id` matches **Pulse** ids against **SessionM**
+  ids. June 2026: of 287,563 pulse-identified orders, 170,160 matched a loyalty row and
+  **7,270 of those matched an account whose email disagrees with the order's email** — wrong
+  people. A further 142,440 orders hold *both* ids, and the coalesce discards the known-good
+  SessionM one.
+
+  **Always join on `oc.sm_external_user_id`** — the dictionary-verified 100%-match key. This
+  yields no loyalty attributes on pulse-only digital orders; that gap is real and is what the
+  email bridge in `design/crm_identity_hygiene_plan.md` exists to close. A NULL is recoverable,
+  a wrong attribution is not.
+
+- **Order-level `is_catering` ≠ catering *account*.** A catering account can place an ordinary
+  individual order and it will correctly show `is_catering = false`. Worked example: Brink order
+  `56569385453631` (2026-04-23, store 171, **To Stay**, $55.16) on account
+  `cater_kim.harston@merit.com` / `sm_external_user_id` 3810208 — a Silver catering member since
+  2024-09-12 with `is_individual_member = false`, buying lunch in the dining room. June 2026:
+  **343 orders / $5,284 net across 234 catering accounts** are non-catering orders. For the
+  account-level question use `claude.loyalty_user.is_catering_member` (or `account_type` on
+  `claude.order_customer`), never `is_catering`.
 
 - **Always filter `business_date`** — table is partitioned on it; unfiltered queries scan 50M rows. The column was `businessdate` before 2026-07-24.
 - **`order_lines` still uses `BusinessDate`** (capitalized, no underscore) as of 2026-07-24 — a rename is planned. Cross-table joins must partition-prune with both spellings: `oc.business_date` and `ol.BusinessDate`.

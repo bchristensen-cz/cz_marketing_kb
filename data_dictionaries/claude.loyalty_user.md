@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Type | View (no partition column — 1.77M rows, full scans are cheap) |
-| Grain | 1 row per `sessionM.users.user_id` |
+| Grain | **1 row per `sm_external_user_id`** (changed 2026-07-29 — was 1 row per `user_id`; see the duplicate-external-id gotcha) |
 | Upstream | `sessionM.users`, `sessionM.external_user_mappings`, `sessionM.tier_member_history`, `sessionM.tier_levels` |
 | Build script | `sql/claude.loyalty_views.sql` |
 | Created | 2026-07-28 |
@@ -95,6 +95,42 @@ Cost is not a reason to prefer it either: the prefix scan is 45 MB vs 136 MB for
 - **`member_program` is the catering/individual answer, not `point_account_name`.** The tier system is cleaner (3 members in both systems vs 264 holding both point accounts) and broader (89,940 catering members vs 43,030 with a catering point account — the account only appears once a member has points). See `claude.loyalty_points_balance.md` for the disagreement counts.
 - **The VIP program has a single flat tier level** (`Tier Level 1`), so there is no individual-side tier hierarchy to report. Only catering has Silver/Gold/Diamond. Don't offer "tier breakdown" for individual members.
 - **`member_program = 'both'` is a data-quality artifact**, not a real state (3 members). Exclude or call it out rather than reporting it as a segment.
+- **⚠️ GRAIN CHANGED 2026-07-29 — deduped to one row per `sm_external_user_id`.** The
+  `cafezupas_id` CTE always deduped *many mappings → one `user_id`*. The collision was the
+  **other direction**: **420 external ids carried two SessionM `user_id`s each** (840 rows;
+  1,775,708 total vs 1,774,963 distinct, 325 NULL). Any order-mart join on
+  `sm_external_user_id` fanned out and silently broke `order_customer`'s
+  one-row-per-`brink_order_id` guarantee. Detector:
+
+  ```sql
+  select
+    lu.sm_external_user_id
+  , count(*) as cnt
+  from `marketing-data-442316`.claude.loyalty_user lu
+  where 1=1
+  and lu.sm_external_user_id is not null
+  group by 1
+  having count(*) > 1
+  ```
+
+  **Tiebreak is `updated_at`, not `created_at`.** `created_at` is identical on both rows in
+  most clusters (ext id 94469: both 2023-05-08) so it cannot separate them. `updated_at`
+  separates every cluster and picks the live record — the losers are overwhelmingly synthetic
+  (**126** `temp-<extid>-2@example.com`, **181** `@privaterelay.appleid.com`). **28 of the 420
+  clusters contain a catering row**, so the tiebreak directly decides `is_catering_member`
+  for those.
+
+  **Known cost:** all 420 losing `user_id`s have campaign participation, 407 have offer usage,
+  198 have points activity. The other `loyalty_*` views LEFT JOIN this one *from the activity
+  side*, so those rows survive but their identity columns go NULL — the activity becomes
+  **unattributed rather than lost**. Accept this when counting members; be aware of it when
+  reconciling activity totals against member counts.
+
+  **The NULL trap in the fix:** BigQuery groups all NULLs into a single partition, so
+  `partition by sm_external_user_id` without an escape collapses the 325 users with no
+  cafezupas mapping into one row. The view carries `or cz.external_user_id is null` for exactly
+  this reason — don't remove it.
+
 - **6,791 members have more than one `cafezupas` external id.** The view picks the most recently updated. If exact identity matters, check `external_user_mappings` directly.
 - **Only the `cafezupas` external id type is used** (steward, 2026-07-28). `external_user_mappings` also holds ~1.33M `amperity` rows; they are deliberately not exposed.
 - `player_id` looks like a plausible join key and is not one — 48,064 of 211,541 order-mart ids match it by coincidence of range. Use `sm_external_user_id`.

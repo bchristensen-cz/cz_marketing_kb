@@ -367,7 +367,27 @@ bo.Id as brink_order_id
 -- flagging POS-only catering orders (Catering Online Delivery, EZ Cater, ...) as false.
 , case when lower(bd.name) like '%cater%' or po.is_catering = true then true
 		else coalesce(po.is_catering, false) end as is_catering
-, case when ocs.is_loyalty_user is null then true else false end as is_guest_order
+-- '2026-07-29' FIXED. Guest checkout is a DIGITAL/PULSE concept only (steward definition) —
+-- an in-store POS order has no guest/member distinction to make, so the flag is NULL there.
+--
+-- The old `ocs.is_loyalty_user is null` never tested loyalty at all. pulse.order_customers
+-- .is_loyalty_user is a non-nullable boolean (4,224,215 true / 3,669,122 false / 0 null), so
+-- `is null` could only fire when the pulse row was ABSENT. The column was therefore an exact
+-- alias for `pulse_order_id is null`: June 2026 had 425,630 POS-only orders and 425,630
+-- orders flagged guest — identical sets — while ZERO digital orders were ever flagged guest.
+-- 94,754 loyalty-scanned POS orders ($2.21M net) were labelled guest; every real guest was
+-- labelled member.
+--
+-- Adding `ocs.order_id is not null` to the old predicate does NOT fix it — it removes the
+-- only case that ever satisfied `is null`, yielding false on every order (verified: 0 rows
+-- match across all 7,893,337 pulse order_customers rows). The value wanted is the boolean
+-- itself, negated.
+--
+-- Validation that is_loyalty_user = false IS the guest signal: it runs flat at 49-51% of
+-- pulse orders Jan-Jun 2026, then steps to 56.2% in July — guest checkout went live
+-- 2026-07-01.
+, case when ocs.order_id is null then null
+		else not ocs.is_loyalty_user end as is_guest_order
 , po.customer_id as pulse_customer_id
 , t.external_user_id as sm_external_user_id
 , bo.BusinessDate as business_date

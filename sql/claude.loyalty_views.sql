@@ -158,6 +158,30 @@ left join program p
   on p.user_id = u.user_id
 left join catering_history ch
   on ch.user_id = u.user_id
+-- GRAIN CHANGE 2026-07-29 (steward): one row per sm_external_user_id, not per user_id.
+-- The cafezupas_id CTE dedupes one direction (many mappings -> one user_id); the collision
+-- is the OTHER direction. 420 external ids carried two sessionM user_ids each (840 rows),
+-- so any join from an order mart on sm_external_user_id fanned out and silently broke
+-- order_customer's one-row-per-brink_order_id guarantee.
+--
+-- Tiebreak is updated_at, NOT created_at: created_at is identical on both rows in most
+-- clusters (e.g. ext id 94469, both 2023-05-08) so it cannot separate them. updated_at
+-- separates every cluster and picks the live record — the losers are overwhelmingly
+-- synthetic (126 temp-<extid>-2@example.com, 181 @privaterelay.appleid.com).
+--
+-- `or cz.external_user_id is null` is REQUIRED: BigQuery groups all NULLs into one
+-- partition, so without it the 325 users with no cafezupas mapping collapse to a single row.
+--
+-- KNOWN COST (measured 2026-07-29): all 420 losing user_ids have campaign participation,
+-- 407 have offer usage, 198 have points activity. The other loyalty_* views LEFT JOIN this
+-- one from the activity side, so those rows survive but their identity columns go NULL —
+-- the activity becomes unattributed rather than disappearing. See the gotcha in
+-- data_dictionaries/claude.loyalty_user.md.
+qualify row_number() over(
+  partition by safe_cast(cz.external_user_id as int64)
+  order by u.updated_at desc, u.registered_timestamp desc, u.user_id
+) = 1
+   or cz.external_user_id is null
 ;
 
 

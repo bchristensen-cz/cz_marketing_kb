@@ -2,10 +2,10 @@
 
 > ## ✅ LIVE since 2026-07-29 — but read the upstream defect warning first
 >
-> Deployed as a scheduled query set for **daily 5am MT**. First build actually ran
-> **2026-07-29 09:40 MT** (verified in `INFORMATION_SCHEMA.JOBS` — the 5am slot did not
-> produce it), `attribute_asof_date = 2026-07-28`, 1,375,117 rows, 687 MB. Reconciles exactly
-> to `order_customer` (see Validation).
+> Deployed as a scheduled query running **daily at 5am MT**. The 2026-07-29 09:40 MT build was
+> a one-off manual kickoff at deploy time; **the schedule's first automatic run is
+> 2026-07-30 05:00 MT.** That build produced `attribute_asof_date = 2026-07-28`,
+> 1,375,117 rows, 687 MB, and reconciles exactly to `order_customer` (see Validation).
 >
 > **🔴 The numbers are currently wrong for recent days, through no fault of this table.**
 > `order_customer` has an active defect that nulls `sm_external_user_id` on whole business
@@ -312,6 +312,41 @@ or newly frequent. Root causes (Asana 1216993827082929 and 1216993694612234):
 **Run the detector in `sales_ops.order_customer.md` before trusting any recent-window figure
 from this table.** Healthy is ~28–33% `pct_sm_linked`; under 15% means the date is corrupted.
 
+### Falsifiable prediction for the first scheduled run (2026-07-30 05:00 MT)
+
+If the boundary-day diagnosis is right, this is what tomorrow does — and it's the cheapest way
+to confirm or kill the theory:
+
+- 2026-07-30 is a **Thursday**, so the 4am `order_customer` job takes the 8-day branch:
+  `start_date = date_sub('2026-07-30', interval 8 day)` = **2026-07-22**.
+- `create_date > start_date` will therefore drop every SessionM header created on 7/22, and
+  **business_date 2026-07-22 will go from 8,341 SessionM links to ~0** — a day that is
+  currently healthy.
+- The 5am `customer_attribute` build reads through `attribute_asof_date = 2026-07-29`, so it
+  will **bake that fresh damage in**, and ~3,700 person orders will disappear from 7/22.
+
+Check it the moment the run lands:
+
+```sql
+select
+  oc.business_date
+, countif(oc.sm_external_user_id is not null) as sm_linked
+, countif(oc.customer_type = 'person') as person_orders
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.business_date between date '2026-07-20' and date '2026-07-29'
+and oc.store_id <> 1111
+group by 1
+order by 1
+```
+
+**If 7/22 collapses, the `>` → `>=` fix is confirmed and should ship immediately.** If 7/22
+survives, the boundary-day theory is wrong and both defects trace to whatever is breaking
+7/27–7/28 — reopen Asana 1216993827082929 with that finding.
+
+Either way this table's first scheduled build should be treated as **provisional** until the
+check is done.
+
 ### Drift between builds — the honest version
 
 Pre-deploy (2026-07-28): 1,374,213 customers / 7,183,544 orders / $214,469,109.31.
@@ -364,11 +399,9 @@ mistake made here.
 
 ## Roadmap
 
-- [x] Deploy the scheduled query — **done 2026-07-29**, set for daily 5am MT.
-- [ ] **Confirm the 5am schedule actually fires.** The first build ran at 09:40 MT, not 05:00.
-      Check the next few days in `INFORMATION_SCHEMA.JOBS`; if 5am is being skipped the table
-      is stale all morning and `attribute_asof_date` won't reveal it (it would still read
-      "yesterday").
+- [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT (2026-07-29 09:40 build
+      was a manual kickoff; first scheduled run is 2026-07-30 05:00).
+- [ ] **Check the first scheduled run (2026-07-30 05:00 MT) against the prediction below.**
 - [ ] **Rebuild the dates affected by the SessionM defect** once the upstream `>=` fix lands,
       then re-run the reconciliation.
 - [ ] v2 — **menu-category attributes** from `order_lines`. **Decided 2026-07-28: carry

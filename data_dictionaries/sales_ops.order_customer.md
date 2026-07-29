@@ -132,11 +132,28 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
-- **🔴 ACTIVE DEFECT (found 2026-07-29): SessionM identity is missing on some recent days, and total sales look perfectly normal while it happens.**
+- **✅ RESOLVED 2026-07-29 — SessionM identity loss (`create_date > start_date`).** Kept here
+  because the failure mode is worth recognising and the detector is still worth running.
 
-  `sm_external_user_id` is NULL for whole business dates. Because
+  **Fix:** `header_trans` now uses `and h.create_date >= start_date`. Deployed and verified —
+  the repaired counts match the pre-fix reproduction exactly (7/21: 7,927; 7/27: 7,657;
+  7/28: 7,868), which confirms the diagnosis rather than just improving the numbers.
+  `pct_sm_linked` is back to 28–31% on every business day.
+
+  The same one-character change also resolved what looked like a second, independent defect
+  (intraday runs writing today with no identity). An intraday run sets
+  `start_date = run_date`, so `create_date > start_date` matched nothing. One predicate, two
+  symptoms.
+
+  **Full audit of the pipeline: `design/sessionm_identity_pipeline_audit.md`** (2026-07-29) —
+  all six source tables verified fresh, end-to-end link rate stable, plus three remaining
+  low-severity findings.
+
+  <details><summary>What the failure looked like (for pattern recognition)</summary>
+
+  `sm_external_user_id` was NULL for whole business dates. Because
   `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)`, in-store loyalty
-  scanners lose their identity entirely on those days. Observed 2026-07-29:
+  scanners lost their identity entirely on those days:
 
   | `business_date` | All orders | SessionM-linked | Identified | Person orders |
   |---|---|---|---|---|
@@ -145,27 +162,14 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   | 2026-07-27 | 25,100 | **74** | 10,555 (42.1%) | **5,143 (20.5%)** |
   | 2026-07-28 | 26,258 | **0** | 10,812 (41.2%) | **5,369 (20.4%)** |
 
-  ~7,900 orders/day lose loyalty identity; person orders fall ~38%. **Order counts and all
-  sales figures are unaffected and look completely normal** — this is only visible if you
-  check `sm_external_user_id` or person-order counts. Two separate root causes, both logged:
+  ~7,900 orders/day lost loyalty identity; person orders fell ~38%. **Order counts and all
+  sales figures were unaffected and looked completely normal** — visible only by checking
+  `sm_external_user_id` or person-order counts. That invisibility is the lesson: a defect can
+  destroy customer-grain data while every financial number ties.
 
-  1. **Boundary-day off-by-one** (Asana 1216993827082929). `sql/sales_ops.order_customer.sql`
-     `header_trans` uses `and h.create_date > start_date`. `create_date` is a **DATE**, so `>`
-     excludes the entire boundary day of every reload window. Proven: reproducing the pipeline
-     with `start_date = 2026-07-21` gives **0** links for 7/21 with `>` and **7,927** with
-     `>=`. Fix is one character. A corrupted day is *not* repaired by the next daily run — the
-     later `start_date` puts it outside the window.
-  2. **Intraday runs write today with no SessionM identity** (Asana 1216993694612234). For an
-     intraday run `start_date = run_date`, so `create_date > start_date` matches nothing.
-     Ruled out for 7/27–7/28: missing upstream data, ingestion lag, bad join keys, and the
-     reload not firing — the data was provably linkable (7,657 and 7,868) at 4am on 7/29 and
-     the reload still wrote zeros.
+  </details>
 
-  **Until both are fixed, treat customer counts, person-order counts, and anything from
-  `order_sequence` / `customer_attribute` as unreliable for the last several days.** Sales,
-  order counts and channel mix are fine.
-
-  Detector — run before any customer-grain answer covering recent dates:
+  Detector — still worth running before any customer-grain answer covering recent dates:
 
   ```sql
   select
@@ -183,6 +187,22 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   ```
 
   Healthy is **~28–33% `pct_sm_linked`**. Anything under 15% means that day is corrupted.
+
+- **`mapped_cust_id` can migrate between customers without a new order** (audited 2026-07-29).
+  `sm_external_user_map` keeps one `external_user_id` per SessionM `user_id`, chosen by
+  `max(updated_at)`. **6,095 user_ids (0.34%) carry more than one** `cafezupas` external id, so
+  which CZ customer their orders land on is a recency tiebreak that **flips if a mapping's
+  `updated_at` moves**. Exposure over 365 days: **17,269 orders · 2,913 customers · $472,797
+  net**, of which **7,236 have no `pulse_customer_id`** — no fallback identity, so a flip moves
+  the whole order to a different customer. This is a real and separate reason lifetime
+  per-customer figures shift between builds. Fix proposed (deterministic tiebreak) in
+  `design/sessionm_identity_pipeline_audit.md`.
+
+- **SessionM `user_id` casing is only normalised on one of three branches** (audited
+  2026-07-29). `all_trans_users` applies `lower()` to `transaction_discounts` (necessary — 78%
+  of that table is uppercase) but **not** to `user_point_transactions` or
+  `transaction_payments`, while `external_user_mappings.user_id` is 100% lowercase. Costs ~155
+  loyalty links/month. Minor, but the same silent-identity-loss class as the fixed defect.
 
 - **Always filter `business_date`** — table is partitioned on it; unfiltered queries scan 50M rows. The column was `businessdate` before 2026-07-24.
 - **`order_lines` still uses `BusinessDate`** (capitalized, no underscore) as of 2026-07-24 — a rename is planned. Cross-table joins must partition-prune with both spellings: `oc.business_date` and `ol.BusinessDate`.

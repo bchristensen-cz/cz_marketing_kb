@@ -433,16 +433,16 @@ and oc.mapped_email is null
 
 If a question needs guest-checkout identity, say the mart can't answer it and point at Asana 1216806056925588 (cohort mart with guest-checkout linkage). Three separate analysts hand-rolled workaround #1 on 2026-07-24.
 
-## 🔴 ACTIVE DEFECT — SessionM identity missing on recent days (found 2026-07-29)
+## SessionM identity health check (defect fixed 2026-07-29 — check still recommended)
 
-**Before answering any customer-grain question that touches the last ~14 days, run the
-detector below.** Whole business dates are landing with `sm_external_user_id` NULL, which
-wipes out in-store loyalty scanners' identity (`mapped_cust_id` is
-`coalesce(pulse_customer_id, sm_external_user_id)`). On an affected day, person orders fall
-~38% — 2026-07-28 had 5,369 instead of the expected ~8,800.
+A defect that nulled `sm_external_user_id` on whole business dates was found and fixed on
+2026-07-29 (`create_date > start_date` → `>=`). All affected dates are repaired and verified.
+Full audit: `design/sessionm_identity_pipeline_audit.md`.
 
-**Sales, order counts and channel mix are completely unaffected and look normal.** Only
-customer-grain metrics break: customer counts, first-time vs repeat, retention, recency,
+**Keep running the detector before customer-grain answers covering recent dates.** The failure
+mode is worth guarding against because it is invisible in every financial number — sales, order
+counts and channel mix all looked completely normal while person orders fell ~38%. Only
+customer-grain metrics broke: customer counts, first-time vs repeat, retention, recency,
 lifetime counts, and everything in `customer_attribute`.
 
 ```sql
@@ -461,9 +461,7 @@ order by 1
 ```
 
 Healthy is **~28–33%**. Under 15% means that date is corrupted — **say so in the answer and
-exclude or caveat those dates** rather than reporting the number as-is. Two root causes are
-logged (Asana 1216993827082929 boundary-day `>` vs `>=`, and 1216993694612234 intraday runs);
-see `data_dictionaries/sales_ops.order_customer.md` for the full diagnosis.
+exclude or caveat those dates** rather than reporting the number as-is.
 
 ## Gotchas checklist (scan before answering)
 

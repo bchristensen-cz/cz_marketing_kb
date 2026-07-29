@@ -7,11 +7,11 @@
 > 2026-07-30 05:00 MT.** That build produced `attribute_asof_date = 2026-07-28`,
 > 1,375,117 rows, 687 MB, and reconciles exactly to `order_customer` (see Validation).
 >
-> **🔴 The numbers are currently wrong for recent days, through no fault of this table.**
-> `order_customer` has an active defect that nulls `sm_external_user_id` on whole business
-> dates, so in-store loyalty customers vanish from the person population. See
-> [Upstream defect](#-upstream-defect-sessionm-identity-loss-found-2026-07-29) before using
-> the trailing-window columns or pushing anything to Braze.
+> **✅ The upstream SessionM defect that corrupted recent days was fixed and verified
+> 2026-07-29.** All affected dates are repaired. The table needs a rebuild to pick up the
+> repaired data — the 2026-07-30 05:00 run does that automatically. See
+> [Upstream defect](#-upstream-defect-sessionm-identity-loss-found-2026-07-29-fixed) for what
+> happened and the two remaining mechanisms that move per-customer figures between builds.
 
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
@@ -270,11 +270,17 @@ and oc.mapped_cust_id is not null
 and oc.customer_type = 'person'
 ```
 
-## 🔴 Upstream defect: SessionM identity loss (found 2026-07-29)
+## ✅ Upstream defect: SessionM identity loss (found 2026-07-29, FIXED)
 
-**This is why the build-to-build numbers moved, and it is not benign restatement.** The first
+**This is why the build-to-build numbers moved, and it was not benign restatement.** The first
 explanation offered — "the 8-day reload restates history, working as designed" — was wrong.
 Investigating the drift found a real `order_customer` defect.
+
+> **Resolved 2026-07-29.** `header_trans` now uses `create_date >= start_date`. Repaired counts
+> match the pre-fix reproduction exactly (7/21: 7,927 · 7/27: 7,657 · 7/28: 7,868).
+> **This table still holds the corrupted figures until its next build** — the 2026-07-30 05:00
+> run picks up the repaired data. Full pipeline audit:
+> `design/sessionm_identity_pipeline_audit.md`.
 
 `order_customer` is landing whole business dates with `sm_external_user_id` NULL. Since
 `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)`, every in-store loyalty
@@ -360,11 +366,29 @@ Live build (2026-07-29): 1,375,117 customers / 7,181,272 orders / $214,426,387.4
   versus a normal Tuesday. Since 7/28 was a *partial* day pre-deploy and a *complete* day in
   the build, the true loss is larger than the net figure suggests.
 
-Restatement *is* a real mechanism (the 4am job rewrites the last 8 days, 5 weeks on Mondays,
-~13 months on the 1st, and `customer_type` / `mapped_cust_id` are recomputed for every
-rewritten row) — so lifetime figures can legitimately move without a customer ordering. But
-**don't reach for it as the explanation without checking the detector first.** That's the
-mistake made here.
+### Every known reason `lifetime_order_count` changes without a new order
+
+Audited 2026-07-29. In rough order of how much they move the number:
+
+1. **Reload restatement.** The 4am `order_customer` job rewrites the last 8 days (5 weeks on
+   Mondays, ~13 months on the 1st) and **recomputes `customer_type` and `mapped_cust_id` for
+   every rewritten row**. An order can gain or lose identity, or reclassify person ↔ aggregator,
+   changing two customers' counts at once. This is by design.
+2. **Voided orders leave entirely.** The build keeps only orders with item gross or net > 0, so
+   an order fully voided after the fact disappears rather than going to zero.
+3. **Ambiguous SessionM mappings flipping.** 6,095 SessionM `user_id`s carry more than one
+   `cafezupas` `external_user_id`, and `sm_external_user_map` picks the winner by
+   `max(updated_at)`. If a mapping's `updated_at` moves, orders **migrate wholesale from one
+   `mapped_cust_id` to another**. Exposure: 17,269 orders · 2,913 customers · $472,797 net over
+   365 days, of which 7,236 have no `pulse_customer_id` fallback. Fix proposed in the audit doc.
+4. **Upstream defects** like the one above — the only category that is outright wrong rather
+   than merely unstable.
+5. **`attribute_asof_date` advancing** shifts the trailing windows (not lifetime counts).
+
+Items 1–3 mean lifetime figures are **stable in aggregate but not guaranteed identical
+per-customer** between builds. Don't promise a specific customer's count will tie to a prior
+report, and **don't reach for restatement as the explanation without running the detector
+first** — that's the mistake made here.
 
 ## Gotchas
 

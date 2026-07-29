@@ -1,0 +1,189 @@
+# Audit: SessionM identity pipeline into `sales_ops.order_customer`
+
+**Date:** 2026-07-29 · **Scope:** the six `sessionM.*` tables feeding `sm_external_user_id`
+(and therefore `mapped_cust_id`) in `sql/sales_ops.order_customer.sql`.
+
+Chain under audit: `user_point_transactions` + `transaction_discounts` +
+`transaction_payments` → `all_trans_users` → `user_trans` → joined to
+`transaction_headers` (`header_trans`) and `external_user_mappings` ⨝ `users`
+(`sm_external_user_map`) → `cust_trans` → `order_customer.sm_external_user_id`.
+
+## Verdict
+
+**Data is flowing correctly.** The boundary-day defect is fixed and confirmed. Three
+lower-severity issues remain, all quantified below; the largest costs ~155 loyalty links per
+month, versus the ~7,900/day the fixed bug was costing.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 1 | `create_date > start_date` dropped the reload boundary day | 🔴 was critical | ✅ **FIXED & verified** |
+| 2 | `lower()` applied to only one of three union branches | 🟡 minor | Open — one-line fix |
+| 3 | `user_trans` tiebreak can pick a non-resolving row over a resolving one | 🟡 minor | Open |
+| 4 | 6,095 `user_id`s carry multiple `external_user_id`s; winner can flip between runs | 🟡 minor | Open — causes silent customer migration |
+| 5 | `header_trans` QUALIFY dedupe is currently a no-op | ⚪ informational | Note only |
+
+## 1. Boundary-day defect — FIXED AND VERIFIED ✅
+
+The `>` → `>=` change on `header_trans.create_date` is deployed and the previously corrupted
+dates are fully repaired. The repaired counts match the pre-fix reproduction **exactly**,
+which confirms the diagnosis rather than merely improving the numbers:
+
+| `business_date` | Before fix | Predicted with `>=` | After fix | Match |
+|---|---|---|---|---|
+| 2026-07-21 | 0 | 7,927 | **7,927** | ✅ exact |
+| 2026-07-27 | 74 | 7,657 | **7,657** | ✅ exact |
+| 2026-07-28 | 0 | 7,868 | **7,868** | ✅ exact |
+
+`pct_sm_linked` is now 28.2–30.9% on every business day 7/18–7/28 — inside the healthy band.
+
+**This also resolved the intraday-run symptom**, which had looked like a second independent
+defect. It was the same predicate: an intraday run sets `start_date = run_date`, so
+`create_date > start_date` matched nothing and wrote today with zero identity. `>=` fixes both.
+No separate fix is needed.
+
+## 2. Freshness and volume — all six tables healthy
+
+| Table | Rows | Max updated (UTC) | Note |
+|---|---|---|---|
+| `transaction_headers` | 26,869,486 | 2026-07-29 09:01:31 | Current |
+| `transaction_payments` | 26,683,604 | 2026-07-29 09:01:31 | Current |
+| `user_point_transactions` | 11,607,161 | 2026-07-29 09:01:31 | Current |
+| `transaction_discounts` | 1,736,092 | 2026-07-29 09:01:07 | Current |
+| `external_user_mappings` | 3,115,403 | 2026-07-29 07:57:04 | Current (1,782,178 are `cafezupas`) |
+| `users` | 1,775,708 | 2026-07-29 00:00:00 | **Date-granular** — daily snapshot, `updated_at` is always midnight UTC |
+
+All history starts 2023-03-05 (transactions) / 2023-05-08 (mappings, users). **None of these
+are stale** — contrast `sessionM.point_operation_correlation`, which is ~2 months behind and is
+a known separate issue (it is not in this chain).
+
+`users.updated_at` being midnight-only matters if anyone ever tries to filter it by timestamp
+for incremental logic — it has no intraday resolution.
+
+### End-to-end link rate is stable
+
+Of `transaction_headers` created each day, the share resolving all the way to a `cafezupas`
+`external_user_id`, 7/13–7/28: **26.2% – 28.5%**, with no dips. Weekday variation only
+(Saturdays run ~26%, midweek ~28%).
+
+Once a header matches a transaction user at all, it resolves to an external id **99.9%** of the
+time (e.g. 7/13: 8,134 matched → 8,129 resolved). The ~72% that don't match are non-loyalty
+transactions with no SessionM user — expected, not a gap.
+
+## 3. `lower()` is applied to only one of three union branches — OPEN 🟡
+
+`all_trans_users` applies `lower(d.user_id)` to **`transaction_discounts` only**.
+`user_point_transactions` and `transaction_payments` pass `user_id` through raw. The join
+target does not tolerate this:
+
+| Table | Rows (30d) | NOT lowercase | `lower()` applied? |
+|---|---|---|---|
+| `external_user_mappings` (join target) | 1,782,178 | **0 — 100% lowercase** | — |
+| `transaction_discounts` | 43,518 | 34,077 (78%) | ✅ yes |
+| `transaction_payments` | 729,275 | **169** | ❌ **no** |
+| `user_point_transactions` | 637,610 | **26** | ❌ **no** |
+
+The `lower()` on discounts is **necessary** — 78% of that table's user_ids are uppercase, so
+removing it would break the join catastrophically. The bug is that the other two branches
+didn't get it.
+
+**Measured impact (30 days):** of 419,336 transactions, 484 winning rows fail to resolve to a
+mapping. **155 of those fail purely because of casing** (154 from payments, 1 from points).
+The remaining 329 are genuinely unmapped user_ids — a separate, possibly legitimate population.
+
+**Fix:** wrap `t.user_id` and `tp.user_id` in `lower()` to match the discounts branch. Recovers
+~155 loyalty links/month at zero cost. Low volume, but it is the same class of silent identity
+loss as the bug just fixed — invisible in totals, only visible per-customer.
+
+## 4. `user_trans` tiebreak can discard a resolvable identity — OPEN 🟡
+
+```sql
+qualify row_number() over(partition by u.transaction_id order by u.updated_date desc) = 1
+```
+
+One row wins per `transaction_id`, chosen purely by recency. It does **not** consider whether
+the winning `user_id` actually resolves to a mapping.
+
+- **56** transactions (30d) carry more than one distinct `user_id` — so the choice rarely matters.
+- **26** transactions (30d) lose their link because the newest row doesn't resolve while an
+  older row on the same transaction **would have**.
+
+**Fix:** order by resolvability first, e.g. rank rows that exist in `sm_external_user_map`
+ahead of those that don't, then by `updated_date desc`. Recovers ~26 links/month. Combined with
+finding #3, ~181 links/month.
+
+## 5. 6,095 `user_id`s carry multiple `external_user_id`s — OPEN 🟡
+
+```sql
+qualify row_number() over(partition by u.user_id order by u.updated_at desc) = 1
+```
+
+`sm_external_user_map` keeps one `external_user_id` per SessionM `user_id`, picked by
+`max(updated_at)`. But **6,095 of 1,775,387 user_ids (0.34%) have more than one** `cafezupas`
+external id. For those, which CZ customer id the orders land on is a tiebreak decision that
+**can change between runs if a mapping's `updated_at` moves.**
+
+**This is a second, previously undocumented mechanism by which `lifetime_order_count` changes
+without the customer ordering** — and unlike restatement, it doesn't just adjust a count, it
+migrates orders wholesale from one `mapped_cust_id` to another.
+
+Exposure over the last 365 days:
+
+| Measure | Value |
+|---|---|
+| Orders on ambiguously-mapped ids | **17,269** |
+| Customers affected | **2,913** |
+| Net sales exposed | **$472,797.35** |
+| Orders where SessionM is the *only* identity (`pulse_customer_id is null`) | **7,236** |
+
+Those 7,236 are the dangerous subset — with no pulse id to fall back on, a flip moves the whole
+order to a different customer.
+
+Also found: **582 `external_user_id`s map to multiple `user_id`s** (max 3). That's the reverse
+direction — one CZ customer id spanning several SessionM users — and it belongs with the
+[CRM identity hygiene work](crm_identity_hygiene_plan.md).
+
+**Recommended fix:** replace the recency tiebreak with a deterministic one (lowest
+`external_user_id`, or earliest `updated_at`) so the assignment is *stable* even if it isn't
+provably correct. A stable-but-arbitrary key beats one that silently churns.
+
+## 6. `header_trans` dedupe is a no-op — informational ⚪
+
+```sql
+qualify row_number() over(partition by h.pos_transaction_key order by h.last_updated_at desc) = 1
+```
+
+Over a 30-day window: 731,353 header rows, **731,353 distinct raw keys, 731,353 distinct cast
+keys, 0 uncastable, 0 duplicates, 0 cast collisions.** The dedupe removes nothing.
+
+It is also *structurally* mismatched — it partitions on the **raw** `pos_transaction_key` while
+the SELECT emits `safe_cast(... as int64)`. If two raw values ever cast to the same int64
+(whitespace, leading zeros, `'123'` vs `'123.0'`), the dedupe would miss and `cust_trans` would
+fan out. Currently harmless, and the same shape as the `partition by po.id` no-op found in the
+pulse CTE on 2026-07-27.
+
+**Recommendation:** leave it in as defensive, but partition on the cast value so it would
+actually catch the case it's guarding against.
+
+Also noted: **4** `cafezupas` mappings have an `external_user_id` that fails
+`safe_cast(... as int64)`. They silently become NULL and never link. Immaterial, documented for
+completeness.
+
+## 7. `external_user_mappings` ⨝ `users` inner join — SAFE ✅
+
+The 2026-07-27 change added an inner join to `sessionM.users` to pick up the loyalty email. An
+inner join here is a latent risk: any mapping without a `users` row would be **silently
+dropped**, costing identity.
+
+Re-verified 2026-07-29: **0 of 1,782,178** `cafezupas` mappings lack a `users` row, and **0**
+have a null email. The build's comment still holds. Worth re-checking whenever `users` loading
+changes, since the failure mode is silent.
+
+## Monitoring recommendation
+
+The detector in `data_dictionaries/sales_ops.order_customer.md` (daily `pct_sm_linked`, healthy
+28–33%) catches finding #1's class of failure. It does **not** catch findings #3–#5, which are
+too small to move the daily rate. Those need the targeted queries in this document, re-run
+periodically rather than continuously.
+
+Suggested cadence: fold the `pct_sm_linked` check into the daily query-log review, and re-run
+this full audit after any change to the SessionM CTEs or upstream loading.

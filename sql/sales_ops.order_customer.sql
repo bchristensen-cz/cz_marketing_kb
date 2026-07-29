@@ -25,6 +25,23 @@
 --   * customer_type reworked to match on order emails (ezcater / doordash / itsacheckmate)
 --   * FAN-OUT FIX: pulse_orders now dedupes on brink_order_id, not po.id
 --   * order_sequence: customer-level guard excluding ids that ever appear as non-person
+--
+-- 2026-07-29 changes (all deployed + full-history rebuild; audit in
+-- design/sessionm_identity_pipeline_audit.md):
+--   * CRITICAL: header_trans `create_date > start_date` -> `>=`. create_date is a DATE, so `>`
+--     dropped the entire boundary day of every reload window and intraday runs matched nothing.
+--     Cost ~7,900 orders/day their loyalty identity while all sales figures looked normal.
+--   * lower() on user_id in all three all_trans_users branches and in sm_external_user_map
+--     (only the discounts branch had it; the join target is 100% lowercase)
+--   * lower() on mapped_email, ocs.email and cust_trans.email. pulse.customers.email was 8.7%
+--     non-lowercase, creating 17,943 phantom identities and splitting 5,604 real people
+--   * all five customer_type branches now compare lowercased (the three aggregator LIKEs were
+--     case-sensitive while kiosk/internal were not) - defensive, reclassified nothing
+--   * user_trans CTE removed, folded into cust_trans: resolve via inner joins first, then dedupe
+--     once on pos_transaction_key. Verified output-equivalent
+--   * order_sequence: dropped lifetime_customer_order_count (now customer_attribute only)
+--   * VERIFIED after rebuild: 50,321,698 rows = 50,321,698 distinct brink_order_id, 0 duplicates
+--     - the long-standing pulse fan-out grain defect is resolved
 
 declare run_dt datetime default current_datetime('America/Denver');
 declare run_hour int64 default extract(hour from run_dt);
@@ -207,7 +224,7 @@ group by 1
 , all_trans_users as (
 select
 t.transaction_id
-, t.user_id
+, lower(t.user_id) as user_id  -- '2026-07-29' added lower() for consistency
 , t.last_updated_at as updated_date
 from `marketing-data-442316`.sessionM.user_point_transactions t
 where  1=1
@@ -233,7 +250,7 @@ union all   -- switched from UNION -> UNION ALL for performance
     -- Payments
 select
 tp.transaction_id
-, tp.user_id
+, lower(tp.user_id)  -- '2026-07-29' added lower() for consistency
 , tp.last_updated_at as updated_date
 from `marketing-data-442316`.sessionM.transaction_payments tp
 where 1=1
@@ -243,22 +260,31 @@ and tp.last_updated_at >= timestamp(start_date)
 )
 
 
-, user_trans as (
-select u.*
-from all_trans_users u
-qualify row_number() over(partition by u.transaction_id order by u.updated_date desc) = 1
-)
+-- '2026-07-29' user_trans CTE REMOVED - folded into cust_trans below. The old two-stage shape
+-- picked one user per transaction_id by recency and only then checked whether that user
+-- resolved to a mapping, so resolvability was incidental to the ordering. Verified equivalent
+-- on 30 days (203,855 rows both ways, 0 links changed) - this is a robustness change, not a
+-- recovery. See design/sessionm_identity_pipeline_audit.md finding #4.
+-- , user_trans as (
+-- select u.*
+-- from all_trans_users u
+-- qualify row_number() over(partition by u.transaction_id order by u.updated_date desc) = 1
+-- )
 
 
 -- '2026-07-27' joined sessionM.users to pick up the loyalty email. Verified safe: 0 of
--- 1,780,888 'cafezupas' mapping rows lack a users row, so the inner join drops nothing.
+-- 1,782,178 'cafezupas' mapping rows lack a users row, so the inner join drops nothing
+-- (re-verified 2026-07-29, also 0 null emails).
 , sm_external_user_map as (
-select u.user_id, u.external_user_id, lower(uu.email) as email
+select lower(u.user_id) as user_id, u.external_user_id, lower(uu.email) as email  -- '2026-07-29' added lower() for consistency
 from `marketing-data-442316`.sessionM.external_user_mappings u
 	join `marketing-data-442316`.`sessionM.users` uu
 	on uu.user_id = u.user_id
 where 1=1
 and u.external_user_id_type = 'cafezupas'
+-- NOTE: partitions on the RAW u.user_id while selecting lower(u.user_id). Harmless today -
+-- the source is 100% lowercase - and cust_trans's pos_transaction_key dedupe below now caps
+-- any fan-out. Partitioning on lower(u.user_id) would close it properly (Asana 1216995170178886).
 qualify row_number() over(partition by u.user_id order by u.updated_at desc) = 1
 )
 
@@ -267,22 +293,32 @@ select safe_cast(h.pos_transaction_key as int64) as pos_transaction_key
 , h.transaction_id
 from `marketing-data-442316`.sessionM.transaction_headers h
 where 1=1
-and h.create_date > start_date
+-- '2026-07-29' CRITICAL FIX: was `>`. create_date is a DATE, so `>` dropped the ENTIRE
+-- boundary day of every reload window, and intraday runs (start_date = run_date) matched
+-- nothing at all. Cost ~7,900 orders/day their loyalty identity while every sales figure
+-- looked normal. Proven: start_date 2026-07-21 gave 0 links with `>` and 7,927 with `>=`.
+and h.create_date >= start_date
 qualify row_number() over(partition by h.pos_transaction_key order by h.last_updated_at desc) = 1
 )
 
+-- '2026-07-29' rewritten: resolve identity FIRST via inner joins, then dedupe once at the
+-- grain the consumer actually needs (pos_transaction_key - what the final SELECT joins on).
+-- Only resolvable users can win, structurally. Safe because pos_transaction_key <-> transaction_id
+-- is 1:1 after header_trans (verified: 731,353 rows, 731,353 distinct of each, 0 reuse).
 , cust_trans as (
 select
 h.pos_transaction_key
 , safe_cast(m.external_user_id as int64) as external_user_id
-, m.email
+, lower(m.email) as email  -- '2026-07-29' added lower() for consistency
 from header_trans h
-	left join user_trans t
-	on t.transaction_id = h.transaction_id
-		left join sm_external_user_map m
-		on m.user_id = t.user_id
-where 1=1
-and m.external_user_id is not null
+	join all_trans_users u
+	on u.transaction_id = h.transaction_id
+		join sm_external_user_map m
+		on m.user_id = u.user_id
+qualify row_number() over(
+  partition by h.pos_transaction_key
+  order by u.updated_date desc
+) = 1
 )
 
 
@@ -385,9 +421,12 @@ bo.Id as brink_order_id
 , coalesce(boi.total_fees_amount,0) as total_fees_amount
 , coalesce(p.total_payment_amount,0) as total_payment_amount
 , coalesce(p.total_change, 0) as total_change
-, ocs.email
+, lower(ocs.email) as email  -- '2026-07-29' added lower() for consistency
 , ocs.phone
-, coalesce(c.email, ocs.booking_customer_email,ocs.email, t.email) as mapped_email
+-- '2026-07-29' added lower(). pulse.customers.email was 8.7% non-lowercase (Braze and SessionM
+-- are already 100% clean), which created 17,943 phantom duplicate identities in mapped_email and
+-- split 5,604 real people across multiple mapped_cust_ids by letter case alone.
+, lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, t.email)) as mapped_email
 , split(lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, t.email)), '@')[safe_offset(1)] as mapped_email_domain
 , coalesce(po.customer_id, t.external_user_id) as mapped_cust_id
 -- '2026-07-24' customer_type: keeps non-person ids out of customer counts / frequency /
@@ -408,11 +447,15 @@ bo.Id as brink_order_id
 -- + 196 person). order_sequence compensates with its own customer-level guard - see below.
 , case
     when coalesce(po.customer_id, t.external_user_id) is null then null
-    when regexp_contains(coalesce(c.email, ocs.booking_customer_email,ocs.email, ''), r'(?i)^[0-9]+-outdoor-[0-9]+@cafezupas\.com$') then 'kiosk'
-		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%ezcater%' then 'aggregator'
-		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%doordash.com' then 'aggregator'
-		when coalesce(c.email, ocs.booking_customer_email,ocs.email, '') like '%itsacheckmate.com' then 'aggregator'
-    when regexp_contains(coalesce(c.email, ocs.booking_customer_email,ocs.email, ''), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
+-- '2026-07-29' all five branches now compare against lower(...). The three aggregator LIKEs were
+-- case-SENSITIVE while kiosk/internal used (?i) regex - so a partner sending EZCater@... would
+-- have silently classified as 'person' and polluted every customer metric. Verified no
+-- reclassification when applied (ci and cs counts matched exactly): purely defensive.
+    when regexp_contains(lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, '')), r'(?i)^[0-9]+-outdoor-[0-9]+@cafezupas\.com$') then 'kiosk'
+		when lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, '')) like '%ezcater%' then 'aggregator'
+		when lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, '')) like '%doordash.com' then 'aggregator'
+		when lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, '')) like '%itsacheckmate.com' then 'aggregator'
+    when regexp_contains(lower(coalesce(c.email, ocs.booking_customer_email,ocs.email, '')), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
     else 'person'
   end as customer_type
 , c.loyalty_signup_date
@@ -464,18 +507,33 @@ from brink_order bo
 -- Rebuilt in full on every run of this script (~420 MB / ~97 slot-seconds - measured
 -- 2026-07-24).
 --
--- '2026-07-27 SCOPE CHANGE (steward decision): NO customer_type filter here. Every order
--- with a mapped_cust_id is represented, and customer_type is carried as a column so the
--- caller filters. Rationale: don't bake compensation for upstream bad data into the mart -
--- the earlier person-filter plus customer-level guard was chasing pulse's missing customer
--- record for id 19192, and that belongs in the dev fix, not here.
+-- SCOPE: every order with a mapped_cust_id. ALL customer types are included - the only filter
+-- is `mapped_cust_id is not null`. customer_type is carried as a column so the CALLER filters.
+-- Customer metrics still require customer_type = 'person'; that filter belongs downstream.
 --
--- CONSEQUENCE - read before using the lifetime columns. The window functions run over ALL
--- of a customer's orders regardless of type, so for non-person ids the counts are enormous
--- and meaningless: 19192 carries lifetime_customer_order_count ~2.48M. Filtering
--- customer_type = 'person' AFTER the fact selects rows but does NOT renumber them, so a
--- mixed id still shows million-scale sequence and lifetime values on its person rows.
+-- '2026-07-27 SCOPE CHANGE (steward decision): NO customer_type filter here. Rationale: don't
+-- bake compensation for upstream bad data into the mart - the earlier person-filter plus
+-- customer-level guard was chasing pulse's missing customer record for id 19192, and that
+-- belongs in the dev fix, not here.
+--
+-- '2026-07-29 the unfiltered scope is INTENTIONAL - DO NOT add a customer_type filter here.
+-- Non-person ids appearing in this table are a symptom of pulse.customers not being maintained
+-- correctly upstream (ETL team aware). Leaving them visible keeps that breakage measurable as
+-- an ongoing data-source accuracy check; filtering here would hide the defect and remove the
+-- signal that tells us when it is fixed. Their counts shrinking on their own IS the measurement.
+-- Current reading: person 7,196,157 rows / aggregator 2,517,397 / kiosk 785,364 / internal 23,684.
+--
+-- CONSEQUENCE - the window functions run over ALL of a customer's orders regardless of type.
+-- Filtering customer_type = 'person' AFTER the fact selects rows but does NOT renumber them, so
+-- a mixed id still shows million-scale customer_order_count on its person rows.
 -- Canonical rule for customer metrics is unchanged: filter customer_type = 'person'.
+--
+-- '2026-07-29 DROPPED lifetime_customer_order_count - it lives on sales_ops.customer_attribute
+-- as lifetime_order_count, so there is one unambiguous source. NOTE the two are NOT the same
+-- number: customer_attribute is person-only, excludes store 1111, and is as-of YESTERDAY, while
+-- this table spans all customer types and all stores at current freshness. They agree for
+-- 1,374,231 of 1,376,394 shared customers (99.84%); 1,434 non-person ids now have no lifetime
+-- count anywhere and must be counted from order_customer directly if ever needed.
 -- ---------------------------------------------------------------------------
 
 
@@ -490,7 +548,7 @@ select
 , oc.customer_type
 , row_number() over w                                      as customer_order_count
 , date_diff(oc.business_date, lag(oc.business_date) over w, day)  as days_since_prev_order
-, count(*) over(partition by oc.mapped_cust_id) as lifetime_customer_order_count
+--, count(*) over(partition by oc.mapped_cust_id) as lifetime_customer_order_count  -- '2026-07-29' excluded - use sales_ops.customer_attribute.lifetime_order_count
 -- , min(oc.order_datetime) over(partition by oc.mapped_cust_id) as first_order_datetime
 -- , max(oc.order_datetime) over(partition by oc.mapped_cust_id) as last_order_datetime
 from `marketing-data-442316`.sales_ops.order_customer oc

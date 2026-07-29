@@ -58,8 +58,9 @@ but it doesn't work here:
 
 - It carries **no financials, no `store_id`, no `revenue_category`**. Every attribute except
   the order count would need `order_customer` anyway.
-- Its `lifetime_customer_order_count` is computed across **all** customer types, so it's
-  wrong for the ~30 mixed ids (`19192` sits at ~2.48M).
+- Its `lifetime_customer_order_count` was computed across **all** customer types, so it was
+  wrong for the ~30 mixed ids (`19192` sat at ~2.48M). **That column was dropped 2026-07-29**
+  precisely so `lifetime_order_count` here is the single unambiguous source.
 - `count(*)` over the person-filtered set is correct by construction and free.
 
 The one thing `order_sequence` would have cost us — its history starts 2023-03-06 vs
@@ -80,7 +81,7 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 ### Lifetime volume
 | Column | Type | Description |
 |---|---|---|
-| `lifetime_order_count` | INT64 | All person orders, store 1111 excluded, catering **included**. |
+| `lifetime_order_count` | INT64 | All person orders, store 1111 excluded, catering **included**. **The canonical lifetime-orders metric** as of 2026-07-29 — `order_sequence.lifetime_customer_order_count` was dropped in favour of this. Not identical to the old column (person-only, no store 1111, as-of yesterday); see `sales_ops.order_sequence.md`. |
 | `lifetime_catering_order_count` | INT64 | Subset where `is_catering = true`, so downstream can net catering out. |
 
 ### Lifetime value

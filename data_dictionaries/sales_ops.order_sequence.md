@@ -26,7 +26,34 @@ Use this table for anything involving *where an order sits in a customer's histo
 | `customer_type` | STRING | Copied from `order_customer` — `person`, `kiosk`, `internal`, `aggregator`. **Added 2026-07-27** so callers can filter here instead of joining back. Order-level, so it can vary across one customer's rows. |
 | `customer_order_count` | INTEGER | Sequential order number for this customer, 1 = first order. Ordered by `order_datetime`, tie-broken by `brink_order_id`. Computed across **all** the customer's orders, not just person ones. **Renamed from `order_count`.** |
 | `days_since_prev_order` | INTEGER | Days between this order's `business_date` and the customer's previous order (any type). NULL on the first order. |
-| `lifetime_customer_order_count` | INTEGER | Total orders for this customer across all history in the table, **all types included**. Same value repeated on every one of their rows. |
+
+### 🛑 `lifetime_customer_order_count` was DROPPED 2026-07-29 — breaking change
+
+The column **no longer exists**. Any query referencing it now fails with
+`Unrecognized name: lifetime_customer_order_count`. Live schema is exactly six columns:
+`brink_order_id`, `business_date`, `mapped_cust_id`, `customer_type`, `customer_order_count`,
+`days_since_prev_order`.
+
+**Replacement: `sales_ops.customer_attribute.lifetime_order_count`** — one row per customer, so
+no window-function caveats and no need to filter `customer_type`. Dropped deliberately so there
+is one unambiguous source for lifetime orders.
+
+**The two are NOT the same number — don't swap one for the other blindly:**
+
+| | `order_sequence` (dropped) | `customer_attribute.lifetime_order_count` |
+|---|---|---|
+| Customer types | **All** | **`person` only** |
+| Store 1111 | Included | **Excluded** |
+| Freshness | Current (rebuilt every run) | **As of yesterday** (`attribute_asof_date`) |
+| History floor | 2023-03-06 | 2023-03-06 (same in practice) |
+| Mixed-id distortion | Yes — million-scale on person rows | No — computed on person orders only |
+
+Measured agreement 2026-07-29: **1,374,231 of 1,376,394 shared customers match (99.84%)**.
+2,163 differ (0.16%), mostly the one-day freshness gap plus store 1111 and mixed-type ids.
+**1,434 non-person ids have no lifetime count anywhere now** — if you genuinely need an
+aggregator's or kiosk's order count, aggregate `order_customer` directly.
+
+The `customer_attribute` figure is the more correct one. That's the point of the change.
 
 ## Scope
 
@@ -43,12 +70,12 @@ Use this table for anything involving *where an order sits in a customer's histo
 > 2026-07-27.** The SQL beneath it filters only `mapped_cust_id is not null`. **This table is
 > NOT person-only.** Verified 2026-07-29:
 >
-> | `customer_type` | Rows | Ids | Max `lifetime_customer_order_count` |
+> | `customer_type` | Rows | Ids | Max `customer_order_count` |
 > |---|---|---|---|
-> | `person` | 7,196,157 | 1,375,904 | **2,494,884** |
-> | `aggregator` | 2,517,397 | 10 | 2,494,884 |
-> | `kiosk` | 785,364 | 49 | 48,000 |
-> | `internal` | 23,684 | 910 | 2,494,884 |
+> | `person` | 7,203,474 | 1,376,995 | **2,495,891** |
+> | `aggregator` | 2,517,397 | 10 | 2,494,804 |
+> | `kiosk` | 785,655 | 49 | 48,014 |
+> | `internal` | 23,690 | 911 | 569,938 |
 >
 > Note the 2,494,884 on **`person`** rows — that's the mixed-id problem below. Trusting the
 > comment means skipping the mandatory `customer_type = 'person'` filter *and* believing the
@@ -71,10 +98,10 @@ Current canary reading (2026-07-29, `business_date >= 2023-01-01`):
 
 | `customer_type` | Rows | Ids |
 |---|---|---|
-| `person` | 7,196,157 | 1,375,904 |
+| `person` | 7,203,474 | 1,376,995 |
 | `aggregator` | 2,517,397 | 10 |
-| `kiosk` | 785,364 | 49 |
-| `internal` | 23,684 | 910 |
+| `kiosk` | 785,655 | 49 |
+| `internal` | 23,690 | 911 |
 
 This is why the caller-side `customer_type = 'person'` filter is mandatory and permanent, not a
 temporary workaround.
@@ -117,6 +144,6 @@ Join on **both** `brink_order_id` and `business_date` so the optimizer can prune
 - **Store 1111 is not excluded here.** The sequence is built across all stores, so a customer with test-store orders has those counted in their sequence. Filter `store_id <> 1111` on `order_customer` for reporting; be aware the sequence numbers themselves may include them.
 - Sequence ordering uses `order_datetime` (store-local). For catering and advance orders that closed on a later day, `order_datetime` falls back to `promise_time` — so sequence order can differ slightly from `business_date` order.
 - Rebuilt in full every run, so values are stable and consistent across the whole table at any point in time — but they **can change between runs** if a backfill inserts an order into the middle of a customer's history. Don't cache sequence numbers in downstream saved results.
-- `lifetime_customer_order_count` counts only orders present in this table (identified, 2023-03-06 forward) — and counts **all customer types** for that id.
+- **`lifetime_customer_order_count` no longer exists** (dropped 2026-07-29). Use `sales_ops.customer_attribute.lifetime_order_count` — see the breaking-change note above for how the two differ.
 - **No pre-filtering as of 2026-07-27.** Earlier versions of this table were restricted to `customer_type = 'person'` plus a customer-level guard. Both were removed deliberately. Any saved query that assumed the table was already person-only now needs an explicit `customer_type = 'person'`.
 - The `order_customer` pulse fan-out defect put one duplicate `brink_order_id` in this table. Fixed in the build script 2026-07-27; clears on the next full rebuild.

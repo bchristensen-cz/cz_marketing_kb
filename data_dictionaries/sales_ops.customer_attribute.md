@@ -1,11 +1,17 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.customer_attribute`
 
-> ## ✅ LIVE since 2026-07-29
+> ## ✅ LIVE since 2026-07-29 — but read the upstream defect warning first
 >
-> Deployed as a scheduled query running **daily at 5am MT**. First build completed
-> 2026-07-29 05:00 MT with `attribute_asof_date = 2026-07-28`, 1,375,117 rows, 687 MB.
-> Verified against live `order_customer` on the same filters — exact match on orders, net
-> sales, and both trailing windows (see Validation). Approved for business answers.
+> Deployed as a scheduled query set for **daily 5am MT**. First build actually ran
+> **2026-07-29 09:40 MT** (verified in `INFORMATION_SCHEMA.JOBS` — the 5am slot did not
+> produce it), `attribute_asof_date = 2026-07-28`, 1,375,117 rows, 687 MB. Reconciles exactly
+> to `order_customer` (see Validation).
+>
+> **🔴 The numbers are currently wrong for recent days, through no fault of this table.**
+> `order_customer` has an active defect that nulls `sm_external_user_id` on whole business
+> dates, so in-store loyalty customers vanish from the person population. See
+> [Upstream defect](#-upstream-defect-sessionm-identity-loss-found-2026-07-29) before using
+> the trailing-window columns or pushing anything to Braze.
 
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
@@ -264,14 +270,66 @@ and oc.mapped_cust_id is not null
 and oc.customer_type = 'person'
 ```
 
-### Pre-deploy note on drift
+## 🔴 Upstream defect: SessionM identity loss (found 2026-07-29)
 
-The 2026-07-28 pre-deploy run of the SELECT body gave 1,374,213 customers / 7,183,544 orders
-/ $214,469,109.31. The live build a day later gives 904 **more** customers and 2,272
-**fewer** orders. That is expected, not a defect: `order_customer`'s 4am reload restates the
-last 8 days (5 weeks on Mondays), so historical order counts move slightly between runs.
-**Don't treat any single-run figure from this table as a fixed number** — including in saved
-results or dashboards that are supposed to tie to a prior report.
+**This is why the build-to-build numbers moved, and it is not benign restatement.** The first
+explanation offered — "the 8-day reload restates history, working as designed" — was wrong.
+Investigating the drift found a real `order_customer` defect.
+
+`order_customer` is landing whole business dates with `sm_external_user_id` NULL. Since
+`mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)`, every in-store loyalty
+scanner on those days loses their identity and drops out of the person population:
+
+| `business_date` | All orders | SessionM-linked | Person orders |
+|---|---|---|---|
+| Normal (2026-07-22) | 26,986 | 8,341 | 9,088 |
+| 2026-07-21 | 25,955 | **0** | **5,337** |
+| 2026-07-27 | 25,100 | **74** | **5,143** |
+| 2026-07-28 | 26,258 | **0** | **5,369** |
+
+Only 3 such days exist in all of 2026, and all 3 are in the last nine days — so this is new
+or newly frequent. Root causes (Asana 1216993827082929 and 1216993694612234):
+
+1. `header_trans` filters `h.create_date > start_date`. `create_date` is a **DATE**, so `>`
+   drops the whole boundary day. Proven: with `start_date = 2026-07-21`, 7/21 links **0** rows
+   under `>` and **7,927** under `>=`.
+2. Intraday runs set `start_date = run_date`, making `create_date > start_date` match nothing
+   — so every intraday run writes today with zero SessionM identity. Why the following 4am
+   reload didn't repair 7/27–7/28 is still open; the data was provably linkable (7,657 and
+   7,868) when it ran.
+
+### What this does to *this* table
+
+- `lifetime_order_count`, `lifetime_net_sales` and the store arrays are **understated** for
+  in-store loyalty customers whose orders fell on an affected day.
+- `orders_l30` / `l90` / `l365` are understated, and `days_since_last_order` is **overstated**.
+- **This is actively dangerous for the Braze win-back use case.** A customer who ate in-store
+  yesterday can present as lapsed and get a "we miss you" message. Do not launch a
+  recency-triggered campaign off this table until the upstream fix lands and the affected
+  dates are rebuilt.
+- New in-store-only loyalty customers acquired on an affected day get **no row at all**.
+
+**Run the detector in `sales_ops.order_customer.md` before trusting any recent-window figure
+from this table.** Healthy is ~28–33% `pct_sm_linked`; under 15% means the date is corrupted.
+
+### Drift between builds — the honest version
+
+Pre-deploy (2026-07-28): 1,374,213 customers / 7,183,544 orders / $214,469,109.31.
+Live build (2026-07-29): 1,375,117 customers / 7,181,272 orders / $214,426,387.42.
+
+- The **+904 customers** is genuine and expected: 2026 acquisition runs ~925 new identified
+  customers/day, so this is almost exactly one day. Cohort counts for 2023, 2024 and 2025 are
+  **byte-identical** across the two runs (delta exactly 0 for each), which proves identity is
+  **not** being restated retroactively — a real reassurance about historical stability.
+- The **−2,272 orders** is the defect above, not restatement. 7/28 shed ~3,400 person orders
+  versus a normal Tuesday. Since 7/28 was a *partial* day pre-deploy and a *complete* day in
+  the build, the true loss is larger than the net figure suggests.
+
+Restatement *is* a real mechanism (the 4am job rewrites the last 8 days, 5 weeks on Mondays,
+~13 months on the 1st, and `customer_type` / `mapped_cust_id` are recomputed for every
+rewritten row) — so lifetime figures can legitimately move without a customer ordering. But
+**don't reach for it as the explanation without checking the detector first.** That's the
+mistake made here.
 
 ## Gotchas
 
@@ -306,7 +364,13 @@ results or dashboards that are supposed to tie to a prior report.
 
 ## Roadmap
 
-- [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT.
+- [x] Deploy the scheduled query — **done 2026-07-29**, set for daily 5am MT.
+- [ ] **Confirm the 5am schedule actually fires.** The first build ran at 09:40 MT, not 05:00.
+      Check the next few days in `INFORMATION_SCHEMA.JOBS`; if 5am is being skipped the table
+      is stale all morning and `attribute_asof_date` won't reveal it (it would still read
+      "yesterday").
+- [ ] **Rebuild the dates affected by the SessionM defect** once the upstream `>=` fix lands,
+      then re-run the reconciliation.
 - [ ] v2 — **menu-category attributes** from `order_lines`. **Decided 2026-07-28: carry
       BOTH `item_type` and `rev_center_name`**, and resolve Try 2 Combos down to their
       component rev centers rather than leaving them as `Combos`. Evidence, measured on

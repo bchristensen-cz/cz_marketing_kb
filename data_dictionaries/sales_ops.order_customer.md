@@ -132,6 +132,58 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
+- **🔴 ACTIVE DEFECT (found 2026-07-29): SessionM identity is missing on some recent days, and total sales look perfectly normal while it happens.**
+
+  `sm_external_user_id` is NULL for whole business dates. Because
+  `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)`, in-store loyalty
+  scanners lose their identity entirely on those days. Observed 2026-07-29:
+
+  | `business_date` | All orders | SessionM-linked | Identified | Person orders |
+  |---|---|---|---|---|
+  | Normal day (2026-07-22) | 26,986 | 8,341 | 14,614 (54.2%) | 9,088 (33.7%) |
+  | 2026-07-21 | 25,955 | **0** | 10,686 (41.2%) | **5,337 (20.6%)** |
+  | 2026-07-27 | 25,100 | **74** | 10,555 (42.1%) | **5,143 (20.5%)** |
+  | 2026-07-28 | 26,258 | **0** | 10,812 (41.2%) | **5,369 (20.4%)** |
+
+  ~7,900 orders/day lose loyalty identity; person orders fall ~38%. **Order counts and all
+  sales figures are unaffected and look completely normal** — this is only visible if you
+  check `sm_external_user_id` or person-order counts. Two separate root causes, both logged:
+
+  1. **Boundary-day off-by-one** (Asana 1216993827082929). `sql/sales_ops.order_customer.sql`
+     `header_trans` uses `and h.create_date > start_date`. `create_date` is a **DATE**, so `>`
+     excludes the entire boundary day of every reload window. Proven: reproducing the pipeline
+     with `start_date = 2026-07-21` gives **0** links for 7/21 with `>` and **7,927** with
+     `>=`. Fix is one character. A corrupted day is *not* repaired by the next daily run — the
+     later `start_date` puts it outside the window.
+  2. **Intraday runs write today with no SessionM identity** (Asana 1216993694612234). For an
+     intraday run `start_date = run_date`, so `create_date > start_date` matches nothing.
+     Ruled out for 7/27–7/28: missing upstream data, ingestion lag, bad join keys, and the
+     reload not firing — the data was provably linkable (7,657 and 7,868) at 4am on 7/29 and
+     the reload still wrote zeros.
+
+  **Until both are fixed, treat customer counts, person-order counts, and anything from
+  `order_sequence` / `customer_attribute` as unreliable for the last several days.** Sales,
+  order counts and channel mix are fine.
+
+  Detector — run before any customer-grain answer covering recent dates:
+
+  ```sql
+  select
+    oc.business_date
+  , count(*) as all_orders
+  , countif(oc.sm_external_user_id is not null) as sm_linked
+  , countif(oc.customer_type = 'person') as person_orders
+  , round(100 * countif(oc.sm_external_user_id is not null) / count(*), 1) as pct_sm_linked
+  from `marketing-data-442316`.sales_ops.order_customer oc
+  where 1=1
+  and oc.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
+  and oc.store_id <> 1111
+  group by 1
+  order by 1
+  ```
+
+  Healthy is **~28–33% `pct_sm_linked`**. Anything under 15% means that day is corrupted.
+
 - **Always filter `business_date`** — table is partitioned on it; unfiltered queries scan 50M rows. The column was `businessdate` before 2026-07-24.
 - **`order_lines` still uses `BusinessDate`** (capitalized, no underscore) as of 2026-07-24 — a rename is planned. Cross-table joins must partition-prune with both spellings: `oc.business_date` and `ol.BusinessDate`.
 - **Customer metrics require `customer_type = 'person'`.** 38% of identified orders belong to kiosk terminals, internal accounts, or the orphan third-party aggregator id. Sales metrics should keep them.

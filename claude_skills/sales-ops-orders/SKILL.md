@@ -433,6 +433,38 @@ and oc.mapped_email is null
 
 If a question needs guest-checkout identity, say the mart can't answer it and point at Asana 1216806056925588 (cohort mart with guest-checkout linkage). Three separate analysts hand-rolled workaround #1 on 2026-07-24.
 
+## 🔴 ACTIVE DEFECT — SessionM identity missing on recent days (found 2026-07-29)
+
+**Before answering any customer-grain question that touches the last ~14 days, run the
+detector below.** Whole business dates are landing with `sm_external_user_id` NULL, which
+wipes out in-store loyalty scanners' identity (`mapped_cust_id` is
+`coalesce(pulse_customer_id, sm_external_user_id)`). On an affected day, person orders fall
+~38% — 2026-07-28 had 5,369 instead of the expected ~8,800.
+
+**Sales, order counts and channel mix are completely unaffected and look normal.** Only
+customer-grain metrics break: customer counts, first-time vs repeat, retention, recency,
+lifetime counts, and everything in `customer_attribute`.
+
+```sql
+select
+  oc.business_date
+, count(*) as all_orders
+, countif(oc.sm_external_user_id is not null) as sm_linked
+, countif(oc.customer_type = 'person') as person_orders
+, round(100 * countif(oc.sm_external_user_id is not null) / count(*), 1) as pct_sm_linked
+from `marketing-data-442316`.sales_ops.order_customer oc
+where 1=1
+and oc.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
+and oc.store_id <> 1111
+group by 1
+order by 1
+```
+
+Healthy is **~28–33%**. Under 15% means that date is corrupted — **say so in the answer and
+exclude or caveat those dates** rather than reporting the number as-is. Two root causes are
+logged (Asana 1216993827082929 boundary-day `>` vs `>=`, and 1216993694612234 intraday runs);
+see `data_dictionaries/sales_ops.order_customer.md` for the full diagnosis.
+
 ## Gotchas checklist (scan before answering)
 
 - **Partition columns differ by table**: `order_customer.business_date` and `order_sequence.business_date` vs `order_lines.BusinessDate`. A rename of `order_lines` is planned; until then, spell both correctly or the query fails or scans everything.

@@ -68,7 +68,7 @@ month, versus the ~7,900/day the fixed bug was costing.
 |---|---|---|---|
 | 1 | `create_date > start_date` dropped the reload boundary day | 🔴 was critical | ✅ **FIXED & verified** |
 | 2 | `lower()` applied to only one of three union branches | 🟡 minor | Open — one-line fix |
-| 3 | `user_trans` tiebreak can pick a non-resolving row over a resolving one | 🟡 minor | Open |
+| 3 | `user_trans` tiebreak can pick a non-resolving row over a resolving one | ⚪ **corrected — 0 links, not 26** | Robustness rewrite only |
 | 4 | 6,095 `user_id`s carry multiple `external_user_id`s; winner can flip between runs | 🟡 minor | Open — causes silent customer migration |
 | 5 | `header_trans` QUALIFY dedupe is currently a no-op | ⚪ informational | Note only |
 | — | `transaction_id` casing across all four tables | ✅ verified | Uniformly uppercase — do **not** normalise |
@@ -215,7 +215,76 @@ recent expiry can outrank the original earning row in the `user_trans` recency t
 rows point at the same user, so identity is unaffected — but it means `updated_date` in
 `user_trans` is not a reliable proxy for when the transaction happened.
 
-## 4. `user_trans` tiebreak can discard a resolvable identity — OPEN 🟡
+## 4. `user_trans` tiebreak — CORRECTED: recovers 0 links, keep for robustness only ⚪
+
+> ### ⚠️ The "26 links/month" figure below is wrong. Corrected 2026-07-29.
+>
+> It was measured across **all** transactions in `all_trans_users`. Only transactions that also
+> reach `header_trans` can affect output, and **all 26 recoverable transactions have headers
+> created before the reload window** — so they never enter `header_trans` and the tiebreak is
+> irrelevant to them.
+>
+> Verified by running the current logic and the proposed rewrite side by side over 30 days:
+>
+> | Measure | Current | Proposed |
+> |---|---|---|
+> | Rows out | 203,855 | 203,855 |
+> | Distinct `pos_transaction_key` | 203,855 | 203,855 |
+> | Links recovered | — | **0** |
+> | Keys where the customer would change | — | **0** |
+>
+> **Byte-identical.** The measured value of this fix is zero. Do not deploy it expecting to
+> recover links.
+
+### Recommended rewrite anyway — for simplicity and future-proofing, not recovery
+
+The current shape resolves identity in two stages: pick one user per `transaction_id` by
+recency, *then* check whether that user resolves. Whether the winner is resolvable is incidental
+to the ordering. Today no in-window transaction is affected, but nothing prevents it — a brand
+new customer whose `external_user_mappings` row hasn't synced yet could outrank a resolvable row
+on the same transaction and silently cost that order its identity.
+
+The fix is to **resolve first, then dedupe once at the grain that actually matters**, which also
+deletes a CTE:
+
+```sql
+-- delete the user_trans CTE entirely, and replace cust_trans with:
+, cust_trans as (
+select
+  h.pos_transaction_key
+, safe_cast(m.external_user_id as int64) as external_user_id
+, lower(m.email) as email
+from header_trans h
+	join all_trans_users u
+	on u.transaction_id = h.transaction_id
+		join sm_external_user_map m
+		on m.user_id = u.user_id
+qualify row_number() over(
+  partition by h.pos_transaction_key
+  order by u.updated_date desc
+) = 1
+)
+```
+
+Why this is better even at zero measured gain:
+
+- **Only resolvable rows can win, structurally.** The inner joins make it impossible to select a
+  user that doesn't map, rather than merely unlikely.
+- **Removes a CTE and a dedupe stage.** One `qualify` instead of two.
+- **Dedupes at the grain the consumer needs.** `cust_trans` is joined downstream on
+  `pos_transaction_key`; deduping on `transaction_id` was one step removed from that. Safe
+  because `pos_transaction_key` ↔ `transaction_id` is **1:1** after `header_trans`
+  (verified: 731,353 rows, 731,353 distinct of each, 0 reuse).
+- **Replaces `left join` + `where m.external_user_id is not null` with honest inner joins** —
+  same semantics, clearer intent.
+
+**Priority: low.** It is a robustness and readability change with verified-identical output, so
+it can ride along with the next edit to this script rather than justifying its own deploy.
+
+While in there, also partition `sm_external_user_map`'s `qualify` on `lower(u.user_id)` rather
+than the raw value — that closes the latent fan-out noted under Residual structural note.
+
+## Original finding #4 as first written (superseded — see correction above) 🟡
 
 ```sql
 qualify row_number() over(partition by u.transaction_id order by u.updated_date desc) = 1

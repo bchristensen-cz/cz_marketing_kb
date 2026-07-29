@@ -56,6 +56,29 @@ Use this table for anything involving *where an order sits in a customer's histo
 
 Steward decision 2026-07-27, replacing an earlier person-only build: don't bake compensation for upstream bad data into the mart. The previous person filter plus a customer-level guard existed to work around pulse's missing customer record for id `19192`; that belongs in the dev fix, not in the sequencing table.
 
+### The unfiltered scope is intentional — it is a data-source canary (reaffirmed 2026-07-29)
+
+The non-person ids in this table are a **symptom of `pulse.customers` not being maintained
+correctly upstream**; the ETL team is still working on it. The steward is deliberately leaving
+the table unfiltered so that breakage stays **visible as an ongoing check on source accuracy.**
+
+**Do not "fix" this by adding a `customer_type` filter to the build.** Filtering here would hide
+the upstream defect and destroy the signal that tells us when it's resolved. The non-person id
+counts shrinking on their own *is* the measurement — expect the ~10 aggregator ids and their
+2.5M-row footprint to fall away once the ETL fix lands.
+
+Current canary reading (2026-07-29, `business_date >= 2023-01-01`):
+
+| `customer_type` | Rows | Ids |
+|---|---|---|
+| `person` | 7,196,157 | 1,375,904 |
+| `aggregator` | 2,517,397 | 10 |
+| `kiosk` | 785,364 | 49 |
+| `internal` | 23,684 | 910 |
+
+This is why the caller-side `customer_type = 'person'` filter is mandatory and permanent, not a
+temporary workaround.
+
 > ### ⚠️ Read this before using the lifetime columns
 >
 > The window functions run over **all** of a customer's orders regardless of type. For non-person ids the numbers are enormous and meaningless — `19192` carries a `lifetime_customer_order_count` around **2.48 million**.

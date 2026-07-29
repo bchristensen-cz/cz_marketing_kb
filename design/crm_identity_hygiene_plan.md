@@ -161,6 +161,17 @@ case-sensitive match key would silently fail to merge every one of them, and —
 report success, because the clusters it *did* find would all look valid. This is the single
 cheapest 7.6% of the duplicate problem to solve, and it is already in the rule above. Keep it.
 
+> **✅ Fixed at source 2026-07-29.** `order_customer` now applies `lower()` to `mapped_email`
+> and the whole table was rebuilt. Verified: 0 non-lowercase values, and
+> `count(distinct mapped_email)` = `count(distinct lower(mapped_email))` = 1,029,384 (365d),
+> so the 17,943 phantom identities are gone. The input to this plan is now clean; the
+> `lower()` in the rule above is retained as a guarantee rather than a repair.
+>
+> **`trim()` verified unnecessary but harmless** (2026-07-29): `pulse.customers.email` has
+> **zero** rows with leading/trailing whitespace, and `count(distinct lower(email))` already
+> equals `count(distinct lower(trim(email)))` at 1,742,168. Keep `trim()` in the canonical rule
+> as belt-and-braces — it changes no clusters today and costs nothing.
+
 **Survivor rule:** earliest `first_order_date`, tie-broken by lowest `mapped_cust_id`. Once
 assigned, a canonical id is **sticky** — it never changes because a new id appeared (§6.2).
 

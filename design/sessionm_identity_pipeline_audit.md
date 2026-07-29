@@ -8,6 +8,56 @@ Chain under audit: `user_point_transactions` + `transaction_discounts` +
 `transaction_headers` (`header_trans`) and `external_user_mappings` ⨝ `users`
 (`sm_external_user_map`) → `cust_trans` → `order_customer.sm_external_user_id`.
 
+## Re-verification after the 2026-07-29 full-history rebuild ✅
+
+Brent deployed the `>=` fix plus `lower()` normalization throughout and rebuilt the whole table.
+Re-audited post-rebuild — **everything verified clean:**
+
+| Check | Result |
+|---|---|
+| SessionM link rate, every business day 7/15–7/28 | **28.2 – 31.7%** — all healthy, no residual bad days |
+| Monthly link rate, 2025-08 → 2026-07 | **30.4 – 33.6%** — no gaps anywhere in history |
+| `mapped_email` / `email` / `mapped_email_domain` not lowercase | **0 / 0 / 0** |
+| `distinct mapped_email` vs `distinct lower(mapped_email)` | **1,029,384 = 1,029,384** — the 17,943 phantom identities are gone |
+| **Grain: total rows vs distinct `brink_order_id`** | **50,315,908 = 50,315,908 — 0 duplicates.** The long-standing pulse fan-out defect is resolved |
+| Null `business_date` / `net_sales` / `store_id` | 0 / 0 / 0 |
+| History span | 2018-08-07 → 2026-07-29, continuous |
+| `customer_type` drift from the case-insensitive aggregator change | **None** — person +441, aggregator +2, both from new orders. Reclassified nothing, exactly as predicted. The change was purely defensive |
+| Fan-out risk from `lower(u.user_id)` with a raw-partitioned QUALIFY | **None** — `external_user_mappings.user_id` is already 100% lowercase, so `lower()` is a no-op and 0 duplicate lowered keys survive |
+
+Fixes applied in that deploy: `create_date >= start_date`; `lower()` on `user_id` in all three
+`all_trans_users` branches and in `sm_external_user_map`; `lower()` on `mapped_email`, `email`,
+`cust_trans.email`; and all five `customer_type` branches normalized to lowercase comparison.
+
+**Resolved by this deploy:** findings #1 (boundary day) and #3 (casing asymmetry), plus the
+`pulse.orders` grain defect. **Still open:** #4 (`user_trans` tiebreak ignores resolvability),
+#5 (ambiguous multi-external-id mappings), #6 (`header_trans` dedupe partitions on the raw key).
+
+### ⚠️ Two doc/code mismatches introduced or left in the deployed script
+
+1. **`order_sequence`'s header comment now contradicts its code.** The comment claims
+   *"Restricted to `customer_type = 'person'`"*, but the SQL filters only
+   `mapped_cust_id is not null`. Verified: the table holds 2,517,397 aggregator rows, 785,364
+   kiosk, 23,684 internal — and `lifetime_customer_order_count` reaches **2,494,884 on `person`
+   rows**. A reader who trusts the comment skips the mandatory filter *and* believes the
+   lifetime counts are per-person. Both wrong. **Fix the comment, not the code** — the code
+   matches the 2026-07-27 steward decision.
+2. **Pulse tiebreak direction was mis-documented.** Deployed code is
+   `order by po.id desc` — **highest** pulse id wins. `sales_ops.order_customer.md` said
+   "lowest pulse id wins". Dictionary corrected 2026-07-29.
+
+### Residual structural note
+
+`sm_external_user_map` now selects `lower(u.user_id)` while its QUALIFY still partitions on the
+**raw** `u.user_id`. Harmless today (source is 100% lowercase) but it is the same latent shape as
+finding #6: if SessionM ever emits a mixed-case `user_id`, two rows would survive the dedupe with
+identical lowered keys and `cust_trans` would fan out, duplicating orders. Partitioning on the
+lowered value would close it permanently.
+
+---
+
+## Original audit (pre-fix, 2026-07-29)
+
 ## Verdict
 
 **Data is flowing correctly.** The boundary-day defect is fixed and confirmed. Three

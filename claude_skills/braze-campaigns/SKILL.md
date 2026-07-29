@@ -170,7 +170,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
 ## Caveats
 
-- **Dedup:** events can repeat (a user opens an email twice). Use `count(distinct external_user_id)` for unique-user metrics, as the templates do; use `count(*)` only when you mean total events.
+- **Dedup:** events can repeat (a user opens an email twice). Use `count(distinct external_user_id)` for unique-user metrics, as the templates do. For **total event** counts use `count(distinct id)`, **not** `count(*)` — the Currents merge can emit duplicate `id` rows. See "Currents ingestion integrity" below.
 - **Nulls:** filter `program_id is not null` to drop transactional/API messages with no campaign or Canvas attached.
 - **Replies:** `sms_inboundreceive` and `rcs_inboundreceive` include `STOP`/`HELP` and other inbound texts. They're tagged `engagement_type = 'reply'` — include or exclude per analysis; don't treat all replies as positive engagement.
 - **In-app/banner have no send or delivery** — impressions are the exposure base; keep that asymmetry in mind when comparing rates across channels.
@@ -190,6 +190,57 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 - **`braze.load_watermark.watermark` is already a TIMESTAMP** — it is not epoch seconds. `timestamp_seconds(cast(watermark as int64))` fails with `Invalid cast from TIMESTAMP to INT64` (observed 2026-07-27). Select `watermark` and `updated_at` as-is.
 - **`customevent` payloads** — `properties` is a JSON *string*; read fields with `json_value(properties, '$.field')`. Filter `name = '<event>'` **and** the `event_date` partition. Known Cafe Zupas events: `guest_email_from_order` (`$.order_id` — guest-checkout email linkage) and `protein_amount_tracked` (`$.protein_amount`, `$.order_id` — per-order protein grams, pipeline under steward validation as of 2026-07-26, not yet trustworthy for reporting). `local_event_datetime` gives the user-local time if you need daypart.
 - **The DATETIME/TIMESTAMP trap above is still catching people** — an analyst MCP session hit it again on 2026-07-24 (`order_timestamp_utc` vs a Braze event datetime) despite being documented since 2026-07-23. If a session is failing on this, it is probably not reading a fresh clone of `main`.
+
+## Currents ingestion integrity (steward findings 2026-07-28)
+
+The `braze` dataset is built by a `currents_merge` job that MERGEs `braze_stream` into the event tables. Four things about that pipeline change how you should write queries.
+
+### 1. `id` is the event dedupe key — use it for event counts
+
+Every Currents table carries an `id`. It is the row's unique event identifier, and the merge can emit duplicates. For any **event-level** count, count distinct ids:
+
+```sql
+count(distinct ce.id) as events   -- not count(*)
+```
+
+`count(distinct external_user_id)` (the existing unique-user guidance) was never affected by this — the exposure is specifically `count(*)` metrics: sends, opens, impressions, clicks.
+
+Health check the steward runs across all 89 tables — use it on any table you're about to report from:
+
+```sql
+select
+count(*) - count(distinct id) as extra_rows
+from `marketing-data-442316`.braze.email_send
+where 1=1
+and event_date >= date_sub(current_date('America/Denver'), interval 3 day)
+and id is not null
+```
+
+**Duplicates are real and recent.** `canvas_entry` had duplicate ids under investigation on 2026-07-28 (a new merge image went live ~19:56 UTC that day). Treat late-July event counts as provisional until the merge fix is confirmed. `canvas_entry.create_datetime` is `current_datetime()` at insert (UTC civil time), so it dates when a row *landed* rather than when the event happened — useful for isolating rows from one bad load.
+
+### 2. `load_watermark` is a lock, not just a freshness marker
+
+A **future-dated** watermark means the merge job is holding the lock and is mid-write. Don't trust reads taken in that state:
+
+```sql
+select
+job_name
+, watermark
+, updated_at
+, watermark > current_timestamp() as lock_currently_held
+from `marketing-data-442316`.braze.load_watermark
+order by job_name
+```
+
+Check this alongside the ~2-day event maturation rule below. `watermark` is already a TIMESTAMP — see the caveat about not casting it.
+
+### 3. There is a `__NULL__` event_date partition
+
+Rows with `event_date is null` exist. The mandatory `where event_date between @start and @end` filter **silently drops them**. That's normally the right trade (they can't be placed on a timeline), but say so if a total needs to reconcile to a Braze dashboard figure.
+
+### 4. Never bound `event_date` with a possibly-NULL value
+
+`where event_date >= @some_null_var or event_date is null` defeats partition pruning entirely and scans the whole table — the exact failure mode observed on `contentcard_send`. If a bound can be NULL, `coalesce` it to a real date first. The "always filter `event_date`" rule only saves money when the bound is a genuine date literal or parameter.
 
 ## Files
 

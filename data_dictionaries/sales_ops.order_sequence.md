@@ -32,6 +32,28 @@ Use this table for anything involving *where an order sits in a customer's histo
 
 **Every order with a `mapped_cust_id`.** The only build filter is `mapped_cust_id is not null` — there is no `customer_type` restriction. `customer_type` is carried as a column so the caller filters.
 
+> ### ⚠️ The build script's comment contradicts the build script's code
+>
+> As of the 2026-07-29 deployed version, the header comment above `order_sequence` in
+> `sql/sales_ops.order_customer.sql` reads *"Restricted to `customer_type = 'person'`: kiosk
+> terminals, internal accounts and the third-party aggregator id are not people and would
+> poison sequence/lifetime counts."*
+>
+> **That comment is stale and describes behaviour that was deliberately reverted on
+> 2026-07-27.** The SQL beneath it filters only `mapped_cust_id is not null`. **This table is
+> NOT person-only.** Verified 2026-07-29:
+>
+> | `customer_type` | Rows | Ids | Max `lifetime_customer_order_count` |
+> |---|---|---|---|
+> | `person` | 7,196,157 | 1,375,904 | **2,494,884** |
+> | `aggregator` | 2,517,397 | 10 | 2,494,884 |
+> | `kiosk` | 785,364 | 49 | 48,000 |
+> | `internal` | 23,684 | 910 | 2,494,884 |
+>
+> Note the 2,494,884 on **`person`** rows — that's the mixed-id problem below. Trusting the
+> comment means skipping the mandatory `customer_type = 'person'` filter *and* believing the
+> lifetime counts are per-person. Both are wrong. Fix the comment (Asana task logged).
+
 Steward decision 2026-07-27, replacing an earlier person-only build: don't bake compensation for upstream bad data into the mart. The previous person filter plus a customer-level guard existed to work around pulse's missing customer record for id `19192`; that belongs in the dev fix, not in the sequencing table.
 
 > ### ⚠️ Read this before using the lifetime columns

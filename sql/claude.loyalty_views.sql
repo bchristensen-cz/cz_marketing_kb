@@ -72,6 +72,7 @@ with cafezupas_id as (
     on tl.tier_level_id = tmh.tier_level_id
   where 1=1
     and tmh.exited_at is null
+    and tmh.user_id != '00000000-0000-0000-DEAD-000000000000'  -- tombstone sentinel, not a person
     and tmh.tier_system_id in (
       '0B6461B8-B1D5-4D81-8C31-2F21A914DE1C'
     , '1D7B47AB-E3FE-4E62-916F-01973964B662'
@@ -91,12 +92,38 @@ with cafezupas_id as (
     and rn = 1
   group by 1
 )
+-- Catering tier history WITHOUT the exited_at filter, so the view can answer
+-- point-in-time and lapse questions. `tier_membership` above is current-state only;
+-- an exited catering member correctly shows is_catering_member = false there, which
+-- makes the exit invisible. This CTE keeps it.
+--
+-- Why this matters (steward, 2026-07-29): the `cater_` email prefix CANNOT substitute
+-- for tier membership. All 181 members who exited the catering tier still carry the
+-- prefix — it is provisioning history, not current state. See the gotcha in
+-- data_dictionaries/claude.loyalty_user.md.
+, catering_history as (
+  select
+    tmh.user_id                        as user_id
+  , min(date(tmh.joined_at))           as catering_first_joined_date
+  , max(date(tmh.exited_at))           as catering_last_exited_date  -- max() skips nulls
+  from `marketing-data-442316`.sessionM.tier_member_history tmh
+  where 1=1
+    and tmh.tier_system_id = '1D7B47AB-E3FE-4E62-916F-01973964B662'
+    and tmh.user_id != '00000000-0000-0000-DEAD-000000000000'  -- tombstone sentinel, 61 tier events
+  group by 1
+)
 select
   u.user_id
 , safe_cast(cz.external_user_id as int64) as sm_external_user_id
 , u.player_id
 , lower(trim(u.email)) as email
 , split(lower(trim(u.email)), '@')[safe_offset(1)] as email_domain
+-- Catering accounts are provisioned in SessionM with a 'cater_' prefix because SessionM
+-- enforces unique emails. email_normalized strips it for display/comms ONLY — it is NOT
+-- an identity key: 39,500 stripped catering addresses collide with a real individual
+-- account, which is the exact collision the prefix exists to prevent.
+, regexp_replace(lower(trim(u.email)), r'^cater_', '') as email_normalized
+, starts_with(lower(trim(u.email)), 'cater_') as is_cater_email
 , u.first_name
 , u.last_name
 , u.birthdate
@@ -117,6 +144,10 @@ select
 , p.catering_tier_rank
 , p.catering_tier_joined_date
 , p.individual_joined_date
+-- Catering lifecycle. is_catering_member is CURRENT state; these three carry history.
+, ch.user_id is not null as was_ever_catering_member
+, ch.catering_first_joined_date
+, ch.catering_last_exited_date
 , date(u.created_at) as created_date
 , date(u.updated_at) as updated_date
 from `marketing-data-442316`.sessionM.users u
@@ -125,6 +156,8 @@ left join cafezupas_id cz
  and cz.rn = 1
 left join program p
   on p.user_id = u.user_id
+left join catering_history ch
+  on ch.user_id = u.user_id
 ;
 
 

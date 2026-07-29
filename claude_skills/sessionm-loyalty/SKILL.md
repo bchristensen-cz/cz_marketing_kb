@@ -27,7 +27,7 @@ Column docs in `data_dictionaries/`: one file per view. Read them before writing
 1. **Never query `sessionM.*` directly** to answer a business question. The raw tables carry the traps listed under [Why the raw tables are unsafe](#why-the-raw-tables-are-unsafe) — a stored balance column that overstates by 32.7M points, a 24.8M-row bulk-provisioning artifact, a free-text field that looks like an enum, and a correlation table that is two months stale. These views handle all of them.
 2. **Always bound `create_date` on `loyalty_campaign_participation`.** The underlying `sessionM.campaign_activity` is ~1.4 **billion** rows / 140 GB. It is partitioned on `create_date`; an unbounded query scans the lot. The other five views are small enough (11.6M–33M rows) that a date filter is good practice but not a cost cliff.
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
-4. **Catering vs individual comes from the tier system, never from the point account.** See [Program membership](#program-membership-catering-vs-individual).
+4. **Catering vs individual comes from the tier system** — never from the point account, and never from the `cater_` email prefix. See [Program membership](#program-membership-catering-vs-individual) and [The `cater_` email prefix](#the-cater_-email-prefix-is-not-a-membership-flag).
 5. **Split offers on `offer_kind` before quoting any redemption rate.** A blended rate is meaningless. See [Offers](#offers-and-redemption).
 6. **All datasets are read-only.** If you need to materialize intermediate results, create them ONLY in `marketing-data-442316.scratch` (7-day auto-expiry).
 7. Loyalty data loads on the same hourly ETL as the order marts. `etl_create_date` on `loyalty_points_activity` is the load partition; `activity_date` is the business date — **filter and group on `activity_date`**, not `etl_create_date`.
@@ -82,6 +82,36 @@ Membership requires `exited_at is null` (current membership only) — the view a
 - Tier and account agree for **99.8%** of members with a balance. Known disagreements: 259 catering-tier members hold a Spendable account, 14 individual-tier members hold a Catering account, ~1,930 balance-holders have no tier membership at all.
 
 So: **`member_program` answers "who is a catering member"; `point_account_name` answers "which bucket are these points in."** They are not interchangeable. For points questions, group by `point_account_name`; for member questions, filter on `member_program`.
+
+## The `cater_` email prefix is not a membership flag
+
+SessionM enforces unique email addresses, so a guest needing both a personal and a catering account gets the catering one provisioned as `cater_<their address>`. 90,170 users carry it. It is tempting as a cheap catering flag — resist it.
+
+Concordance with the catering tier system (2026-07-29):
+
+| Segment | Users |
+|---|---|
+| Both `cater_` email and catering tier | 90,119 |
+| `cater_` email only (never enrolled) | 51 |
+| Catering tier only (plain email) | 5 |
+| Tier row with no `users` record | 10 |
+
+99.93% agreement — but agreement is not the point. **The prefix measures a different thing.** All **181** members who exited the catering tier still carry the prefix — 100% of them — because nothing rewrites the email on exit. `is_cater_email` therefore means *was ever provisioned as a catering account*, never *is a catering member*.
+
+What that costs you if you use it as the definition:
+
+- Catering member counts come out **232 too high** (181 exited + 51 never enrolled) and miss 5 live members who have plain emails.
+- No timestamp lives in a string, so **every as-of-date, cohort, and lapse question becomes unanswerable**. Use `catering_first_joined_date` / `catering_last_exited_date` on `loyalty_user`.
+- `email` is editable by support and by guests; tier membership is system-managed. A corrected address silently flips a prefix-derived flag, with no audit trail.
+
+Cost is not a tiebreaker either — 45 MB for the prefix scan vs 136 MB for the tier read, on a 342 MB table. Both under a cent. The tier-derived flags are materialised as columns on `loyalty_user` precisely so the correct definition is also the cheap one.
+
+**Use `is_catering_member` (current) and `was_ever_catering_member` (ever). Treat `is_cater_email` as a cross-check only.**
+
+Two related traps:
+
+- **`email_normalized` is never an identity key.** 39,500 of the 90,161 stripped catering addresses collide with a real individual account — the exact collision the prefix exists to prevent. Match on `email`; strip only for display and outbound comms.
+- **`catering_last_exited_date` being non-null does not mean lapsed.** 2,869 members have an exit date but only 181 are currently out; the rest exited and rejoined. Lapsed = `was_ever_catering_member and not is_catering_member`.
 
 ## Offers and redemption
 
@@ -248,10 +278,11 @@ order by members desc
 Settle these before running a loyalty query. Don't ask about items already fixed by the question.
 
 1. **Individual or catering?** These are separate programs with separate expiration rules and wildly different sizes (1.68M vs 90k members). If the question doesn't say, ask — or report both split by `member_program` / `point_account_name` and say so.
-2. **Date range.** Never assume. For balances, "current" means as-of-now (the views read the live account record).
-3. **Offers: which kind?** If someone asks for "redemption rate," ask whether they mean reward-store purchases, promotional offers, or both split out. Never return a blended number.
-4. **"Points expiring" — by when?** Anchor the window explicitly. Also state whether you're including `is_past_due_not_yet_swept` rows.
-5. **"Members" — which population?** All registered (`loyalty_user`), those with a balance, or those with recent activity? These differ by hundreds of thousands.
+2. **Current or ever, for catering membership?** `is_catering_member` = in the tier today (89,943); `was_ever_catering_member` = ever (90,124). For "how many catering customers do we have" the answer is current. Say which you used.
+3. **Date range.** Never assume. For balances, "current" means as-of-now (the views read the live account record).
+4. **Offers: which kind?** If someone asks for "redemption rate," ask whether they mean reward-store purchases, promotional offers, or both split out. Never return a blended number.
+5. **"Points expiring" — by when?** Anchor the window explicitly. Also state whether you're including `is_past_due_not_yet_swept` rows.
+6. **"Members" — which population?** All registered (`loyalty_user`), those with a balance, or those with recent activity? These differ by hundreds of thousands.
 
 ## Why the raw tables are unsafe
 
@@ -268,12 +299,14 @@ Documented so nobody re-derives them the hard way:
 | `campaign_achievements.points` is dead | 0 on all 1,508 rows |
 | Test objects in reference tables | `[CATest]` / `[SMTest]` point accounts and a `[CATest]` tier system. All excluded by the views |
 | Duplicate account rows | 9 user/point-account pairs have >1 row in `user_point_accounts`. The view sums them and flags via `is_duplicate_source_row` |
+| `tier_member_history` tombstone id | `00000000-0000-0000-DEAD-000000000000` carries 61 catering tier events and is not a person. Excluded by `loyalty_user`; exclude it anywhere you join tier history directly |
+| Tier rows with no user | 9 real `user_id`s (Apr–Jun 2026) have catering tier rows but no row in `sessionM.users`. Not ingestion lag — newest is 2026-05-31. Upstream referential gap, same class as pulse customer 19192 |
 
 ## Known gaps / not yet answerable
 
 - **Store-level loyalty attribution.** `user_offers.store_id` is a SessionM retailer store id, not a Brink store number, and the mapping through `sessionM.retailer_stores` (92 rows) is undocumented. Don't answer store-level loyalty questions yet.
 - **Which reward a bitmask-2 debit paid for.** `loyalty_points_activity` can tell you points were redeemed but not always for what. `point_offer_mapper` links `user_offers_id` → `point_transaction_id` and would close this, but its coverage is unverified.
-- **Tier progression history.** The views expose *current* tier only (`exited_at is null`). Tier movement over time needs `sessionM.tier_member_history` unfiltered — not yet documented.
+- **Tier progression history.** `loyalty_user` now exposes catering *lifecycle* (`was_ever_catering_member`, `catering_first_joined_date`, `catering_last_exited_date`, added 2026-07-29), so joins, exits and lapses are answerable. The Silver → Gold → Diamond *movement path* still is not — that needs `sessionM.tier_member_history` unfiltered at tier-level grain.
 - **Transaction-level loyalty spend.** `sessionM.transaction_headers` / `transaction_items` / `transaction_discounts` / `transaction_payments` are undocumented. Brink remains the sole financial source of truth — don't compute sales from SessionM.
 - **Referral and incentive rule detail.** `incentive_outcomes` has an entirely generic schema (`entity_decimal_1`, `entity_id_1`, `discriminator`) with no dictionary. Out of scope.
 

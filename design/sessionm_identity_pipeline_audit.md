@@ -21,6 +21,8 @@ month, versus the ~7,900/day the fixed bug was costing.
 | 3 | `user_trans` tiebreak can pick a non-resolving row over a resolving one | 🟡 minor | Open |
 | 4 | 6,095 `user_id`s carry multiple `external_user_id`s; winner can flip between runs | 🟡 minor | Open — causes silent customer migration |
 | 5 | `header_trans` QUALIFY dedupe is currently a no-op | ⚪ informational | Note only |
+| — | `transaction_id` casing across all four tables | ✅ verified | Uniformly uppercase — do **not** normalise |
+| — | `user_point_transactions.transaction_id` 23.5% NULL | ✅ verified | Non-purchase point activity; correctly excluded |
 
 ## 1. Boundary-day defect — FIXED AND VERIFIED ✅
 
@@ -118,6 +120,50 @@ This is the audit's most important operational caveat: **the detector is tuned t
 whole-day collapses, not steady low-grade identity leakage.** Findings #3, #4 and #5 are all
 below its resolution. That is why they need the targeted queries in this document rather than
 relying on the daily check.
+
+### `transaction_id` casing — verified safe ✅
+
+`transaction_id` is a **different** join key (`user_trans` → `header_trans`) and the build never
+normalises it. Checked because `user_id` casing was inconsistent; this one is not:
+
+| Table | Rows (30d) | NOT uppercase | Mixed case |
+|---|---|---|---|
+| `transaction_headers` | 731,353 | **0** | 0 |
+| `transaction_payments` | 729,275 | **0** | 0 |
+| `user_point_transactions` | 637,610 | **0** | 0 |
+| `transaction_discounts` | 43,518 | **0** | 0 |
+
+All four are uppercase hex UUIDs (e.g. `000018F7-D55D-4605-B810-D88CDC390B7F`). **No
+normalisation needed and none should be added** — wrapping `transaction_id` in `lower()` would
+break every join in this chain. The casing problem is confined to `user_id`.
+
+### `user_point_transactions.transaction_id` is 23.5% NULL — correctly excluded ✅
+
+Found while verifying the above. 149,977 of 637,610 rows (30d) have a NULL `transaction_id`, and
+**all 149,977 carry a `user_id`** — so the build's `transaction_id is not null` filter drops
+rows that do have an identifiable customer. That looks alarming; it isn't. Breaking down by
+`reference_type`:
+
+| `reference_type` | Rows (30d) | % NULL `transaction_id` |
+|---|---|---|
+| `INCENT.Outcomes` (points earned on a purchase) | 196,163 | **0%** |
+| `Point Expiration` | 74,132 | 1.3% |
+| `July Protein Stacking Challenge` | 36,371 | 100% |
+| `REWARD_STORE` (redemptions) | 31,752 | 100% |
+| `auto top-off to 1050` / `to 450` | 39,683 | 100% |
+| `Behavior` | 11,684 | 60.8% |
+| `Expired Reward`, manual adjustments, support credits, fraud flags | ~2,400 | 100% |
+
+The NULLs are **non-purchase point activity** — challenges, reward redemptions, auto top-offs,
+manual adjustments. They have no POS transaction to reference, so they cannot contribute to
+order identity and excluding them is correct. Crucially, `INCENT.Outcomes` — the actual
+"earned points on this order" type — is **0% NULL**. The filter is right.
+
+Note for anyone reading `all_trans_users`: `Point Expiration` rows *do* carry a
+`transaction_id`, and their `last_updated_at` is the expiry date, not the purchase date. So a
+recent expiry can outrank the original earning row in the `user_trans` recency tiebreak. Both
+rows point at the same user, so identity is unaffected — but it means `updated_date` in
+`user_trans` is not a reliable proxy for when the transaction happened.
 
 ## 4. `user_trans` tiebreak can discard a resolvable identity — OPEN 🟡
 

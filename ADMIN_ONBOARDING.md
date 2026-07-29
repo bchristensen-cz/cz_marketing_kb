@@ -66,8 +66,28 @@ reversible, but the cheapest access review is the one you do before granting.
 ## 2. Step 1 — Claude seat
 
 1. Invite them in the Claude admin console using their `@cafezupas.com` address.
-2. Have them install the **Claude desktop app**, not just the web app. Cowork mode (folder access,
-   shell, scheduled tasks) only exists on desktop, and several of the KB workflows assume it.
+2. **Have them install the Claude desktop app. This is mandatory, not a nicety.** The whole
+   protocol depends on `git clone` running at session start, which needs a shell — and only
+   **Cowork mode on the desktop app** has one. Verified 2026-07-29: a clean
+   `git clone --depth 1` of the KB succeeds in the stock Cowork Linux sandbox (git 2.34.1,
+   github.com reachable) with no extra MCP servers installed. It fails everywhere else:
+
+   | Surface | Shell? | Data questions |
+   |---|---|---|
+   | **Cowork mode, desktop app** | yes (built in) | ✅ the only supported surface |
+   | Regular chat, desktop app | no | ❌ clone fails → hard stop |
+   | claude.ai in a browser | no | ❌ clone fails → hard stop |
+   | Claude on mobile | no | ❌ clone fails → hard stop |
+
+   The failure is *correct* behavior — the hard-stop rule refusing to guess — but to the user it
+   reads as "Claude is broken." Say this to them up front; it's the #1 thing they'll trip over.
+   **Do not** solve it by installing skills as `.skill` packages or by pasting KB content into the
+   project — both break the freshness guarantee, which is the point of the whole design.
+
+   Note for troubleshooting: don't be misled by the steward's own machine. Brent has Windows-MCP
+   and Desktop Commander installed; **neither is involved** and neither is required. If you're
+   diagnosing over someone's shoulder, the question is "are you in Cowork mode," not "which MCP
+   servers do you have."
 3. Confirm they can sign in and send one ordinary message before you touch GCP. If SSO is broken,
    you want to know now rather than while debugging a BigQuery error.
 
@@ -287,7 +307,9 @@ different answers and neither can tell which is stale.
 
 ### Things they'll get wrong
 
-- Setting up in the **web app only**, then wondering why Cowork features are missing.
+- **Asking data questions outside Cowork mode** — in the browser, on their phone, or in a plain
+  desktop chat. They'll get "the knowledge base is unavailable" and report it as a bug. See §2
+  step 2; this is the most common onboarding failure.
 - Skipping connector authorization and reporting "Claude is broken." Check §7 first.
 - Editing the prompt blocks to be "cleaner." The conditional last line of the global block
   (*"applies only to Cafe Zupas data questions"*) is load-bearing — without it Claude tries to
@@ -351,7 +373,7 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 | "I can't see the dataset in the Explorer pane" | Expected — a dataset grant doesn't add it to Explorer | They can still query it by full name; not a bug |
 | Answers arrive with no SQL shown | Instructions didn't load, or they're outside the project | Re-check `CLIENT_SETUP.md` Steps 2 and 3; move the chat into the project |
 | No commit hash in the first data answer | Project instructions didn't load, or the clone silently failed | Ask Claude to show the clone output |
-| "It says the knowledge base is unavailable" | Clone failed — network, or GitHub reachability | This is *correct behavior*. Don't work around it; fix the clone |
+| "It says the knowledge base is unavailable" | **Almost always: they're not in Cowork mode.** No shell → no clone. Otherwise network/GitHub reachability | §2 step 2. This is *correct behavior*. Move them to Cowork mode on desktop; never work around it by pasting KB content in |
 | Claude answers instantly without asking anything | Working from a saved copy or general knowledge | Confirm no `.skill` packages installed; re-paste `CLIENT_SETUP.md` Step 2 |
 | Claude brings up BigQuery on unrelated questions | Conditional line missing from the global block | Re-paste `CLIENT_SETUP.md` Step 3 exactly |
 | Two people got different numbers for the same question | Almost always different scope assumptions (dates, catering, combos), not a data bug | Compare their assumption lines before suspecting the mart |

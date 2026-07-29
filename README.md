@@ -6,6 +6,8 @@ Shared repository of data dictionaries, skills, and SQL for interfacing with Caf
 
 This KB is **pull-based**: every Claude session works from a fresh clone of `main`, pulled at the start of that session. No installed skill packages, no forks, no saved local copies.
 
+**Requires Cowork mode in the Claude desktop app.** The clone needs a shell, and that's the only surface that has one — regular desktop chat, claude.ai in a browser, and mobile all fail. Verified 2026-07-29: a clean shallow clone succeeds in the stock Cowork sandbox with no extra MCP servers. Outside Cowork, rule 5 below fires and no data question can be answered. That's intended: see `CLIENT_SETUP.md`.
+
 1. **Fresh clone, every session** (the repo is public; a shallow clone takes seconds):
    ```
    git clone --depth 1 https://github.com/bchristensen-cz/cz_marketing_kb

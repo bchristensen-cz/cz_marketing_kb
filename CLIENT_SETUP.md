@@ -8,6 +8,25 @@ Do **not** install the skills as `.skill` packages, mount a personal clone of th
 
 ---
 
+## Before you start — you must use Cowork mode on the Claude desktop app
+
+**This is a hard requirement, not a preference.** Data questions only work in **Cowork mode in the Claude desktop app**.
+
+Here's why. Every session pulls a fresh copy of the knowledge base with `git clone`, and that needs a working shell. Cowork mode has one built in. The other places you can use Claude don't:
+
+| Where you're using Claude | Data questions work? |
+|---|---|
+| **Cowork mode, desktop app** | ✅ Yes — the only supported surface |
+| Regular chat in the desktop app | ❌ No shell, so the clone fails |
+| claude.ai in a web browser | ❌ No shell, so the clone fails |
+| Claude on mobile | ❌ No shell, so the clone fails |
+
+**What failure looks like:** Claude tells you the knowledge base is unavailable and that it can't answer data questions. That is Claude working *correctly* — it's refusing to guess. It is not a bug, and there is no workaround to ask for. Open Cowork mode on the desktop app and ask again.
+
+You can still use Claude anywhere for ordinary work — writing, brainstorming, summarizing. The restriction applies only to Cafe Zupas data questions.
+
+---
+
 ## Step 0 — Authorize your connectors first
 
 Claude reaches company data through **connectors**. If these aren't authorized, every data question fails in a way that looks like "Claude is broken" but isn't.
@@ -27,7 +46,7 @@ Ask Brent if you don't have BigQuery access yet; it's granted per-person.
 
 ## Step 1 — Create a project
 
-In Claude, go to **Projects → + New Project**. Name it something like `Cafe Zupas Data`.
+In the Claude **desktop app**, go to **Projects → + New Project**. Name it something like `Cafe Zupas Data`.
 
 Note: Claude cannot see the project's name or description, so don't put instructions there — they go in Step 2.
 
@@ -100,11 +119,11 @@ It's also deliberately conditional ("only Cafe Zupas data questions"). Without t
 
 ---
 
-## Step 4 — Always start your chats inside the project
+## Step 4 — Always start your chats inside the project, in Cowork mode
 
-Even with the Step 3 backstop, the project is where the full protocol lives. Habit still matters: **open the project first, then ask.**
+Even with the Step 3 backstop, the project is where the full protocol lives. Habit still matters: **open Cowork mode, open the project, then ask.**
 
-If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it, then re-ask your question.
+If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it, then re-ask your question. If you're in the browser or on your phone, there's nothing to move — you'll need the desktop app (see the requirement at the top).
 
 ---
 
@@ -122,7 +141,9 @@ Inside your project, ask:
 
 **Fail:** an immediate number with no questions, no commit hash, or no SQL. The project instructions didn't load — recheck Step 2.
 
-Being asked questions instead of handed a number is the system working as designed. Those questions exist because each one has produced a materially wrong answer before — combos alone can swing an item number by 4x.
+**Fail, different cause:** Claude says the knowledge base is unavailable or that the clone failed. You're almost certainly not in Cowork mode — see the requirement at the top of this page.
+
+Being asked questions instead of handed a number is the system working as designed. Those questions exist because each one has produced a materially wrong answer before — combos alone can swing an item number by ~3.5x.
 
 ### Check 2 — the backstop path
 

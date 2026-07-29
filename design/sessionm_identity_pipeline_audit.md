@@ -94,6 +94,31 @@ The remaining 329 are genuinely unmapped user_ids — a separate, possibly legit
 ~155 loyalty links/month at zero cost. Low volume, but it is the same class of silent identity
 loss as the bug just fixed — invisible in totals, only visible per-customer.
 
+### ⚠️ Fix by ADDING `lower()` to two branches — never by REMOVING it from the third
+
+The asymmetry reads like a leftover, and "make the three branches consistent" can be satisfied
+in either direction. Deleting the `lower()` is the smaller-looking edit and it is catastrophic.
+Measured over 30 days, by which branch wins the `user_trans` dedupe:
+
+| Winning branch | Transactions won | Resolve as built | Resolve if `lower()` removed | Links lost |
+|---|---|---|---|---|
+| `points` | 411,213 | 410,895 | 410,895 | 0 |
+| `discounts` | 6,034 | **6,017** | **0** | **−6,017** |
+| `payments` | 2,089 | 1,940 | 1,940 | 0 |
+
+**Every single one of the 6,017 links the discounts branch produces depends on that `lower()`.**
+Not 78% of them — all of them.
+
+**And the daily detector would not catch it.** The discounts branch wins only 1.4% of
+transactions, so losing all of its links drops `pct_sm_linked` from ~30% to ~29.2% — comfortably
+inside the healthy 28–33% band. Roughly 6,000 customers a month would silently lose loyalty
+identity while the health check read green.
+
+This is the audit's most important operational caveat: **the detector is tuned to catch
+whole-day collapses, not steady low-grade identity leakage.** Findings #3, #4 and #5 are all
+below its resolution. That is why they need the targeted queries in this document rather than
+relying on the daily check.
+
 ## 4. `user_trans` tiebreak can discard a resolvable identity — OPEN 🟡
 
 ```sql
@@ -181,9 +206,14 @@ changes, since the failure mode is silent.
 ## Monitoring recommendation
 
 The detector in `data_dictionaries/sales_ops.order_customer.md` (daily `pct_sm_linked`, healthy
-28–33%) catches finding #1's class of failure. It does **not** catch findings #3–#5, which are
-too small to move the daily rate. Those need the targeted queries in this document, re-run
-periodically rather than continuously.
+28–33%) catches finding #1's class of failure — a whole-day collapse.
+
+**Know its blind spot.** It does **not** catch findings #3–#5, which are all too small to move
+the daily rate. The worked example above is the clearest case: deleting one `lower()` would cost
+~6,000 customers a month their loyalty identity and move `pct_sm_linked` by 0.8pp, well inside
+the healthy band. A green detector means "no day collapsed", not "identity resolution is
+correct". Steady low-grade leakage needs the targeted queries in this document, re-run
+periodically.
 
 Suggested cadence: fold the `pct_sm_linked` check into the daily query-log review, and re-run
 this full audit after any change to the SessionM CTEs or upstream loading.

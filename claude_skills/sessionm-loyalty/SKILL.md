@@ -132,7 +132,7 @@ Note that bitmask 2 mixes genuine reward redemptions with manual support deducti
 
 ## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
 
-Same as `sales-ops-orders` — read that section for the full rules and a worked example. In short: fully qualified table names **and** an alias on every single column reference (even in single-table queries); lowercase except where a schema name or compared literal needs case; leading commas, one column per line; `where 1=1` first, then one `and` per line; each join with `on` lined up beneath it and one extra indent per successive join. Fixed aliases: `order_customer` → `oc`, `order_lines` → `ol`.
+Same as `sales-ops-orders` — read that section for the full rules and a worked example. In short: fully qualified table names with **backticks around the project only** (`` `marketing-data-442316`.claude.loyalty_user lu ``, never the whole path) **and** an alias on every single column reference (even in single-table queries); lowercase except where a schema name or compared literal needs case; leading commas, one column per line; `where 1=1` first, then one `and` per line; each join with `on` lined up beneath it and one extra indent per successive join. Fixed aliases: `order_customer` → `oc`, `order_lines` → `ol`.
 
 ## Join patterns
 

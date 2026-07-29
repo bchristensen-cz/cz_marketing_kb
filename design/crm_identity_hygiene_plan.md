@@ -392,14 +392,14 @@ Assertions to run after every build; any non-zero result is a build failure, not
 ```sql
 -- 1. No mapping chains: every canonical_cust_id must itself be canonical
 select count(*) as broken_chains
-from `marketing-data-442316.sales_ops.customer_id_map` m
-left join `marketing-data-442316.sales_ops.customer_id_map` c
+from `marketing-data-442316`.sales_ops.customer_id_map m
+left join `marketing-data-442316`.sales_ops.customer_id_map c
   on c.cust_id = m.canonical_cust_id and c.is_canonical
 where c.cust_id is null;
 
 -- 2. One canonical per email cluster
 select count(*) as split_clusters from (
-  select match_email from `marketing-data-442316.sales_ops.customer_id_map`
+  select match_email from `marketing-data-442316`.sales_ops.customer_id_map
   where match_email is not null
   group by 1 having count(distinct canonical_cust_id) > 1
 );
@@ -407,8 +407,8 @@ select count(*) as split_clusters from (
 -- 3. Conservation: orders and net sales are redistributed, never created or lost
 with mapped as (
   select m.canonical_cust_id, oc.brink_order_id, oc.net_sales
-  from `marketing-data-442316.sales_ops.order_customer` oc
-  join `marketing-data-442316.sales_ops.customer_id_map` m on m.cust_id = oc.mapped_cust_id
+  from `marketing-data-442316`.sales_ops.order_customer oc
+  join `marketing-data-442316`.sales_ops.customer_id_map m on m.cust_id = oc.mapped_cust_id
   where oc.business_date between '2023-03-01' and current_date()
     and oc.store_id <> 1111 and oc.customer_type = 'person'
 )
@@ -417,12 +417,12 @@ select count(distinct brink_order_id) as orders, round(sum(net_sales),2) as net_
 
 -- 4. No id that was merged away in Braze has been promoted back to canonical
 select count(*) as illegal_promotions
-from `marketing-data-442316.sales_ops.customer_id_map`
+from `marketing-data-442316`.sales_ops.customer_id_map
 where is_canonical and braze_state = 'merged_away';
 
 -- 5. Queue is draining
 select action, status, count(*) as n
-from `marketing-data-442316.sales_ops.braze_identity_action_log`
+from `marketing-data-442316`.sales_ops.braze_identity_action_log
 where date(requested_at) >= current_date() - 7
 group by 1,2 order by 1,2;
 ```

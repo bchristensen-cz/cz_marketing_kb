@@ -88,12 +88,15 @@ canonical id drifts between builds we fire contradictory merges and cannot walk 
 
 ```sql
 -- Correct: customer counts on the canonical id
-select count(distinct coalesce(m.canonical_cust_id, oc.mapped_cust_id)) as customers
-from `marketing-data-442316.sales_ops.order_customer` oc
-left join `marketing-data-442316.sales_ops.customer_id_map` m on m.cust_id = oc.mapped_cust_id
-where oc.business_date between '2026-06-01' and '2026-06-30'
-  and oc.store_id <> 1111
-  and oc.customer_type = 'person';
+select
+  count(distinct coalesce(m.canonical_cust_id, oc.mapped_cust_id)) as customers
+from `marketing-data-442316`.sales_ops.order_customer oc
+	left join `marketing-data-442316`.sales_ops.customer_id_map m
+	on m.cust_id = oc.mapped_cust_id
+where 1=1
+and oc.business_date between '2026-06-01' and '2026-06-30'
+and oc.store_id <> 1111
+and oc.customer_type = 'person';
 ```
 
 Or read `sales_ops.v_order_customer_canonical`, which is `order_customer` plus a

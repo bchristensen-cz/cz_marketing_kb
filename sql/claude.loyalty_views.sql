@@ -34,7 +34,7 @@
 -- =====================================================================================
 -- 1. claude.loyalty_user — identity spine. One row per sessionM loyalty user.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_user` as
+create or replace view `marketing-data-442316`.claude.loyalty_user as
 with cafezupas_id as (
   select
     eum.user_id
@@ -43,7 +43,7 @@ with cafezupas_id as (
       partition by eum.user_id
       order by eum.updated_at desc, eum.external_user_id
     ) as rn
-  from `marketing-data-442316.sessionM.external_user_mappings` eum
+  from `marketing-data-442316`.sessionM.external_user_mappings eum
   where 1=1
     and eum.external_user_id_type = 'cafezupas'
 )
@@ -67,8 +67,8 @@ with cafezupas_id as (
       partition by tmh.user_id, tmh.tier_system_id
       order by tmh.joined_at desc, tmh.created_at desc
     ) as rn
-  from `marketing-data-442316.sessionM.tier_member_history` tmh
-  left join `marketing-data-442316.sessionM.tier_levels` tl
+  from `marketing-data-442316`.sessionM.tier_member_history tmh
+  left join `marketing-data-442316`.sessionM.tier_levels tl
     on tl.tier_level_id = tmh.tier_level_id
   where 1=1
     and tmh.exited_at is null
@@ -119,7 +119,7 @@ select
 , p.individual_joined_date
 , date(u.created_at) as created_date
 , date(u.updated_at) as updated_date
-from `marketing-data-442316.sessionM.users` u
+from `marketing-data-442316`.sessionM.users u
 left join cafezupas_id cz
   on cz.user_id = u.user_id
  and cz.rn = 1
@@ -133,7 +133,7 @@ left join program p
 --    A member should only ever hold ONE account type (Spendable OR Catering).
 --    264 members violate that rule; is_account_rule_violation flags them.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_points_balance` as
+create or replace view `marketing-data-442316`.claude.loyalty_points_balance as
 with account_rows as (
   select
     upa.user_id
@@ -143,8 +143,8 @@ with account_rows as (
   , min(date(upa.created_at)) as account_created_date
   , max(date(upa.updated_at)) as account_updated_date
   , count(*) as source_row_count
-  from `marketing-data-442316.sessionM.user_point_accounts` upa
-  join `marketing-data-442316.sessionM.point_accounts` pa
+  from `marketing-data-442316`.sessionM.user_point_accounts upa
+  join `marketing-data-442316`.sessionM.point_accounts pa
     on pa.point_account_id = upa.point_account_id
   where 1=1
     and pa.active = 'true'
@@ -174,11 +174,11 @@ select
 , ac.active_account_types > 1 as is_account_rule_violation
 , ar.source_row_count > 1 as is_duplicate_source_row
 from account_rows ar
-join `marketing-data-442316.sessionM.point_accounts` pa
+join `marketing-data-442316`.sessionM.point_accounts pa
   on pa.point_account_id = ar.point_account_id
 join account_count ac
   on ac.user_id = ar.user_id
-left join `marketing-data-442316.claude.loyalty_user` lu
+left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = ar.user_id
 ;
 
@@ -191,7 +191,7 @@ left join `marketing-data-442316.claude.loyalty_user` lu
 --    decremented. FIFO on point_modification reconciles to current_balance for 99.8%
 --    of accounts.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_points_expiring` as
+create or replace view `marketing-data-442316`.claude.loyalty_points_expiring as
 with ledger as (
   select
     upt.user_id
@@ -199,8 +199,8 @@ with ledger as (
   , upt.point_transaction_id
   , date(upt.time_of_occurrence) as occurred_date
   , upt.point_modification
-  from `marketing-data-442316.sessionM.user_point_transactions` upt
-  join `marketing-data-442316.sessionM.point_accounts` pa
+  from `marketing-data-442316`.sessionM.user_point_transactions upt
+  join `marketing-data-442316`.sessionM.point_accounts pa
     on pa.point_account_id = upt.point_account_id
   where 1=1
     and pa.active = 'true'
@@ -264,7 +264,7 @@ with ledger as (
              )
     end as expires_on
   from surviving_lot sl
-  join `marketing-data-442316.sessionM.point_accounts` pa
+  join `marketing-data-442316`.sessionM.point_accounts pa
     on pa.point_account_id = sl.point_account_id
 )
 select
@@ -283,7 +283,7 @@ select
 , lu.member_program
 , lu.catering_tier_name
 from with_expiry we
-left join `marketing-data-442316.claude.loyalty_user` lu
+left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = we.user_id
 where 1=1
   and we.points_remaining > 0
@@ -297,7 +297,7 @@ group by 1,2,3,4,5,6,7,8,13,14
 --    classifier. reference_type is free text (agent names, ticket reasons, campaign
 --    names) and must never be used as an enum.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_points_activity` as
+create or replace view `marketing-data-442316`.claude.loyalty_points_activity as
 select
   upt.point_transaction_id
 , upt.user_id
@@ -327,12 +327,12 @@ select
 , ps.name as point_source_name
 , lu.member_program
 , lu.catering_tier_name
-from `marketing-data-442316.sessionM.user_point_transactions` upt
-join `marketing-data-442316.sessionM.point_accounts` pa
+from `marketing-data-442316`.sessionM.user_point_transactions upt
+join `marketing-data-442316`.sessionM.point_accounts pa
   on pa.point_account_id = upt.point_account_id
-left join `marketing-data-442316.sessionM.point_sources` ps
+left join `marketing-data-442316`.sessionM.point_sources ps
   on ps.point_source_id = upt.point_source_id
-left join `marketing-data-442316.claude.loyalty_user` lu
+left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = upt.user_id
 where 1=1
   and pa.active = 'true'
@@ -356,7 +356,7 @@ where 1=1
 --    flags them. Exclude them from any "offers issued" count unless you specifically
 --    want the catalog load.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_offer_usage` as
+create or replace view `marketing-data-442316`.claude.loyalty_offer_usage as
 select
   uo.user_offers_id
 , uo.user_id
@@ -403,10 +403,10 @@ select
 , extract(year from uo.create_date) = 2023 as is_bulk_provisioned_2023
 , lu.member_program
 , lu.catering_tier_name
-from `marketing-data-442316.sessionM.user_offers` uo
-left join `marketing-data-442316.sessionM.offers` o
+from `marketing-data-442316`.sessionM.user_offers uo
+left join `marketing-data-442316`.sessionM.offers o
   on o.offer_id = uo.offer_id
-left join `marketing-data-442316.claude.loyalty_user` lu
+left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = uo.user_id
 ;
 
@@ -427,7 +427,7 @@ left join `marketing-data-442316.claude.loyalty_user` lu
 --                             NOISE (one campaign fired 8.2M of these for 140k members
 --                             in 27 days). Never count these as participation.
 -- =====================================================================================
-create or replace view `marketing-data-442316.claude.loyalty_campaign_participation` as
+create or replace view `marketing-data-442316`.claude.loyalty_campaign_participation as
 select
   ca.create_date
 , ca.user_id
@@ -470,16 +470,16 @@ select
 , ca.created_at
 , lu.member_program
 , lu.catering_tier_name
-from `marketing-data-442316.sessionM.campaign_activity` ca
-left join `marketing-data-442316.sessionM.campaign_attributes` cat
+from `marketing-data-442316`.sessionM.campaign_activity ca
+left join `marketing-data-442316`.sessionM.campaign_attributes cat
   on cat.campaign_id = ca.campaign_id
-left join `marketing-data-442316.sessionM.campaign_achievements` cach
+left join `marketing-data-442316`.sessionM.campaign_achievements cach
   on cach.achievement_id = ca.achievement_id
-left join `marketing-data-442316.sessionM.campaign_activity_units` cau
+left join `marketing-data-442316`.sessionM.campaign_activity_units cau
   on cau.unit_id = ca.unit_id
-left join `marketing-data-442316.sessionM.applications` app
+left join `marketing-data-442316`.sessionM.applications app
   on app.applications_id = ca.application_id
-left join `marketing-data-442316.claude.loyalty_user` lu
+left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = ca.user_id
 where 1=1
   and ca.creative_type in ('behavior','cpa-instant-reward','messaging')

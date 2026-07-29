@@ -129,6 +129,38 @@ Gmail dot-stripping, no `+tag` removal, no domain aliasing. Those transforms are
 they are *inferences*, and if we ever want them they belong in an explicit tier-2 rule with its
 own review queue, not baked into the tier-1 key.
 
+#### The `lower()` is not cosmetic — it is worth 5,604 clusters (measured 2026-07-29)
+
+Anyone tempted to simplify the key to a raw email comparison should see this first. Casing
+across the identity sources:
+
+| Source | Non-null emails | NOT lowercase | Distinct raw | Distinct lowered | Casing dupes |
+|---|---|---|---|---|---|
+| `braze.users.email` | 1,817,431 | **0** | 1,748,877 | 1,748,877 | **0** |
+| `sessionM.users.email` | 1,775,708 | **0** | 1,769,996 | 1,769,996 | **0** |
+| `pulse.customers.email` | 1,781,555 | **155,743 (8.7%)** | 1,746,151 | 1,742,168 | **3,983** |
+
+**Pulse is the only system that doesn't normalize.** Braze and SessionM are already 100%
+lowercase, so every casing duplicate in the warehouse originates in Pulse and flows through
+`order_customer.mapped_email`, which the build does **not** lower (see the gotcha in
+`data_dictionaries/sales_ops.order_customer.md`).
+
+Impact on this plan's clustering, measured over person customers with an email:
+
+| Measure | Value |
+|---|---|
+| Person customers with an email | 1,375,606 |
+| Distinct **raw** `mapped_email` | 1,283,037 |
+| Distinct **lowered** `mapped_email` | 1,277,400 |
+| Clusters merged by lowering alone | **5,637** |
+| Emails where **casing alone** splits one person across several `mapped_cust_id`s | **5,604** |
+| Emails with multiple `mapped_cust_id`s from *any* cause | 73,429 |
+
+So **7.6% of all duplicate clusters (5,604 of 73,429) exist purely because of letter case.** A
+case-sensitive match key would silently fail to merge every one of them, and — worse — would
+report success, because the clusters it *did* find would all look valid. This is the single
+cheapest 7.6% of the duplicate problem to solve, and it is already in the rule above. Keep it.
+
 **Survivor rule:** earliest `first_order_date`, tie-broken by lowest `mapped_cust_id`. Once
 assigned, a canonical id is **sticky** — it never changes because a new id appeared (§6.2).
 

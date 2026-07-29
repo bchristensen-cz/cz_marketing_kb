@@ -37,7 +37,7 @@
 | `pulse_customer_id` | INTEGER | Customer id from the digital ordering platform (Pulse). May be an **orphan** — present on the order but absent from `pulse.customers` (see `customer_type = 'aggregator'`). |
 | `sm_external_user_id` | INTEGER | Loyalty (SessionM) user mapped to a cafezupas external id. Captures in-store loyalty scans. |
 | `mapped_cust_id` | INTEGER | **Canonical customer key** = `coalesce(pulse_customer_id, sm_external_user_id)`. ~53% of orders in the last year have one. Use this for customer counts, frequency, retention — **always together with `customer_type = 'person'`**. |
-| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. |
+| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **⚠️ NOT lowercased — always wrap in `lower()` before matching or grouping.** See the email-casing gotcha. |
 | `mapped_email_domain` | STRING | **New 2026-07-27.** Domain portion of `mapped_email`. Closes the old `mapped_domain` gap that only existed on the legacy table — internal-order exclusion can now be done on this mart. |
 | `email`, `phone` | STRING | Raw contact info captured on the order (pulse order_customers). |
 
@@ -197,6 +197,38 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   the whole order to a different customer. This is a real and separate reason lifetime
   per-customer figures shift between builds. Fix proposed (deterministic tiebreak) in
   `design/sessionm_identity_pipeline_audit.md`.
+
+- **⚠️ `mapped_email` and `email` are NOT lowercased — never match or group on them raw**
+  (audited 2026-07-29). `mapped_email_domain` **is** lowercased (the build lowers before
+  splitting), so only the full-address columns are affected.
+
+  | Column (365d) | Non-null | NOT lowercase | Distinct raw | Distinct lowered | Casing dupes |
+  |---|---|---|---|---|---|
+  | `mapped_email` | 4,462,505 | 180,079 (4.04%) | 1,047,296 | 1,029,353 | **17,943** |
+  | `email` | 3,392,624 | 183,466 (5.41%) | 884,293 | 883,175 | 1,118 |
+  | `mapped_email_domain` | 4,462,505 | **0** | 22,342 | 22,342 | 0 ✅ |
+
+  **`count(distinct mapped_email)` overstates by ~17,900** because the same address in different
+  case counts twice. Always `lower(mapped_email)`.
+
+  **Root cause is Pulse, and only Pulse.** `braze.users.email` and `sessionM.users.email` are
+  **100% lowercase with zero casing duplicates**; `pulse.customers.email` is 8.7% non-lowercase
+  with 3,983 casing duplicates. The build lowers the SessionM email (which was already clean)
+  but not the Pulse chain (which isn't) — backwards. Fix is `lower()` on the `mapped_email`
+  coalesce.
+
+  Impact on customer identity: **5,604 emails have one person split across multiple
+  `mapped_cust_id`s by letter case alone** — 7.6% of all 73,429 duplicate-email clusters. See
+  `design/crm_identity_hygiene_plan.md` §3.
+
+- **`customer_type` aggregator matching is case-SENSITIVE while kiosk and internal are not**
+  (audited 2026-07-29). The `kiosk` and `internal` branches use `regexp_contains(..., r'(?i)...')`,
+  but the three aggregator branches use bare `like '%ezcater%'`, `like '%doordash.com'`,
+  `like '%itsacheckmate.com'`. **Currently harmless** — case-insensitive and case-sensitive
+  counts match exactly (ezcater 15,823 = 15,823; doordash 924,760 = 924,760; checkmate
+  367,693 = 367,693), so today's aggregator emails are all lowercase. But if a partner ever
+  sends `EZCater@…`, those orders silently classify as **`person`** and pollute every customer
+  metric with aggregator volume. Worth making `(?i)` defensively to match the other branches.
 
 - **SessionM `user_id` casing is only normalised on one of three branches** (audited
   2026-07-29). `all_trans_users` applies `lower()` to `transaction_discounts` (necessary — 78%

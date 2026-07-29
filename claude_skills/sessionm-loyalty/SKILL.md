@@ -130,9 +130,9 @@ Also note:
 
 Note that bitmask 2 mixes genuine reward redemptions with manual support deductions and fraud clawbacks, which is why the column is named `redeemed_or_deducted`. For redemptions specifically tied to a reward, join to `loyalty_offer_usage` on the member and date, or use `points_spent` on that view.
 
-## SQL style (steward rule 2026-07-23 — MANDATORY)
+## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
 
-Same as `sales-ops-orders`: fully qualified table names, lowercase, leading commas, `where 1=1` with one `and` per line, joins with `on` on the next line, short lowercase aliases.
+Same as `sales-ops-orders` — read that section for the full rules and a worked example. In short: fully qualified table names **and** an alias on every single column reference (even in single-table queries); lowercase except where a schema name or compared literal needs case; leading commas, one column per line; `where 1=1` first, then one `and` per line; each join with `on` lined up beneath it and one extra indent per successive join. Fixed aliases: `order_customer` → `oc`, `order_lines` → `ol`.
 
 ## Join patterns
 
@@ -179,13 +179,13 @@ group by 1,2
 
 ```sql
 select
-  point_account_name
-, format_date('%Y-%m', expires_on) as expiry_month
-, count(distinct user_id) as members
-, round(sum(points_expiring)) as points_expiring
-from `marketing-data-442316`.claude.loyalty_points_expiring
+  pe.point_account_name
+, format_date('%Y-%m', pe.expires_on) as expiry_month
+, count(distinct pe.user_id) as members
+, round(sum(pe.points_expiring)) as points_expiring
+from `marketing-data-442316`.claude.loyalty_points_expiring pe
 where 1=1
-and expires_on between current_date('America/Denver')
+and pe.expires_on between current_date('America/Denver')
 	and date_add(current_date('America/Denver'), interval 6 month)
 group by 1,2
 order by 1,2
@@ -195,15 +195,15 @@ order by 1,2
 
 ```sql
 select
-  format_date('%Y-%m', activity_date) as month
-, point_account_name
-, round(sum(points_issued)) as points_issued
-, round(sum(points_redeemed)) as points_redeemed
-, round(sum(points_expired)) as points_expired
-, count(distinct user_id) as active_members
-from `marketing-data-442316`.claude.loyalty_points_activity
+  format_date('%Y-%m', pa.activity_date) as month
+, pa.point_account_name
+, round(sum(pa.points_issued)) as points_issued
+, round(sum(pa.points_redeemed)) as points_redeemed
+, round(sum(pa.points_expired)) as points_expired
+, count(distinct pa.user_id) as active_members
+from `marketing-data-442316`.claude.loyalty_points_activity pa
 where 1=1
-and activity_date between @start and @end
+and pa.activity_date between @start and @end
 group by 1,2
 order by 1,2
 ```
@@ -212,17 +212,17 @@ order by 1,2
 
 ```sql
 select
-  offer_kind
-, offer_name
-, points_required
+  ou.offer_kind
+, ou.offer_name
+, ou.points_required
 , count(*) as times_issued
-, countif(is_redeemed) as times_redeemed
-, round(100 * countif(is_redeemed) / count(*), 1) as redemption_rate_pct
-, countif(is_expired_unredeemed) as expired_unredeemed
-from `marketing-data-442316`.claude.loyalty_offer_usage
+, countif(ou.is_redeemed) as times_redeemed
+, round(100 * countif(ou.is_redeemed) / count(*), 1) as redemption_rate_pct
+, countif(ou.is_expired_unredeemed) as expired_unredeemed
+from `marketing-data-442316`.claude.loyalty_offer_usage ou
 where 1=1
-and issued_date between @start and @end
-and not is_bulk_provisioned_2023
+and ou.issued_date between @start and @end
+and not ou.is_bulk_provisioned_2023
 group by 1,2,3
 order by times_redeemed desc
 ```
@@ -231,14 +231,14 @@ order by times_redeemed desc
 
 ```sql
 select
-  campaign_name
-, campaign_type
-, action_category
-, count(distinct user_id) as members
-from `marketing-data-442316`.claude.loyalty_campaign_participation
+  cp.campaign_name
+, cp.campaign_type
+, cp.action_category
+, count(distinct cp.user_id) as members
+from `marketing-data-442316`.claude.loyalty_campaign_participation cp
 where 1=1
-and create_date between @start and @end
-and action_category in ('achievement_earned','reward_awarded')
+and cp.create_date between @start and @end
+and cp.action_category in ('achievement_earned','reward_awarded')
 group by 1,2,3
 order by members desc
 ```

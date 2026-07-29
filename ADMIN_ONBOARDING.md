@@ -142,28 +142,54 @@ on schema `marketing-data-442316`.claude
 to "group:gcp-claude-data-users@cafezupas.com"
 ```
 
-**Authorized views do the rest.** Objects in `claude` that read from `sales_ops` must be
-registered in the **source dataset's ACL** as *authorized views*. Once registered, the view reads
-the underlying table on the caller's behalf — the employee never needs `sales_ops` access and
-never gets it. If you add a new view to `claude` and forget to authorize it, users get a
-permission error naming a table they've never heard of. That error means *you* missed a step, not
-that their access is broken.
+### 3.3a Authorize `claude` on every source dataset — the step everyone misses
 
-Verify authorization after adding any view:
+**This is the one that breaks rollouts.** Dataset access to `claude` is *not* enough on its own.
+
+A view in `claude` that reads `sales_ops` or `sessionM` is, by default, a **plain view**: BigQuery
+evaluates it with the **caller's** credentials against the underlying tables. So a `claude`-only
+employee querying `claude.order_customer` gets:
 
 ```
-BigQuery console → dataset sales_ops → Sharing → Authorized views
+Access Denied: Table marketing-data-442316:sales_ops.order_customer:
+User does not have permission to query table ...
 ```
 
-As of 2026-07-28 this list is **empty** — `sales_ops` has no authorized views registered. Expect
-that to change as the `claude` interface layer gets built out; if it's still empty, no view in
-`claude` is reading `sales_ops` on a user's behalf.
+Registering the view changes whose authority does the underlying read. Once registered, the source
+read happens on the *view's* authority — the employee needs only `jobUser` + `dataViewer` on
+`claude`, and still cannot see or query `sales_ops` directly. That's the wall working as designed.
 
-Two caveats worth knowing before you debug one:
+**Authorize the whole `claude` dataset, not view by view.** An *authorized dataset* covers every
+current and future view in `claude`, so you never have to remember this step again when you add a
+mart. Per source dataset:
 
-- Source and view datasets must be in the **same region**.
-- **De-authorizing** a view can take up to **24 hours** to propagate. Removing access is not
-  instant — if you need someone cut off now, remove their group membership too.
+```
+BigQuery console → dataset sales_ops → Sharing → Authorize datasets
+  → add marketing-data-442316.claude
+```
+
+Repeat for **`sessionM`** (the six `loyalty_*` views read it) and for any other dataset a `claude`
+view reaches into. This is safe because only the steward can write to `claude` — it *is* the
+curated interface layer, so granting it blanket read on the sources doesn't widen anyone's access.
+
+**Verify** — the source dataset's ACL should contain a `view` or `dataset` entry:
+
+```
+BigQuery console → dataset sales_ops → Sharing → Authorize datasets / Authorized views
+```
+
+> **Status 2026-07-29:** both `sales_ops` and `sessionM` have **zero** authorized views and **zero**
+> authorized datasets, while all eight objects in `claude` are plain views reaching into them. **A
+> user provisioned per this runbook today would get a permission error on every single one.** Do
+> this step before you onboard anyone, then re-verify.
+
+Three caveats worth knowing before you debug one:
+
+- Source and view datasets must be in the **same region** (all of these are `US` — fine).
+- **De-authorizing** can take up to **24 hours** to propagate. Removing access is not instant — if
+  you need someone cut off now, remove their group membership too.
+- Authorizing a dataset does **not** grant the user anything on the source. It only lets views in
+  `claude` read through. The employee still can't query `sales_ops` by name.
 
 ### 3.4 Grant 3 — `scratch` write access (only if they need it)
 
@@ -318,7 +344,9 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 |---|---|---|
 | "Claude says a server requires authentication" | Connector not authorized | `CLIENT_SETUP.md` Step 0; complete the Google sign-in prompt |
 | "Access Denied: User does not have `bigquery.jobs.create`" | Missing project-level Job User | §3.2 |
-| "Permission denied on table `sales_ops.…`" | **Usually not a permissions bug.** The skill correctly pointed them at `sales_ops` and no working `claude` equivalent exists | §10 — tell them the question type is out of scope, or build the view. Only if the object *does* exist in `claude` is this the authorized-view gap in §3.3 |
+| "Permission denied on table `sales_ops.…`" (or `sessionM.…`) **while querying a `claude` view** | `claude` isn't authorized on the source dataset — the view runs with *their* credentials | **§3.3a.** This is the most likely error in the whole document |
+| "Permission denied on table `sales_ops.…`" while querying `sales_ops` **by name** | Working as designed, or the skill pointed them at a table with no `claude` equivalent | §10 — tell them the question type is out of scope; don't grant `sales_ops` |
+| "No sales" / zero rows for an older period | The `claude` views only go back to **2024-01-01** (rolling 2-year window), and truncation is silent | §10 — confirm the date range is inside the window |
 | "Permission denied on dataset `claude`" | Missing dataset-level Data Viewer, or IAM hasn't propagated | §3.3, then wait 5 min |
 | "I can't see the dataset in the Explorer pane" | Expected — a dataset grant doesn't add it to Explorer | They can still query it by full name; not a bug |
 | Answers arrive with no SQL shown | Instructions didn't load, or they're outside the project | Re-check `CLIENT_SETUP.md` Steps 2 and 3; move the chat into the project |
@@ -421,31 +449,33 @@ problem.
 
 Verify these are still true; they were as of 2026-07-28.
 
-- **🛑 The `claude` dataset is not ready to be anyone's only source.** This is the blocker, not a
-  caveat. As of 2026-07-28 it holds four objects — `order_customer`, `order_line_entrees`,
-  `v_order_customer_catering`, `v_order_customer_third_party` — and they don't match the skills the
-  user is told to follow verbatim:
-  - `claude.order_customer` is a **materialized table, not an authorized view**, last modified
-    **2026-07-09**, and carries the **legacy `OrderCustomer` schema the skill explicitly
-    forbids** (`BusinessDate`, integer `iscatering`, `storeid`, `netsales`, `order_count`). It has
-    none of the 2026-07-24/27 rebuild columns — no `business_date`, no calculated `net_sales`, no
-    `customer_type`, no boolean `is_guest_order`. It also exposes legacy `netsales`, which the
-    steward rule says `claude` views must never do.
-  - `claude.order_line_entrees` partitions on `businessdate` (a *third* spelling), uses `order_id`
-    rather than `brink_order_id`, and **has no `store_id` column at all** — so the mandatory
-    `store_id <> 1111` exclusion is impossible on it.
-  - `v_order_customer_catering` is a view over the stale table (`where iscatering = 1`).
-
-  **Practical consequence: onboarding a `claude`-only user today produces confidently wrong
-  answers, not permission errors** — every canonical metric definition in the skill references
-  columns that don't exist there. Until the interface layer is rebuilt against the current
-  `sales_ops` marts, pick one deliberately: (a) hold off on data access, (b) grant read on
-  `sales_ops` as a documented temporary exception and accept the wider surface, or (c) scope the
-  person to question types the current `claude` objects genuinely support. Do not just grant
-  `claude` and hope.
+- **🛑 Nothing in `claude` is authorized yet.** All eight views are plain views reaching into
+  `sales_ops` and `sessionM`, and neither source dataset has an authorized-view or
+  authorized-dataset entry. A user provisioned per §3.2–§3.3 hits a permission error on every
+  object. **Do §3.3a first.** This is the single blocker for onboarding anyone.
+- **`claude` is a rolling 2-year window, and the truncation is silent.** Both `claude.order_customer`
+  and `claude.order_lines` filter
+  `>= date_trunc(date_sub(current_date, interval 2 year), year)` — currently **2024-01-01**. A
+  question about 2023 returns **zero rows, not an error**, which reads as "no sales" rather than
+  "outside your window." Tell every new user this explicitly, and check it first whenever someone
+  reports a suspiciously empty result. The steward querying `sales_ops` directly sees the full
+  history, so this discrepancy will come up.
+- **`claude.order_lines` renames `BusinessDate` → `business_date`.** So `claude` users get the
+  consistent spelling while `sales_ops` still has the old one. Good for users; means SQL copied from
+  the skill (which documents `sales_ops`) needs the column name adjusted. The pending rename
+  backlog item is effectively already true for `claude` consumers.
+- **`store_info` has no `claude` equivalent.** README lists `sales_ops.store_info` as approved;
+  it isn't in `claude`. Store-attribute questions (name, state, timezone) are out of reach for a
+  standard user until a view exists. `order_customer` and `order_lines` do carry `store_id` and
+  `store_name`, which covers most practical needs.
+- **`order_sequence` has no `claude` equivalent** either — so first-time vs repeat, recency, and
+  lifetime order counts are out of scope for a standard user.
 - **`braze` is not covered at all.** README lists `braze.*` (69 tables) as approved and there's a
   full `braze-campaigns` skill, but no `claude` equivalent and no grant. Campaign/email/SMS
   questions are out of scope for a standard user. See §3.6.
+- **Loyalty *is* covered** — the six `loyalty_*` views are live (built 2026-07-28). Note the
+  unresolved `store_id` → Brink store number mapping, so store-level loyalty reporting isn't
+  possible yet.
 - **`order_lines` still uses `BusinessDate`**, not `business_date`. Rename pending.
 - **`pulse.orders` fan-out** means one `brink_order_id` can appear twice until the next full
   rebuild. Fix written, not deployed.

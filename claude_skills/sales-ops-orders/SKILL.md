@@ -242,17 +242,48 @@ Note `Grilled Cheese Sandwich` is effectively a **combo-only item** — 52 stand
 
 Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 
-## SQL style (steward rule 2026-07-23 — MANDATORY)
+## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
 
 All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. Match the build scripts in `sql/`:
 
-1. **Fully qualify every table**: `` `marketing-data-442316`.dataset.table `` — never rely on a default project or dataset.
-2. **Lowercase whenever possible**: keywords, functions, aliases. Column names as they exist in the schema (e.g. `business_date` on `order_customer`, `BusinessDate` on `order_lines`).
-3. **Layout**:
+1. **Fully qualify everything — tables *and* every column reference.**
+   - Tables: `` `marketing-data-442316`.dataset.table ``. Never rely on a default project or dataset.
+   - Columns: every column in every clause (select, where, join, group by, order by, window, having) carries its table alias — `oc.net_sales`, never bare `net_sales` — **even in a single-table query**. Nobody should have to go searching for which table a field came from.
+2. **Fixed aliases for the core tables**, in either dataset (`sales_ops` or `claude`) — don't invent new ones:
+   - `order_customer` → **`oc`**
+   - `order_lines` → **`ol`**
+   - `order_sequence` → `os`, `customer_attribute` → `ca`, `store_info` → `si`
+3. **Lowercase whenever possible**: keywords, functions, aliases, CTE names. Case only where the identifier or value requires it — schema column names as they actually exist (`BusinessDate` on `order_lines`) and string literals being compared (`'Third Party'`).
+4. **Layout**:
    - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
    - CTEs: `with name as (` … `)`, chained as `, next_name as (`
-   - `where 1=1`, then each condition on its own `and ...` line
-   - each join on its own line, `on ...` on the next line, indented; short lowercase table aliases (`oc`, `ol`, `os`)
+   - **`where 1=1` is always the first condition**, then each real condition on its own `and ...` line — so conditions can be added, removed, or commented out without touching the rest
+   - each join on its own line with `on ...` on the line directly beneath it, **lined up with the `join`**
+   - **indent one additional level for each successive join**, so nesting depth is readable at a glance
+
+```sql
+select
+  oc.business_date
+, oc.store_id
+, ol.item_name
+, count(distinct oc.brink_order_id) as orders
+, round(sum(oc.net_sales), 2) as net_sales
+from `marketing-data-442316`.sales_ops.order_customer oc
+	join `marketing-data-442316`.sales_ops.order_lines ol
+	on ol.brink_order_id = oc.brink_order_id
+		left join `marketing-data-442316`.sales_ops.order_sequence os
+		on os.brink_order_id = oc.brink_order_id
+where 1=1
+and oc.business_date between @start and @end
+and ol.BusinessDate between @start and @end
+and oc.store_id <> 1111
+group by
+  oc.business_date
+, oc.store_id
+, ol.item_name
+order by
+  oc.business_date
+```
 
 ## Join patterns
 

@@ -96,7 +96,7 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 ## Conventions these templates follow (team SQL style)
 
 - All lower case; fully-qualified table names (`` `marketing-data-442316`.braze.table ``).
-- **Steward SQL layout (mandatory 2026-07-23, applies to ALL generated SQL):** select list one column per line with leading commas; column aliases use `as`; CTEs chained `with a as (...)`, `, b as (...)`; `where 1=1` then one `and ...` per line; each join on its own line with `on ...` indented on the next line; short lowercase table aliases. See the "SQL style" section of `claude_skills/sales-ops-orders/SKILL.md` and the build scripts in `sql/` for reference.
+- **Steward SQL layout (mandatory 2026-07-23, extended 2026-07-29, applies to ALL generated SQL):** select list one column per line with leading commas; column aliases use `as`; **every column reference carries its table alias — no bare column names anywhere, even in single-table queries**; CTEs chained `with a as (...)`, `, b as (...)`; `where 1=1` as the first condition, then one `and ...` per line; each join on its own line with `on ...` on the next line lined up beneath the join, **one extra indent per successive join**; short lowercase table aliases (fixed: `order_customer` → `oc`, `order_lines` → `ol`). See the "SQL style" section of `claude_skills/sales-ops-orders/SKILL.md` and the build scripts in `sql/` for reference.
 - **All datasets are read-only.** Materialize intermediate results ONLY in `marketing-data-442316.scratch` (the single writable dataset; 7-day auto-expiry). Use `create table`, not views over heavy unions.
 - **Early partition filtering** on `event_date` in every base CTE.
 - Select only the columns needed.
@@ -113,18 +113,25 @@ It unions the seven activity tables (email, push, SMS, RCS, content card, banner
 ```sql
 -- after the normalized select (call it activity_norm):
 select
-  event_date
-, program_type
-, program_id
-, program_name
-, array_agg(distinct channel order by channel) as channels_active
-, count(distinct channel)                       as channel_count
-, count(*)                                       as activity_events
-, count(distinct external_user_id)              as users_reached
-from activity_norm
-where program_id is not null
-group by event_date, program_type, program_id, program_name
-order by event_date, program_name;
+  an.event_date
+, an.program_type
+, an.program_id
+, an.program_name
+, array_agg(distinct an.channel order by an.channel) as channels_active
+, count(distinct an.channel) as channel_count
+, count(*) as activity_events
+, count(distinct an.external_user_id) as users_reached
+from activity_norm an
+where 1=1
+and an.program_id is not null
+group by
+  an.event_date
+, an.program_type
+, an.program_id
+, an.program_name
+order by
+  an.event_date
+, an.program_name;
 ```
 
 This gives one row per campaign per day, with the channels it ran on and how many customers it reached — the historical "what was live when" view that later analysis builds on. Drop `event_date` from the grain for a per-campaign lifetime summary, or add `channel` to the grain for a day × campaign × channel matrix.
@@ -224,12 +231,14 @@ A **future-dated** watermark means the merge job is holding the lock and is mid-
 
 ```sql
 select
-job_name
-, watermark
-, updated_at
-, watermark > current_timestamp() as lock_currently_held
-from `marketing-data-442316`.braze.load_watermark
-order by job_name
+  lw.job_name
+, lw.watermark
+, lw.updated_at
+, lw.watermark > current_timestamp() as lock_currently_held
+from `marketing-data-442316`.braze.load_watermark lw
+where 1=1
+order by
+  lw.job_name
 ```
 
 Check this alongside the ~2-day event maturation rule below. `watermark` is already a TIMESTAMP — see the caveat about not casting it.

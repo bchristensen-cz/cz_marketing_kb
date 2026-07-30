@@ -83,6 +83,7 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 |---|---|---|
 | `lifetime_order_count` | INT64 | All person orders, store 1111 excluded, catering **included**. **The canonical lifetime-orders metric** as of 2026-07-29 — `order_sequence.lifetime_customer_order_count` was dropped in favour of this. Not identical to the old column (person-only, no store 1111, as-of yesterday); see `sales_ops.order_sequence.md`. |
 | `lifetime_catering_order_count` | INT64 | Subset where `is_catering = true`, so downstream can net catering out. |
+| `lifetime_guest_order_count` | INT64 | Subset where `is_guest_order = true` — a **first-party digital** order placed without a loyalty account. Rebuilt 2026-07-29 on the corrected `is_guest_order`; the previous values were derived from a column that actually meant "POS order" and were wrong for every customer. **Do not reconcile this against a naive `countif(is_guest_order)` over the whole mart** — see the gotcha. |
 
 ### Lifetime value
 | Column | Type | Description |
@@ -402,6 +403,22 @@ first** — that's the mistake made here.
   when presenting tenure or acquisition-cohort numbers.
 - **Catering is included** in every lifetime and window total. Net it out with
   `lifetime_catering_order_count` if the question excludes catering.
+- **⚠️ Reconciling this table against `order_customer` requires the build's WHERE clause
+  verbatim** — `customer_type = 'person'` **and** `store_id <> 1111`, over
+  `business_date between '2018-08-07' and attribute_asof_date`. Omit either filter and you
+  manufacture phantom mismatches.
+
+  Worked example (2026-07-29): a check that skipped both filters reported 43 customers whose
+  `lifetime_guest_order_count` was short by 1,268 orders, all concentrated in 2023 — which
+  looked convincingly like a history-window cutoff. It wasn't. `customer_type` is
+  **order-level** (see `sales_ops.order_customer.md`), so aggregating with
+  `max(customer_type)` labels a customer `person` while the guest orders being counted sit on
+  their *non-person* orders. The 2023 clustering is simply where those mixed-type orders live.
+
+  With the build's filters applied: **1,377,496 customers, 0 guest mismatches, 0 order-count
+  mismatches, totals identical at 329,567.** Ready-made query:
+  `sql/checks/customer_attribute_guest_reconciliation.sql` (query A reproduces the false
+  alarm, query B is the correct check).
 - **Windows are anchored on `attribute_asof_date`, not on query time.** If the build fails
   and the table goes stale, `orders_l30` is silently a window ending on a past date and the
   numbers still *look* fine. Check `attribute_asof_date` before trusting the window columns

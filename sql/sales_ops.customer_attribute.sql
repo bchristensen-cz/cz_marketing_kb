@@ -64,6 +64,7 @@ select
 , oc.net_sales
 , oc.gross_sales
 , oc.is_catering
+, oc.is_guest_order
 , oc.mapped_email
 , oc.mapped_email_domain
 from `marketing-data-442316`.sales_ops.order_customer oc
@@ -112,6 +113,11 @@ select
 -- lifetime volume
 , count(*) as lifetime_order_count
 , countif(po.is_catering) as lifetime_catering_order_count
+-- Guest = first-party digital order placed without a loyalty account. Because person_orders
+-- is already filtered to customer_type = 'person' and store_id <> 1111, this count will NOT
+-- match a naive countif(is_guest_order) taken over the unfiltered mart — see the
+-- reconciliation note in data_dictionaries/sales_ops.customer_attribute.md.
+, countif(po.is_guest_order) as lifetime_guest_order_count
 
 -- lifetime value
 , round(sum(po.net_sales), 2) as lifetime_net_sales
@@ -178,6 +184,7 @@ select
 -- ---------- lifetime volume ----------
 , ca.lifetime_order_count
 , ca.lifetime_catering_order_count
+, ca.lifetime_guest_order_count
 
 -- ---------- lifetime value ----------
 , ca.lifetime_net_sales

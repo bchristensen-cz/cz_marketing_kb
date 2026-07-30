@@ -64,8 +64,9 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <h2>1 &nbsp;Which items?</h2>
   <label>Type one or more items, separated by commas. Partial names are fine.</label>
   <textarea id="q" placeholder="Ultimate Grilled Cheese, Honey Bacon Club, Power Bowl, Hot Honey Cottage Cheese Bowl"></textarea>
-  <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
     <button id="find">Find matches</button>
+    <button id="selall" style="display:none">Select all</button>
     <span class="muted" id="findmsg"></span>
   </div>
   <div id="cands" style="margin-top:12px"></div>
@@ -198,12 +199,46 @@ function renderTypes(){
   });
 }
 
+// Candidate rows are per item_name x rev_center x item_type, so one item name can appear
+// on several rows. Selection is keyed on the NAME, so every row carrying that name has to
+// reflect the same state — otherwise "select all" leaves rows looking unselected.
+const candNames=()=>[...new Set(candRows.map(r=>r.item_name))];
+
+function syncCandMarks(){
+  const sel=new Set(picked.map(p=>p.name));
+  document.querySelectorAll('.cand').forEach(c=>c.classList.toggle('on', sel.has(c.dataset.n)));
+  const names=candNames(), all=names.length>0 && names.every(n=>sel.has(n));
+  const btn=document.getElementById('selall');
+  btn.textContent = all ? 'Deselect all' : `Select all (${names.length})`;
+  btn.dataset.mode = all ? 'clear' : 'set';
+}
+
+document.getElementById('selall').onclick=()=>{
+  const btn=document.getElementById('selall');
+  if(btn.dataset.mode==='clear'){
+    const names=new Set(candNames());
+    picked=picked.filter(p=>!names.has(p.name));   // only drop what's on screen
+  } else {
+    const have=new Set(picked.map(p=>p.name));
+    candRows.forEach(r=>{
+      if(have.has(r.item_name)) return;
+      have.add(r.item_name);
+      picked.push({name:r.item_name, rc:r.rev_center_name, it:r.item_type});
+    });
+  }
+  syncCandMarks(); renderChips();
+};
+
 function renderChips(){
   const el=document.getElementById('chips');
   el.innerHTML=picked.length
     ? picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <i>${p.it||''}</i> <span class="x" data-i="${i}">&times;</span></span>`).join('')
     : '<span class="muted">Nothing selected yet.</span>';
-  el.querySelectorAll('span.x').forEach(s=>s.onclick=()=>{picked.splice(+s.dataset.i,1);renderChips();});
+  // Removing a chip must also un-highlight its candidate row and re-evaluate the
+  // select-all label, or the two lists disagree about what's selected.
+  el.querySelectorAll('span.x').forEach(s=>s.onclick=()=>{
+    picked.splice(+s.dataset.i,1); syncCandMarks(); renderChips();
+  });
   const note=document.getElementById('combonote'), el2=eligible();
   if(!picked.length) note.innerHTML='';
   else if(!el2.length) note.innerHTML='<div class="note">None of these items come in a Try&nbsp;2&nbsp;Combo &mdash; combos are sandwiches, soups and salads only, never bowls. This choice won\'t change the number. They can still appear free inside a catering box lunch if catering is included.</div>';
@@ -334,10 +369,15 @@ limit 60`);
     document.querySelectorAll('.cand').forEach(c=>c.onclick=()=>{
       const n=c.dataset.n, i=picked.findIndex(p=>p.name===n);
       if(i>=0) picked.splice(i,1); else picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});
-      document.querySelectorAll(`.cand[data-n="${CSS.escape(n)}"]`).forEach(x=>x.classList.toggle('on',i<0));
-      renderChips();
+      syncCandMarks(); renderChips();
     });
-  }catch(e){ msg.textContent=''; document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`; }
+    document.getElementById('selall').style.display=rows.length?'':'none';
+    syncCandMarks();
+  }catch(e){
+    msg.textContent='';
+    document.getElementById('selall').style.display='none';
+    document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`;
+  }
 };
 
 document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{

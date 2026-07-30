@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Item sales report builder</title>
+<title>Sales report builder</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
 <style>
 :root { color-scheme: light; --ink:#1f1f1d; --ink2:#5f5e5a; --ink3:#888780; --line:#e3e1da; --bg:#faf9f5; --card:#fff; --accent:#185fa5; --accentbg:#e6f1fb; --warn:#854f0b; --warnbg:#faeeda; }
@@ -10,6 +10,7 @@
 body { margin:0; padding:20px; background:var(--bg); color:var(--ink); font:400 14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
 h1 { font-size:19px; font-weight:500; margin:0 0 2px; }
 h2 { font-size:14px; font-weight:500; margin:0 0 10px; }
+h3 { font-size:11px; font-weight:500; margin:0 0 6px; color:var(--ink3); text-transform:uppercase; letter-spacing:.05em; }
 .sub { color:var(--ink2); font-size:13px; margin:0 0 18px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
 label { display:block; font-size:12px; color:var(--ink2); margin-bottom:5px; }
@@ -24,23 +25,25 @@ button.primary:hover { background:#3a3a37; }
 button:disabled { opacity:.45; cursor:not-allowed; }
 .grid { display:grid; gap:12px; }
 .g2 { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
+.g3 { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); align-items:start; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; min-height:30px; }
 .chip { font-size:12px; padding:4px 9px; border-radius:7px; background:var(--accentbg); color:#0c447c; display:inline-flex; align-items:center; gap:6px; }
 .chip b { font-weight:500; }
 .chip i { font-style:normal; opacity:.65; }
 .chip span.x { cursor:pointer; opacity:.6; }
 .chip span.x:hover { opacity:1; }
-.tchip { font-size:12px; padding:5px 11px; border-radius:7px; border:1px solid var(--line); cursor:pointer; user-select:none; background:#fff; }
+.tchip { font-size:12px; padding:5px 11px; border-radius:7px; border:1px solid var(--line); cursor:pointer; user-select:none; background:#fff; display:inline-flex; align-items:center; gap:6px; }
 .tchip.on { border-color:var(--accent); background:var(--accentbg); color:#0c447c; }
+.tchip .ord { font-size:10px; font-weight:600; background:var(--accent); color:#fff; border-radius:4px; padding:0 4px; line-height:15px; }
 .cand { display:flex; align-items:center; gap:10px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; margin-bottom:5px; cursor:pointer; background:#fff; }
 .cand:hover { background:#f3f1ea; }
 .cand.on { border-color:var(--accent); background:var(--accentbg); }
 .cand .nm { flex:1; font-size:13px; }
 .cand .mt { font-size:11px; color:var(--ink3); white-space:nowrap; }
-.seg { display:flex; flex-wrap:wrap; gap:6px; }
-.seg button { font-size:12px; height:30px; padding:0 11px; }
-.seg button.on { border-color:var(--accent); background:var(--accentbg); color:#0c447c; }
+.ck { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink); cursor:pointer; margin:0 0 6px; }
+.ck input { width:auto; height:auto; margin:0; }
 .note { font-size:12px; color:var(--warn); background:var(--warnbg); border-radius:7px; padding:8px 10px; margin-top:9px; }
+.info { font-size:12px; color:#0c447c; background:var(--accentbg); border-radius:7px; padding:8px 10px; margin-top:9px; }
 .lock { font-size:11px; color:var(--ink3); border-top:1px solid var(--line); padding-top:10px; margin-top:12px; }
 pre { background:#f3f1ea; border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; white-space:pre; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -48,20 +51,23 @@ th,td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); 
 th:first-child,td:first-child { text-align:left; }
 th { font-weight:500; color:var(--ink2); font-size:12px; cursor:pointer; user-select:none; }
 tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none; }
-.chartbox { position:relative; height:260px; margin-top:14px; }
+.twrap { max-height:460px; overflow:auto; }
+.twrap thead th { position:sticky; top:0; background:var(--card); z-index:1; box-shadow:inset 0 -1px 0 var(--line); }
+.chartbox { position:relative; height:280px; margin-top:14px; }
 .muted { color:var(--ink3); font-size:12px; }
 .err { color:#a32d2d; background:#fcebeb; border-radius:7px; padding:10px; font-size:13px; white-space:pre-wrap; }
 .hd { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
 .badge { font-size:11px; padding:3px 9px; border-radius:6px; background:var(--accentbg); color:#0c447c; }
+.sep { border:0; border-top:1px solid var(--line); margin:14px 0; }
 </style>
 </head>
 <body>
 
-<h1>Item sales report</h1>
-<p class="sub">Every choice here changes the number. The rules that aren't choices are applied for you and listed at the bottom of step 2.</p>
+<h1>Sales report builder</h1>
+<p class="sub">Pick what to break out, what to filter on, and what to measure &mdash; they are three separate choices. Rules that aren't choices are applied for you and listed at the bottom of step&nbsp;4.</p>
 
 <div class="card">
-  <h2>1 &nbsp;Which items?</h2>
+  <h2>1 &nbsp;Which items? <span class="muted" style="font-weight:400">&mdash; optional; leave empty for all items</span></h2>
   <label>Type one or more items, separated by commas. Partial names are fine.</label>
   <textarea id="q" placeholder="Ultimate Grilled Cheese, Honey Bacon Club, Power Bowl, Hot Honey Cottage Cheese Bowl"></textarea>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
@@ -71,69 +77,82 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   </div>
   <div id="cands" style="margin-top:12px"></div>
   <label style="margin-top:12px">Selected</label>
-  <div class="chips" id="chips"><span class="muted">Nothing selected yet.</span></div>
+  <div class="chips" id="chips"><span class="muted">Nothing selected &mdash; the report will cover every item.</span></div>
 
   <div id="typewrap" style="display:none;margin-top:14px">
-    <label>Item categories to include <span class="muted">— from the items you selected</span></label>
+    <label>Item categories to include <span class="muted">&mdash; from the items you selected</span></label>
     <div class="chips" id="types"></div>
   </div>
 </div>
 
 <div class="card">
-  <h2>2 &nbsp;Scope</h2>
+  <h2>2 &nbsp;Time</h2>
   <div class="grid g2">
     <div><label>From</label><input type="date" id="d1" value="2026-05-03"></div>
     <div><label>To</label><input type="date" id="d2" value="2026-06-27"></div>
-    <div><label>Break out by</label><select id="dim">
-      <option value="market">Market (= store state)</option>
-      <option value="store">Store</option>
-      <option value="item">Item name</option>
-      <option value="itemtype">Item category</option>
+    <div><label>Time grain</label><select id="grain">
+      <option value="none">No time breakout &mdash; one total for the range</option>
+      <option value="week">Week ending (Saturday)</option>
+      <option value="day">Day</option>
       <option value="month">Month</option>
+      <option value="quarter">Quarter</option>
+      <option value="year">Year</option>
     </select></div>
-    <div><label>Catering</label><select id="cat">
-      <option value="excl">Exclude catering orders</option>
+    <div><label>Whole periods</label>
+      <label class="ck" style="height:34px"><input type="checkbox" id="snap" checked><span>Snap dates to whole weeks</span></label>
+    </div>
+  </div>
+  <div id="snapnote"></div>
+</div>
+
+<div class="card">
+  <h2>3 &nbsp;Break out by <span class="muted" style="font-weight:400">&mdash; pick any number; the order you click is the column order</span></h2>
+  <div class="grid g3">
+    <div><h3>Store</h3><div class="chips" id="gStore"></div></div>
+    <div><h3>Product</h3><div class="chips" id="gProduct"></div></div>
+    <div><h3>Order</h3><div class="chips" id="gOrder"></div></div>
+  </div>
+  <div id="groupnote"></div>
+</div>
+
+<div class="card">
+  <h2>4 &nbsp;Filters &amp; measures</h2>
+  <div class="grid g2">
+    <div><label>Catering orders</label><select id="cat">
+      <option value="excl">Exclude catering</option>
       <option value="incl">Include catering</option>
       <option value="only">Catering only</option>
-    </select></div>
-    <div><label>Detail</label>
-      <label style="display:flex;align-items:center;gap:8px;height:34px;margin:0;font-size:13px;color:var(--ink);cursor:pointer">
-        <input type="checkbox" id="byitem" checked style="width:auto;height:auto;margin:0">
-        <span id="byitemlbl">One row per item as well</span>
-      </label>
+    </select>
+    <div class="muted" style="margin-top:5px">This only decides what's <i>counted</i>. To see catering as its own column, also tick <b>Catering</b> in step&nbsp;3.</div>
     </div>
-    <div><label>Dollars</label>
-      <label style="display:flex;align-items:center;gap:8px;height:34px;margin:0;font-size:13px;color:var(--ink);cursor:pointer">
-        <input type="checkbox" id="dollars" style="width:auto;height:auto;margin:0">
-        <span>Include dollar amounts</span>
-      </label>
+    <div><label>Combo handling</label><select id="shapef">
+      <option value="all">Count every sale &mdash; alone and in combos</option>
+      <option value="solo">Sold alone only</option>
+      <option value="combo">Sold in a combo only</option>
+    </select>
+    <div class="muted" style="margin-top:5px">To see alone vs combo side by side, tick <b>Sale shape</b> in step&nbsp;3.</div>
     </div>
+    <div><label>Measures</label><div id="meas"></div></div>
   </div>
-  <div id="dollarnote"></div>
-
-  <label style="margin-top:14px">How should combo sales be counted?</label>
-  <div class="seg" id="combo">
-    <button data-v="all" class="on">Combined total</button>
-    <button data-v="split">Show sold alone vs in a combo</button>
-    <button data-v="standalone">Sold alone only</button>
-  </div>
+  <div id="measnote"></div>
   <div id="combonote"></div>
 
   <div class="lock">
-    Applied for you: test store 1111 excluded &middot; discount lines excluded (they repeat the item's name and would double-count) &middot; <b>units only unless you tick dollars</b> &mdash; combo pricing makes item dollar totals misleading &middot; free items inside a combo are counted as units, never as dollars &middot; <code>claude</code> dataset, history from 2023-01-01
+    Applied for you: test store 1111 and unmapped store 999 excluded &middot; discount lines excluded on all three markers, null-safe &middot; <code>claude.order_lines</code>, history from 2023-01-01 &middot; business week is Mon&ndash;Sat, so a week is labelled by its Saturday &middot; results capped at 10,000 rows and you'll be told if the cap is hit
   </div>
 </div>
 
 <div class="card">
   <div class="hd">
-    <h2 style="margin:0">3 &nbsp;Run</h2>
+    <h2 style="margin:0">5 &nbsp;Run</h2>
     <span class="badge" id="scope">&nbsp;</span>
   </div>
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="primary" id="run">Run report</button>
     <button id="toggle">Hide SQL</button>
+    <button id="copy">Copy SQL</button>
   </div>
-  <pre id="sql">-- pick at least one item</pre>
+  <pre id="sql">-- choose at least one measure</pre>
 </div>
 
 <div class="card" id="out" style="display:none">
@@ -141,9 +160,11 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     <h2 style="margin:0">Results <span class="muted" id="rowcount" style="font-weight:400"></span></h2>
     <button id="csv" disabled>Download CSV</button>
   </div>
+  <div id="capnote"></div>
   <div id="res"></div>
-  <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
-    <label style="margin:0">Chart order</label>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:16px;flex-wrap:wrap">
+    <label style="margin:0">Chart</label>
+    <select id="cmeas" style="width:auto;height:30px;font-size:12px"></select>
     <select id="csort" style="width:auto;height:30px;font-size:12px">
       <option value="desc">Highest first</option>
       <option value="asc">Lowest first</option>
@@ -163,13 +184,70 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 // See claude_skills/ask-a-data-question/SKILL.md -> "Installing the report builder".
 const TOOL='__BQ_TOOL__';
 const PROJ='marketing-data-442316';
+const ROW_CAP=10000;
 const COMBO_RC=['Sandwiches','Soups','Salads'];
-let picked=[], candRows=[], types=[], typeOff=new Set(), comboMode='all';
-let chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[];
+
+// ---------------------------------------------------------------------------
+// Null-safe building blocks.
+//   item_type          1,111 nulls  |  rev_center_name 1,113 nulls
+//   parent_rev_center    497 nulls  (2026-05-03..06-27, verified 2026-07-30)
+// A plain `col <> 'Discount'` evaluates to NULL on those rows and silently drops
+// them. Every string exclusion below goes through ifnull for that reason.
+// ---------------------------------------------------------------------------
+const SHAPE=`case
+    when ol.composite_item_id is not null then 'In combo (paid)'
+    when ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo' then 'In combo (free slot)'
+    when ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '') then 'Sold alone'
+    else 'Inside another parent item'
+  end`;
+const F_SOLO="(ol.composite_item_id is null and ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, ''))";
+const F_COMBO="(ol.composite_item_id is not null or ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo')";
+
+// One registry. Every attribute can be grouped on; filters live separately, which is
+// the whole point -- "include catering" and "show catering as a column" are different
+// questions and used to be the same dropdown.
+const ATTRS=[
+  {k:'market',   label:'Market (state)', grp:'Store',   sql:"coalesce(ol.store_state, '(unmapped)')", as:'market',
+   note:'Market means store_state — there is no metro or DMA column. Utah is 35 of 89 stores, so one Utah row hides a lot.'},
+  {k:'store',    label:'Store',          grp:'Store',   sql:"coalesce(ol.store_name, concat('store ', cast(ol.store_id as string)))", as:'store'},
+  {k:'item',     label:'Item',           grp:'Product', sql:'ol.item_name', as:'item_name'},
+  {k:'itemtype', label:'Item category',  grp:'Product', sql:"coalesce(ol.item_type, '(none)')", as:'item_category'},
+  {k:'revctr',   label:'Menu section',   grp:'Product', sql:"coalesce(ol.rev_center_name, '(none)')", as:'menu_section'},
+  {k:'menugrp',  label:'Menu group',     grp:'Product', sql:"coalesce(ol.parent_item_grp_name, '(none)')", as:'menu_group',
+   note:'343 distinct values in a two-month window — useful for drilling, unreadable as a top-level breakout.'},
+  {k:'size',     label:'Item size',      grp:'Product', sql:"coalesce(ol.item_size, '(no size)')", as:'item_size',
+   note:'About 74% of lines carry no size, so expect one very large (no size) row.'},
+  {k:'catering', label:'Catering',       grp:'Order',   sql:"if(ol.is_catering, 'Catering', 'Non-catering')", as:'catering'},
+  {k:'shape',    label:'Sale shape',     grp:'Order',   sql:SHAPE, as:'sale_shape',
+   note:'Splits sold-alone from combo components and free combo slots. Free slots book about $0, so dollars look tiny on that row by design.'},
+];
+
+const GRAINS={
+  none:null,
+  day:    {sql:'ol.business_date', as:'business_date', label:'day'},
+  week:   {sql:'date_trunc(ol.business_date, week(sunday)) + 6', as:'week_ending', label:'week ending'},
+  month:  {sql:'date_trunc(ol.business_date, month)', as:'month', label:'month'},
+  quarter:{sql:'date_trunc(ol.business_date, quarter)', as:'quarter', label:'quarter'},
+  year:   {sql:'date_trunc(ol.business_date, year)', as:'year', label:'year'},
+};
+
+const MEAS=[
+  {k:'units',  label:'Units',            sql:'sum(ol.qty)',                        as:'units',            on:true},
+  {k:'orders', label:'Orders',           sql:'count(distinct ol.brink_order_id)',  as:'orders'},
+  {k:'gross',  label:'Item gross sales', sql:'round(sum(ol.item_gross_sales), 2)', as:'item_gross_sales', money:true},
+  {k:'net',    label:'Item net sales',   sql:'round(sum(ol.item_net_sales), 2)',   as:'item_net_sales',   money:true},
+];
+
+let picked=[], candRows=[], types=[], typeOff=new Set();
+let groupKeys=[];                 // ordered attribute keys
+let measOn=new Set(MEAS.filter(m=>m.on).map(m=>m.k));
+let chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[], lastMoney=new Set();
 
 const esc=s=>String(s).replace(/'/g,"\\'");
 const money=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
-const num=n=>n==null?'—':Math.round(n).toLocaleString();
+const num=n=>n==null?'—':Math.round(Number(n)).toLocaleString();
+const attr=k=>ATTRS.find(a=>a.k===k);
+const $=id=>document.getElementById(id);
 
 async function bq(sql){
   const r=await window.cowork.callMcpTool(TOOL,{projectId:PROJ,query:sql});
@@ -182,11 +260,34 @@ async function bq(sql){
   return {cols,rows};
 }
 
+// ---- date helpers ---------------------------------------------------------
+// Week runs Sunday-start so that week_ending is always the Saturday on or AFTER the
+// business date. Cafe Zupas trades Mon-Sat; the handful of stray Sunday lines roll
+// forward into the following week rather than landing in a phantom prior bucket.
+const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function snapRange(d1,d2){
+  const a=new Date(d1+'T00:00:00'), b=new Date(d2+'T00:00:00');
+  a.setDate(a.getDate()-a.getDay());
+  b.setDate(b.getDate()+(6-b.getDay()));
+  return [fmt(a),fmt(b)];
+}
+function effRange(){
+  const d1=$('d1').value, d2=$('d2').value;
+  if(!d1||!d2) return [d1,d2,false];
+  if($('grain').value==='week' && $('snap').checked){
+    const [a,b]=snapRange(d1,d2);
+    return [a,b,(a!==d1||b!==d2)];
+  }
+  return [d1,d2,false];
+}
+
+// ---- item picking (unchanged behaviour, kept because it works) ------------
 const eligible=()=>picked.filter(p=>COMBO_RC.includes(p.rc));
 const activeTypes=()=>types.filter(t=>!typeOff.has(t));
+const candNames=()=>[...new Set(candRows.map(r=>r.item_name))];
 
 function renderTypes(){
-  const wrap=document.getElementById('typewrap'), el=document.getElementById('types');
+  const wrap=$('typewrap'), el=$('types');
   const names=new Set(picked.map(p=>p.name));
   types=[...new Set(candRows.filter(r=>names.has(r.item_name)).map(r=>r.item_type))].filter(Boolean).sort();
   typeOff=new Set([...typeOff].filter(t=>types.includes(t)));
@@ -199,25 +300,20 @@ function renderTypes(){
   });
 }
 
-// Candidate rows are per item_name x rev_center x item_type, so one item name can appear
-// on several rows. Selection is keyed on the NAME, so every row carrying that name has to
-// reflect the same state — otherwise "select all" leaves rows looking unselected.
-const candNames=()=>[...new Set(candRows.map(r=>r.item_name))];
-
 function syncCandMarks(){
   const sel=new Set(picked.map(p=>p.name));
   document.querySelectorAll('.cand').forEach(c=>c.classList.toggle('on', sel.has(c.dataset.n)));
   const names=candNames(), all=names.length>0 && names.every(n=>sel.has(n));
-  const btn=document.getElementById('selall');
+  const btn=$('selall');
   btn.textContent = all ? 'Deselect all' : `Select all (${names.length})`;
   btn.dataset.mode = all ? 'clear' : 'set';
 }
 
-document.getElementById('selall').onclick=()=>{
-  const btn=document.getElementById('selall');
+$('selall').onclick=()=>{
+  const btn=$('selall');
   if(btn.dataset.mode==='clear'){
     const names=new Set(candNames());
-    picked=picked.filter(p=>!names.has(p.name));   // only drop what's on screen
+    picked=picked.filter(p=>!names.has(p.name));
   } else {
     const have=new Set(picked.map(p=>p.name));
     candRows.forEach(r=>{
@@ -230,112 +326,134 @@ document.getElementById('selall').onclick=()=>{
 };
 
 function renderChips(){
-  const el=document.getElementById('chips');
+  const el=$('chips');
   el.innerHTML=picked.length
     ? picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <i>${p.it||''}</i> <span class="x" data-i="${i}">&times;</span></span>`).join('')
-    : '<span class="muted">Nothing selected yet.</span>';
-  // Removing a chip must also un-highlight its candidate row and re-evaluate the
-  // select-all label, or the two lists disagree about what's selected.
+    : '<span class="muted">Nothing selected — the report will cover every item.</span>';
   el.querySelectorAll('span.x').forEach(s=>s.onclick=()=>{
     picked.splice(+s.dataset.i,1); syncCandMarks(); renderChips();
   });
-  const note=document.getElementById('combonote'), el2=eligible();
-  if(!picked.length) note.innerHTML='';
-  else if(!el2.length) note.innerHTML='<div class="note">None of these items come in a Try&nbsp;2&nbsp;Combo &mdash; combos are sandwiches, soups and salads only, never bowls. This choice won\'t change the number. They can still appear free inside a catering box lunch if catering is included.</div>';
-  else if(el2.length<picked.length) note.innerHTML=`<div class="note">Applies to ${el2.length} of ${picked.length} items (${el2.map(p=>p.name).join(', ')}). The rest are never sold in a combo and are counted as sold alone.</div>`;
-  else note.innerHTML='';
   renderTypes(); buildSql();
 }
 
+// ---- group-by registry UI -------------------------------------------------
+function renderGroups(){
+  ['Store','Product','Order'].forEach(g=>{
+    const el=$('g'+g);
+    el.innerHTML=ATTRS.filter(a=>a.grp===g).map(a=>{
+      const i=groupKeys.indexOf(a.k);
+      return `<span class="tchip${i>=0?' on':''}" data-k="${a.k}">${i>=0?`<span class="ord">${i+1}</span>`:''}${a.label}</span>`;
+    }).join('');
+    el.querySelectorAll('.tchip').forEach(c=>c.onclick=()=>{
+      const k=c.dataset.k, i=groupKeys.indexOf(k);
+      if(i>=0) groupKeys.splice(i,1); else groupKeys.push(k);
+      renderGroups(); buildSql();
+    });
+  });
+  const notes=groupKeys.map(attr).filter(a=>a&&a.note).map(a=>`<b>${a.label}:</b> ${a.note}`);
+  $('groupnote').innerHTML=notes.length?`<div class="info">${notes.join('<br>')}</div>`:'';
+}
+
+function renderMeas(){
+  $('meas').innerHTML=MEAS.map(m=>
+    `<label class="ck"><input type="checkbox" data-m="${m.k}"${measOn.has(m.k)?' checked':''}><span>${m.label}</span></label>`).join('');
+  $('meas').querySelectorAll('input').forEach(i=>i.onchange=()=>{
+    const k=i.dataset.m;
+    if(i.checked) measOn.add(k); else measOn.delete(k);
+    if(!measOn.size){ measOn.add(k); renderMeas(); }
+    buildSql();
+  });
+}
+
+// ---- SQL ------------------------------------------------------------------
 function buildSql(){
-  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
-  const dim=document.getElementById('dim').value, cat=document.getElementById('cat').value;
-  const pre=document.getElementById('sql');
-  if(!picked.length||!d1||!d2){ pre.textContent='-- pick at least one item and a date range'; return ''; }
+  const pre=$('sql');
+  const [d1,d2,snapped]=effRange();
+  const grainKey=$('grain').value, grain=GRAINS[grainKey];
+  const cat=$('cat').value, shapef=$('shapef').value;
 
-  const dimSql={market:"coalesce(ol.store_state, '(unmapped)')",store:'ol.store_name',item:'ol.item_name',itemtype:'ol.item_type',month:'date_trunc(ol.business_date, month)'}[dim];
-  const dimAs={market:'market',store:'store',item:'item_name',itemtype:'item_category',month:'month'}[dim];
-  const names=picked.map(p=>"'"+esc(p.name)+"'").join(', ');
+  $('snap').disabled = grainKey!=='week';
+  $('snapnote').innerHTML = grainKey!=='week'
+    ? '<div class="muted" style="margin-top:9px">Snapping only applies to a weekly breakout.</div>'
+    : snapped
+      ? `<div class="info">Widened to whole weeks: <b>${d1} → ${d2}</b>. Without this the first and last bars would cover part-weeks and read as a dip that isn't there.</div>`
+      : '<div class="muted" style="margin-top:9px">Your dates already sit on whole week boundaries.</div>';
 
-  // Optional second grouping level: one row per item within each dimension value.
-  // Deliberately long format, not pivoted — export to CSV and pivot in Excel.
-  const byitemEl=document.getElementById('byitem');
-  const redundant = dim==='item';
-  byitemEl.disabled=redundant;
-  document.getElementById('byitemlbl').textContent = redundant
-    ? 'Already one row per item' : 'One row per item as well';
-  const byitem = byitemEl.checked && !redundant;
-  const grp = byitem ? `${dimAs}\n, item_name` : dimAs;
-  const sel2 = byitem ? '\n, ol.item_name as item_name' : '';
+  if(!d1||!d2){ pre.textContent='-- pick a date range'; return ''; }
+  if(!measOn.size){ pre.textContent='-- choose at least one measure'; return ''; }
 
-  const SOLO="ol.composite_item_id is null and ol.parent_rev_center_name = ol.rev_center_name";
-  const INCOMBO="ol.composite_item_id is not null";
-  const SLOT="ol.composite_item_id is null and ol.parent_rev_center_name = 'Try 2 Combo'";
-  const BOX="ol.composite_item_id is null and ol.parent_rev_center_name not in ('Try 2 Combo', 'Discount') and ol.parent_rev_center_name <> ol.rev_center_name";
+  // grain always leads the grouping so time reads left-to-right
+  const dims=[];
+  if(grain) dims.push({sql:grain.sql, as:grain.as});
+  groupKeys.forEach(k=>{ const a=attr(k); if(a) dims.push({sql:a.sql, as:a.as}); });
 
-  // Dollars are OFF by default. A combo component carries an ALLOCATED price, not the menu
-  // price, and the free slot line carries ~$0 — so a dollar total summed across shapes is
-  // not a figure anyone should quote. Units are unambiguous; dollars are opt-in and warned.
-  const wantDollars=document.getElementById('dollars').checked;
-  const dnote=document.getElementById('dollarnote');
-  dnote.innerHTML = wantDollars
-    ? '<div class="note"><b>Read dollars carefully.</b> An item sold inside a Try&nbsp;2&nbsp;Combo is booked at an allocated price, not its menu price, and the free half is booked at about $0. Dollars here are <b>item gross sales</b> and exclude order-level discounts and promotions, so they will not tie to net sales. For a revenue figure anyone can quote, ask for net sales at the order level instead.</div>'
-    : '';
+  const selDims=dims.length
+    ? dims.map((d,i)=>`${i?', ':'  '}${d.sql} as ${d.as}`).join('\n')
+    : "  'All' as scope";
+  const ms=MEAS.filter(m=>measOn.has(m.k));
+  const selMeas=ms.map(m=>`, ${m.sql} as ${m.as}`).join('\n');
 
-  let measures, shape='', primary;
-  if(comboMode==='split'){
-    primary='units_sold_alone';
-    measures=`, sum(case when ${SOLO} then ol.qty end) as units_sold_alone
-, sum(case when ${INCOMBO} then ol.qty end) as units_in_combo_paid
-, sum(case when ${SLOT} then ol.qty end) as units_in_combo_free
-, sum(case when ${BOX} then ol.qty end) as units_in_catering_box`
-      + (wantDollars?`\n, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`:'');
-  } else if(comboMode==='standalone'){
-    primary='units_sold_alone';
-    shape=`and ${SOLO}`;
-    measures=`, sum(ol.qty) as units_sold_alone`
-      + (wantDollars?`\n, round(sum(ol.item_gross_sales), 0) as item_gross_sales`:'');
-  } else {
-    primary='units';
-    measures=`, sum(ol.qty) as units`
-      + (wantDollars?`\n, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`:'');
-  }
-  const sortKey = wantDollars ? 'item_gross_sales' : primary;
+  const wants=[];
+  if(picked.length) wants.push(`and ol.item_name in (${picked.map(p=>"'"+esc(p.name)+"'").join(', ')})`);
+  if(types.length && typeOff.size) wants.push(`and ol.item_type in (${activeTypes().map(t=>"'"+esc(t)+"'").join(', ')})`);
+  wants.push({excl:'and ol.is_catering = false',incl:'-- catering included, not broken out',only:'and ol.is_catering = true'}[cat]);
+  if(shapef==='solo')  wants.push(`and ${F_SOLO}`);
+  if(shapef==='combo') wants.push(`and ${F_COMBO}`);
 
-  const off=[...typeOff];
-  const typef = types.length && off.length
-    ? `and ol.item_type in (${activeTypes().map(t=>"'"+esc(t)+"'").join(', ')})`
-    : '-- all item categories';
-  const catf={excl:'and ol.is_catering = false',incl:'-- catering included',only:'and ol.is_catering = true'}[cat];
+  const grpBy = dims.length ? dims.map((d,i)=>`${i?', ':'  '}${d.as}`).join('\n') : null;
+  const primary = ms.find(m=>m.k==='units') || ms[0];
+  const ordBy = dims.length
+    ? (grain ? `  ${grain.as}\n${dims.length>1?dims.slice(1).map(d=>`, ${d.as}`).join('\n')+'\n':''}, ${primary.as} desc`
+             : `  ${primary.as} desc`)
+    : `  1`;
 
   const sql=`select
-  ${dimSql} as ${dimAs}${sel2}
-${measures}
+${selDims}
+${selMeas}
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
-and ol.store_id <> 1111
-and ol.item_name in (${names})
-and ol.item_type <> 'Discount'
-${typef}${shape?'\n'+shape:''}
-${catf}
-group by
-  ${grp}
-order by
-  ${byitem ? dimAs+'\n, '+sortKey+' desc' : sortKey+' desc'}`;
+and ol.store_id not in (1111, 999)
+and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.line_item_type, '') <> 'discount'
+${wants.join('\n')}
+${grpBy?`group by\n${grpBy}\n`:''}order by
+${ordBy}
+limit ${ROW_CAP}`;
   pre.textContent=sql;
 
+  // ---- warnings -----------------------------------------------------------
+  const w=[];
+  if(measOn.has('gross')||measOn.has('net'))
+    w.push('<b>Read dollars carefully.</b> An item sold inside a Try&nbsp;2&nbsp;Combo is booked at an <i>allocated</i> price, not its menu price, and the free half books about $0. A blended per-unit price therefore moves with combo mix rather than with anything anyone changed — for Ultimate Grilled Cheese it lands 46% below the menu price. Tick <b>Sale shape</b> in step&nbsp;3 to see the split.');
+  if(measOn.has('net'))
+    w.push('<b>Item net sales is line-level and does not reconcile to order-level net sales.</b> It runs roughly 2–4% under gross depending on sale shape. For a revenue figure to quote or tie out, use order-level <code>net_sales</code> from <code>claude.order_customer</code> instead.');
+  if(measOn.has('orders'))
+    w.push('<b>Orders</b> counts distinct orders that contain at least one qualifying line — not orders <i>of</i> that item. Summing the orders column across rows double-counts any order spanning two groups.');
+  $('measnote').innerHTML=w.length?`<div class="note">${w.join('<hr class="sep" style="margin:8px 0">')}</div>`:'';
+
+  const el2=eligible(), touchesCombo = shapef!=='all' || groupKeys.includes('shape');
+  let cn='';
+  if(picked.length && touchesCombo){
+    if(!el2.length) cn='None of the items you picked come in a Try&nbsp;2&nbsp;Combo — combos are sandwiches, soups and salads only, never bowls. This choice won\'t change the number. They can still appear free inside a catering box lunch if catering is included.';
+    else if(el2.length<picked.length) cn=`Combo handling affects ${el2.length} of ${picked.length} items (${el2.map(p=>p.name).join(', ')}). The rest are never sold in a combo and count as sold alone.`;
+  }
+  $('combonote').innerHTML=cn?`<div class="note">${cn}</div>`:'';
+
+  // ---- scope badge --------------------------------------------------------
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
-  const cm={split:'combos split out',standalone:'sold alone only',all:'combined'}[comboMode];
-  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm} · ${wantDollars?'units + dollars':'units'}${byitem?' · per item':''}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
+  const sh={all:'all sale shapes',solo:'sold alone only',combo:'in-combo only'}[shapef];
+  const dimTxt=dims.length?dims.map(d=>d.as.replace(/_/g,' ')).join(' × '):'grand total';
+  $('scope').textContent=`${picked.length?picked.length+' item'+(picked.length>1?'s':''):'all items'} · ${d1} → ${d2} · ${dimTxt} · ${cl} · ${sh} · ${ms.map(m=>m.label.toLowerCase()).join(' + ')}`;
   return sql;
 }
 
-document.getElementById('find').onclick=async()=>{
-  const raw=document.getElementById('q').value;
-  const frags=raw.split(',').map(s=>s.trim()).filter(Boolean);
-  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
-  const msg=document.getElementById('findmsg');
+// ---- discovery ------------------------------------------------------------
+$('find').onclick=async()=>{
+  const frags=$('q').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const [d1,d2]=effRange();
+  const msg=$('findmsg');
   if(!frags.length){ msg.textContent='type at least one item name'; return; }
   msg.textContent=`searching ${frags.length} name${frags.length>1?'s':''}…`;
   const likes=frags.map(f=>`lower(ol.item_name) like '%${esc(f.toLowerCase())}%'`).join('\n   or ');
@@ -349,8 +467,10 @@ document.getElementById('find').onclick=async()=>{
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
-and ol.store_id <> 1111
-and ol.item_type <> 'Discount'
+and ol.store_id not in (1111, 999)
+and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.line_item_type, '') <> 'discount'
 and (${likes})
 group by
   ol.item_name
@@ -361,7 +481,7 @@ order by
 limit 60`);
     candRows=rows;
     msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click the ones you want`:'no matches — try a shorter fragment';
-    document.getElementById('cands').innerHTML=rows.map(r=>{
+    $('cands').innerHTML=rows.map(r=>{
       const on=picked.some(p=>p.name===r.item_name)?' on':'';
       const el=COMBO_RC.includes(r.rev_center_name)?' · comes in a combo':'';
       return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}" data-it="${r.item_type}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · <b>${r.item_type}</b>${el}</span></div>`;
@@ -371,117 +491,153 @@ limit 60`);
       if(i>=0) picked.splice(i,1); else picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});
       syncCandMarks(); renderChips();
     });
-    document.getElementById('selall').style.display=rows.length?'':'none';
+    $('selall').style.display=rows.length?'':'none';
     syncCandMarks();
   }catch(e){
     msg.textContent='';
-    document.getElementById('selall').style.display='none';
-    document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`;
+    $('selall').style.display='none';
+    $('cands').innerHTML=`<div class="err">${e.message}</div>`;
   }
 };
 
-document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('#combo button').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on'); comboMode=b.dataset.v; buildSql();
-});
-['d1','d2','dim','cat','byitem','dollars'].forEach(id=>document.getElementById(id).onchange=buildSql);
-document.getElementById('toggle').onclick=()=>{
-  const p=document.getElementById('sql'), t=document.getElementById('toggle');
+['d1','d2','grain','snap','cat','shapef'].forEach(id=>$(id).onchange=buildSql);
+$('toggle').onclick=()=>{
+  const p=$('sql'), t=$('toggle');
   const h=p.style.display==='none'; p.style.display=h?'block':'none'; t.textContent=h?'Hide SQL':'Show SQL';
 };
-
-// A column is a label if its first present value isn't numeric. Detected from the data
-// rather than hardcoded, so adding a grouping level doesn't break the rendering.
-const isLabelCol=c=>{
-  const v=lastRows.map(r=>r[c]).find(x=>x!==null&&x!=='');
-  return v===undefined ? true : !isFinite(Number(v));
+$('copy').onclick=async()=>{
+  try{ await navigator.clipboard.writeText($('sql').textContent); $('copy').textContent='Copied'; }
+  catch(e){ $('copy').textContent='Copy failed'; }
+  setTimeout(()=>$('copy').textContent='Copy SQL',1400);
 };
 
+// ---- rendering ------------------------------------------------------------
+// Label vs measure is decided from the generated column list, not sniffed from values --
+// a date grain like week_ending is a label even though it sorts numerically, and a
+// measure that comes back all-null must still render right-aligned.
+let labelCols=[], measCols=[];
+
 function drawTable(){
-  const el=document.getElementById('res');
+  const el=$('res');
   if(!lastRows.length){ el.innerHTML='<div class="muted">No rows. Check the item names, the dates, and that the range starts on or after 2023-01-01.</div>'; return; }
-  const labels=lastCols.filter(isLabelCol), nums=lastCols.filter(c=>!isLabelCol(c));
   const rows=[...lastRows];
   if(sortCol!==null){ const c=lastCols[sortCol];
     rows.sort((a,b)=>{ const x=Number(a[c]), y=Number(b[c]);
-      return (!isNaN(x)&&!isNaN(y)) ? (x-y)*sortDir : String(a[c]??'').localeCompare(String(b[c]??''))*sortDir; }); }
-  const tot={}; nums.forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
-  const cell=(r,c)=>labels.includes(c) ? (r[c]||'(blank)') : (c.includes('sales')?money(r[c]):num(r[c]));
-  el.innerHTML=`<table><thead><tr>${lastCols.map((c,i)=>`<th data-i="${i}">${c.replace(/_/g,' ')}</th>`).join('')}</tr></thead>
+      const bothNum = a[c]!==''&&b[c]!==''&&!isNaN(x)&&!isNaN(y)&&measCols.includes(c);
+      return bothNum ? (x-y)*sortDir : String(a[c]??'').localeCompare(String(b[c]??''))*sortDir; }); }
+  const tot={}; measCols.forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
+  const cell=(r,c)=>labelCols.includes(c) ? (r[c]||'(blank)') : (lastMoney.has(c)?money(r[c]):num(r[c]));
+  el.innerHTML=`<div class="twrap"><table><thead><tr>${lastCols.map((c,i)=>`<th data-i="${i}">${c.replace(/_/g,' ')}</th>`).join('')}</tr></thead>
   <tbody>${rows.map(r=>`<tr>${lastCols.map(c=>`<td>${cell(r,c)}</td>`).join('')}</tr>`).join('')}</tbody>
-  <tfoot><tr><td>Total</td>${labels.slice(1).map(()=>'<td></td>').join('')}${nums.map(c=>`<td>${c.includes('sales')?money(tot[c]):num(tot[c])}</td>`).join('')}</tr></tfoot></table>`;
+  <tfoot><tr><td>Total</td>${labelCols.slice(1).map(()=>'<td></td>').join('')}${measCols.map(c=>`<td>${lastMoney.has(c)?money(tot[c]):num(tot[c])}</td>`).join('')}</tr></tfoot></table></div>`;
   el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; sortDir=(sortCol===i)?-sortDir:-1; sortCol=i; drawTable(); });
 }
 
+const TIME_COLS=new Set(['business_date','week_ending','month','quarter','year']);
+
 function drawChart(){
   if(chart){ chart.destroy(); chart=null; }
-  document.getElementById('chartnote').textContent='';
-  if(!lastRows.length) return;
+  $('chartnote').textContent='';
+  if(!lastRows.length||!measCols.length) return;
 
-  const lbls=lastCols.filter(isLabelCol);
-  const vc=lastCols.find(c=>c.includes('sales')) || lastCols.find(c=>!isLabelCol(c)) || lastCols[lastCols.length-1];
-  const isMoney=vc.includes('sales');
+  const vc=$('cmeas').value||measCols[0];
+  const isMoney=lastMoney.has(vc);
+  const timeCol=lastCols.find(c=>TIME_COLS.has(c));
+  const others=labelCols.filter(c=>c!==timeCol);
 
-  // With a second grouping level there would be one bar per dimension x item, which is
-  // unreadable past a handful of rows. Roll back up to the first level and say so — the
-  // per-item detail is in the table and the CSV.
-  let pairs;
-  if(lbls.length>1){
-    const m=new Map();
-    lastRows.forEach(r=>{ const k=r[lbls[0]]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
-    pairs=[...m].map(([label,value])=>({label,value}));
-    document.getElementById('chartnote').textContent=
-      `totalled by ${lbls[0].replace(/_/g,' ')} — per-item detail is in the table above and in the CSV`;
-  } else {
-    pairs=lastRows.map(r=>({label:r[lastCols[0]]||'(blank)', value:Number(r[vc])||0}));
+  if(timeCol){
+    // Time on the x-axis. One line per value of the next dimension when that stays
+    // readable; otherwise a single total line, and say so rather than drawing 89 lines.
+    const xs=[...new Set(lastRows.map(r=>r[timeCol]))].sort();
+    const seriesDim=others[0];
+    const vals=seriesDim?[...new Set(lastRows.map(r=>r[seriesDim]||'(blank)'))]:[];
+    const multi = seriesDim && vals.length>1 && vals.length<=8;
+    const palette=['#378ADD','#E07A3F','#4CA37A','#B25FA8','#C9A227','#5B6BC0','#D2605E','#4FA3A3'];
+    let datasets;
+    if(multi){
+      datasets=vals.sort().map((v,i)=>({label:String(v),borderColor:palette[i%8],backgroundColor:palette[i%8],tension:.25,
+        data:xs.map(x=>lastRows.filter(r=>r[timeCol]===x&&(r[seriesDim]||'(blank)')===v)
+          .reduce((s,r)=>s+(Number(r[vc])||0),0))}));
+    } else {
+      if(seriesDim) $('chartnote').textContent=`totalled across ${vals.length} ${seriesDim.replace(/_/g,' ')} values — the detail is in the table and the CSV`;
+      datasets=[{label:vc.replace(/_/g,' '),borderColor:'#378ADD',backgroundColor:'#378ADD',tension:.25,
+        data:xs.map(x=>lastRows.filter(r=>r[timeCol]===x).reduce((s,r)=>s+(Number(r[vc])||0),0))}];
+    }
+    chart=new Chart($('cv'),{type:'line',data:{labels:xs,datasets},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:multi,position:'bottom'}},
+        scales:{y:{beginAtZero:true,ticks:{callback:v=>isMoney?'$'+Math.round(v/1000).toLocaleString()+'k':Number(v).toLocaleString()}}}}});
+    return;
   }
 
-  // The SQL orders by dimension first when a second grouping level is on, so the rolled-up
-  // series arrives alphabetically. Sort here rather than relying on row order.
-  const mode=document.getElementById('csort').value;
+  const key=labelCols[0];
+  let pairs;
+  if(!key){ pairs=[{label:'All',value:lastRows.reduce((s,r)=>s+(Number(r[vc])||0),0)}]; }
+  else {
+    const m=new Map();
+    lastRows.forEach(r=>{ const k=r[key]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
+    pairs=[...m].map(([label,value])=>({label,value}));
+    if(labelCols.length>1) $('chartnote').textContent=`totalled by ${key.replace(/_/g,' ')} — the rest of the detail is in the table and the CSV`;
+  }
+  const mode=$('csort').value;
   pairs.sort(mode==='label' ? (a,b)=>String(a.label).localeCompare(String(b.label))
            : mode==='asc'   ? (a,b)=>a.value-b.value
            :                  (a,b)=>b.value-a.value);
-
-  chart=new Chart(document.getElementById('cv'),{type:'bar',
+  if(pairs.length>25){
+    const kept=pairs.slice(0,25);
+    $('chartnote').textContent=`top 25 of ${pairs.length} — full list in the table and the CSV`;
+    pairs=kept;
+  }
+  chart=new Chart($('cv'),{type:'bar',
     data:{labels:pairs.map(p=>p.label),datasets:[{label:vc.replace(/_/g,' '),data:pairs.map(p=>p.value),backgroundColor:'#378ADD'}]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-      scales:{y:{ticks:{callback:v=> isMoney
-        ? '$'+Math.round(v/1000).toLocaleString()+'k'
-        : Number(v).toLocaleString()}}}}});
+      scales:{y:{beginAtZero:true,ticks:{callback:v=>isMoney?'$'+Math.round(v/1000).toLocaleString()+'k':Number(v).toLocaleString()}}}}});
 }
-document.getElementById('csort').onchange=drawChart;
+$('csort').onchange=drawChart;
+$('cmeas').onchange=drawChart;
 
-document.getElementById('csv').onclick=()=>{
+$('csv').onclick=()=>{
   if(!lastRows.length) return;
   const q=v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
   const lines=[lastCols.join(','), ...lastRows.map(r=>lastCols.map(c=>q(r[c])).join(','))];
   const blob=new Blob([lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob), a=document.createElement('a');
-  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
-  a.href=url; a.download=`item_sales_${d1}_to_${d2}.csv`;
+  const [d1,d2]=effRange();
+  a.href=url; a.download=`sales_report_${d1}_to_${d2}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 
-document.getElementById('run').onclick=async()=>{
+$('run').onclick=async()=>{
   const sql=buildSql(); if(!sql) return;
-  const btn=document.getElementById('run'); btn.disabled=true; btn.textContent='Running…';
-  document.getElementById('out').style.display='block';
-  document.getElementById('res').innerHTML='<div class="muted">Querying BigQuery…</div>';
-  document.getElementById('rowcount').textContent='';
-  document.getElementById('csv').disabled=true;
+  const btn=$('run'); btn.disabled=true; btn.textContent='Running…';
+  $('out').style.display='block';
+  $('res').innerHTML='<div class="muted">Querying BigQuery…</div>';
+  $('rowcount').textContent=''; $('capnote').innerHTML='';
+  $('csv').disabled=true;
+
+  // Expected column names come from the same registry that built the SELECT, so the
+  // renderer never has to guess which columns are labels.
+  const ms=MEAS.filter(m=>measOn.has(m.k));
+  const expMeas=ms.map(m=>m.as);
+  lastMoney=new Set(ms.filter(m=>m.money).map(m=>m.as));
+
   try{
     const {cols,rows}=await bq(sql);
-    lastCols=cols; lastRows=rows; sortCol=null; sortDir=-1; drawTable();
-    document.getElementById('csv').disabled=!rows.length;
-    document.getElementById('rowcount').textContent=rows.length?`· ${rows.length.toLocaleString()} row${rows.length>1?'s':''}`:'';
+    lastCols=cols; lastRows=rows; sortCol=null; sortDir=-1;
+    measCols=cols.filter(c=>expMeas.includes(c));
+    labelCols=cols.filter(c=>!expMeas.includes(c));
+    $('cmeas').innerHTML=measCols.map(c=>`<option value="${c}">${c.replace(/_/g,' ')}</option>`).join('');
+    drawTable();
+    $('csv').disabled=!rows.length;
+    $('rowcount').textContent=rows.length?`· ${rows.length.toLocaleString()} row${rows.length>1?'s':''}`:'';
+    if(rows.length>=ROW_CAP)
+      $('capnote').innerHTML=`<div class="note"><b>Truncated.</b> This hit the ${ROW_CAP.toLocaleString()}-row cap, so the totals row is incomplete. Narrow the date range or drop a breakout column.</div>`;
     drawChart();
   }catch(e){
-    lastRows=[]; lastCols=[];
-    document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`;
-    document.getElementById('csv').disabled=true;
-    drawChart();   // clears any chart left over from the previous successful run
+    lastRows=[]; lastCols=[]; measCols=[]; labelCols=[];
+    $('res').innerHTML=`<div class="err">${e.message}</div>`;
+    $('csv').disabled=true;
+    drawChart();
   }
   btn.disabled=false; btn.textContent='Run report';
 };
@@ -490,13 +646,15 @@ if(TOOL.indexOf('__BQ')===0){
   document.body.insertAdjacentHTML('afterbegin',
     '<div class="err" style="margin-bottom:14px"><b>This report builder was not installed correctly.</b><br>'
     + 'Its BigQuery connection was never filled in, so no query will run. Ask Claude to '
-    + '&ldquo;reinstall the item sales report builder&rdquo; and it will rebuild this page '
+    + '&ldquo;reinstall the sales report builder&rdquo; and it will rebuild this page '
     + 'against your own BigQuery connector.</div>');
-  document.getElementById('run').disabled=true;
-  document.getElementById('find').disabled=true;
+  $('run').disabled=true;
+  $('find').disabled=true;
 }
 
-buildSql();
+// Default view answers the shape that prompted this rebuild: week ending x store.
+groupKeys=['market'];
+renderGroups(); renderMeas(); renderChips();
 </script>
 </body>
 </html>

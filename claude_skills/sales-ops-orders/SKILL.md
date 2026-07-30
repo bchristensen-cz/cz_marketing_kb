@@ -218,7 +218,8 @@ order by ca.mapped_cust_id, s.orders desc
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
 | Lifetime orders per customer | **`customer_attribute.lifetime_order_count`** — one row per person customer, already person-only and store-1111-excluded. **`order_sequence.lifetime_customer_order_count` was DROPPED 2026-07-29** — any query using it now errors |
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)`. **This is the default measure for item questions** — see the units-vs-dollars rule below |
-| Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it (see below). Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart. ⚠️ See the `item_net_sales` note below before telling a user the column doesn't exist |
+| Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it (see below) |
+| Item net sales | `sum(item_net_sales)` from `order_lines` — live, fully populated, safe to report **when asked**. Runs 2.3–3.8% under gross depending on sale shape, and does **not** reconcile to order-level `net_sales`; say so in the same breath. See the gotcha below |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
@@ -285,12 +286,20 @@ Two consequences. They inflate any unit count not filtered to `line_item_type in
 Filter them in **both** the discovery query and the metric query:
 
 ```sql
-and ol.rev_center_name <> 'Discount'
-and ol.item_type <> 'Discount'
-and ol.line_item_type <> 'discount'
+and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.line_item_type, '') <> 'discount'
 ```
 
 Since the 2026-07-30 fix, `item_type = 'Discount'` is a reliable test on its own — but keep all three conditions: they're free, and they still hold for any pre-fix data you compare against.
+
+> **⚠️ Wrap every string exclusion in `ifnull` — the bare form silently drops rows** (steward rule 2026-07-30). `col <> 'Discount'` evaluates to NULL, not TRUE, on a NULL `col`, and BigQuery's `WHERE` treats NULL as false. Those rows vanish with no warning. Measured over 2026-05-03 → 2026-06-27 (stores 1111 and 999 excluded): **`item_type` 1,111 nulls, `rev_center_name` 1,113, `parent_rev_center_name` 497** on 10,018,577 lines. Small, but it is a silent, unbounded-by-design loss that grows with whatever upstream defect produces the nulls — and it applies to *any* negated string test, not just discounts. The same trap sits inside combo-shape logic: `parent_rev_center_name = rev_center_name` is NULL-unsafe, so use `ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '')` when testing for a standalone line.
+
+### Store 999 joins 1111 in the exclusion list (steward rule 2026-07-30)
+
+`store_id = 999` has **no `store_info` row**, so `store_name` and `store_state` are both NULL and it forms a second unnamed group in any store or market breakdown. It is tiny — 4 lines over 2026-05-03 → 2026-06-27 against store 1111's 24,128 — which is exactly why it survives review: it's too small to notice and too nameless to explain. Verified 2026-07-30 that 1111 and 999 are the **only** two store ids with a NULL name or state, and that `store_name` is otherwise unique across all 89 real stores (no dedup needed, no `store_id` prefix required for a readable label).
+
+Use `and ol.store_id not in (1111, 999)` on `order_lines`, and the same on `order_customer`.
 
 ### 5. Named products — resolve the name against the data FIRST, then confirm
 
@@ -566,9 +575,46 @@ catering box, and $1,260,795 Utah gross either way. Use whichever is clearer for
 audience; **prefer this one in anything a non-analyst will read.**
 
 - **`line_item_type = 'item'` is NOT the same as "standalone."** For Ultimate Grilled Cheese over 2026-05-03 → 2026-06-27: 71,586 `item` lines, but only **24,125** were standalone — the other **47,461** were priced combo components. Treating all `item` lines as standalone overstates standalone units ~3x and understates combo units.
-- **The two combo shapes are mutually exclusive per `combo_order_line_item_id`** (verified: 47,461 groups have exactly one priced component line and zero modifier lines; 37,623 have exactly one modifier line and zero component lines). So **combo units = component lines + modifier lines, with no double-counting.** Both shapes appear across all 88 stores in both months and both combo types, so this is a per-combo-slot POS structure, not a config migration or a store/size split.
+- **The two combo shapes are mutually exclusive per `combo_order_line_item_id`** (verified: 47,461 groups have exactly one priced component line and zero modifier lines; 37,623 have exactly one modifier line and zero component lines). So **combo units = component lines + modifier lines, with no double-counting.** **Corrected 2026-07-30: the two shapes are a CHANNEL split, not a per-slot quirk.** Sandwich lines, 2026-06-30 → 2026-07-29, store 1111 excluded: in-store POS produced 209,982 priced components and only **29** zero-priced slots; digital produced 143,097 zero-priced slots and only **172** priced components. It is ~99.9% clean in both directions. So `composite_item_id is not null` is very nearly a proxy for `pulse_order_id is null`, and any analysis that filters to one combo shape has silently filtered to one channel. The earlier "appears across all 88 stores, so it isn't a split" reasoning was wrong — both channels operate in all 88 stores, which is exactly why the store test couldn't see it. **Test the candidate dimension, not a dimension that happens to be uniform.**
 - **Revenue lives in the first two shapes, not just the first.** The priced combo components carried $315,280 of gross for UGC in that window vs $215,890 standalone — so "essentially all revenue is in standalone lines" is false. For revenue-per-unit, divide by standalone + component lines; exclude the zero-priced modifier lines.
 - Box Lunches (catering) also surface entrées as zero-priced `modifier` lines with `parent_rev_center_name = 'Box Lunches'` — another reason to settle the catering question up front.
+
+### Modifier / customization analysis — digital orders ONLY (verified 2026-07-30)
+
+**`order_lines` carries essentially no modifier detail for in-store POS orders.** Standalone sandwiches
+2026-06-30 → 2026-07-29, store 1111 excluded: **25** explicit ingredient changes across **65,276** POS lines
+(0.0%) against **23,453** across **63,027** digital lines (37.2%). Priced combo components — which are the POS
+combo shape — have **zero** attached modifiers across all 210,154 lines. This is a capture gap, not behavior:
+a guest at the counter can obviously say "no tomato."
+
+**Consequences, all mandatory:**
+
+1. **Never report a company-wide modification rate.** Any rate is a *digital* rate. Filter
+   `ol.pulse_order_id is not null` explicitly and say so — leaving POS in the denominator halves the number
+   with no warning. Whether Brink records in-store modifiers at all is an open upstream question
+   (Asana `KB finding: no in-store modifier capture`).
+2. **`item_modifier = 'With'` is a build selection, not a modification.** The seven values are `With`, `No`,
+   `Add`, `Substitute`, `Extra`, `None`, `For`. **A customization is `No` / `Add` / `Substitute` / `Extra`.**
+   `With` covers the bread choice (`Ciabatta` 53,052, `Ancient Grain` 10,121) and the combo entrée slot, and it
+   fires on **99.9%** of digital sandwiches because it's a required step. Counting any modifier line as
+   "modified" returns ~99.9% — a technically-correct, completely useless number.
+3. **Also require `rev_center_name = 'Modifiers'` on the change.** A `No` line can point at a dessert or a
+   side (`No Chocolate Dipped Strawberry`, 2,896 lines) — that's a combo-slot decline, not an ingredient edit.
+
+**Join key:** modifier lines attach to the parent item line on **(`brink_order_id`, `order_item_id`)** — the
+modifier's `order_item_id` holds the *parent's* order-item id, and its own identity is `item_id_seq_num`.
+Do **not** join on `combo_order_line_item_id`; it groups the whole combo.
+
+> **⚠️ Inside a Try 2 Combo, modifiers cannot be attributed to a specific entrée.** All modifiers for every
+> slot hang flat off the *combo parent's* `order_item_id`, siblings of the entrée slot lines themselves. Over
+> 2026-06-30 → 2026-07-29, non-catering, **143,123 of 143,124** sandwich-bearing combos also held a
+> soup/salad/bowl — so "No Roma Tomato" belongs to either entrée with no way to tell. The tell is in the data:
+> the top changes on sandwich-bearing combos include `Add Salad Tortilla Strips` (8,157), `Add Radiatore Noodle`
+> (7,802) and `Add Wild Rice Blend` (4,174), which are soup and salad ingredients.
+>
+> **So report the standalone rate as the answer and the combo rate as an upper bound**, never a blended number
+> without both stated. Sandwiches, last 30 days, digital, non-catering: **37.2% standalone (exact, 1.61 changes
+> each) vs 49.3% in-combo (ceiling, 2.04 each)**; blended 45.6% of 206,122.
 
 **Try 2 Combo count and composition:**
 ```sql
@@ -663,7 +709,15 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
 - **Always `lower()` an email before matching, grouping, or counting it** (audited 2026-07-29). `order_customer.mapped_email` and `email` are **not** normalised — 4% of `mapped_email` values are not lowercase, and `count(distinct mapped_email)` **overstates by ~17,900** because the same address in different case counts twice. `mapped_email_domain` *is* already lowercase and is safe as-is. Root cause is Pulse (8.7% non-lowercase); Braze and SessionM emails are 100% clean. Also relevant to identity: 5,604 emails have one person split across several `mapped_cust_id`s by case alone.
 - **Per-customer questions should use `sales_ops.customer_attribute`, not a hand-rolled `group by mapped_cust_id`** (new 2026-07-29). Lifetime orders, spend, AOV, recency, tenure, store affinity and trailing 30/90/365-day activity are all precomputed there — that's the whole point, so two sessions can't produce two different LTV numbers. It is already person-only (adding `customer_type = 'person'` errors), it has **no partition column**, and you must check `attribute_asof_date = yesterday` before trusting the window columns. See its section above.
-- **⚠️ UNRESOLVED — `order_lines.item_net_sales` exists and is fully populated, but this skill tells users per-item net isn't computable** (found 2026-07-30). The column is live on **both** `sales_ops.order_lines` and `claude.order_lines`, with **zero nulls**: for 2026-06-01 → 2026-06-07, `line_item_type = 'item'`, store 1111 excluded — 712,458 lines, $4,291,648 gross vs **$4,178,409 net**, a 2.6% spread. The 2026-07-24 breaking-change note says `item_net_sales` is "gone," but that removal applied to the **order-level** rollups on `order_customer`, not to the line-level column here. Until the steward rules on what the 2.6% represents (item-level discount only? tax? something else?) and whether it reconciles to order-level `net_sales`: **keep using `item_gross_sales` for item mix, and do not present `item_net_sales` as a net-sales figure.** But don't tell a user the column doesn't exist — they can see it in the schema, and that answer destroys trust in the rest of this skill. Say it's undocumented and unvalidated (Asana: `KB finding: item_net_sales is live but undocumented`).
+- **`order_lines.item_net_sales` is usable, with a named limit** (steward ruling 2026-07-30, superseding the earlier "not computable" wording). The column is live on **both** `sales_ops.order_lines` and `claude.order_lines`, fully populated, **zero nulls**. Report it when asked; do **not** treat it as reconcilable to order-level net. Measured on Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27, non-catering, stores 1111/999 excluded:
+
+  | Sale shape | Units | Gross | Net | Gross→net |
+  |---|---|---|---|---|
+  | Sold alone | 24,125 | $215,890 | $210,928 | **2.30%** |
+  | In combo, paid | 47,461 | $315,280 | $304,716 | **3.35%** |
+  | In combo, free slot | 37,623 | $386 | $371 | **3.83%** |
+
+  The spread is **not constant across sale shapes**, so it is not a flat rate and the difference between gross and net cannot be described as "the discount" without evidence. Order-level discounts and promotions are still *not* allocated per item, so **`order_customer.net_sales` remains the only net figure to quote or tie out** — say that whenever you hand over `item_net_sales`. Still open: what the 2.3–3.8% actually represents, and why it is wider on combo components than on standalone lines (Asana: `KB finding: item_net_sales gross-to-net spread varies by sale shape`).
 - **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
 - **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
 - **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it.
@@ -685,6 +739,8 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales, order, and item metrics on all tables. No exceptions (steward rule 2026-07-23). Note `order_sequence` sequence numbers are built without that exclusion.
 - Store footprint: ~90 stores in UT, AZ, MN, NV, WI, ID, IL, OH, TX. Store attributes come from `sales_ops.store_info`.
 - **Business week is Monday–Saturday** — all stores are closed Sunday. "Last week" means the most recent Mon–Sat; weekly averages divide by 6 days, not 7. Don't use Sun-anchored `date_trunc(..., week)` for CZ weeks (observed in analyst SQL 2026-07-22; steward-confirmed pending). Use `date_trunc(d, week(monday))` to bucket weeks.
+- **"Week ending" means the Saturday, and is `date_trunc(business_date, week(sunday)) + 6`** (steward rule 2026-07-30). Users ask for week-ending dates far more often than week-starting ones, so label weekly output with the Saturday. Note the deliberate mismatch with the bucketing rule above: the label expression anchors on **Sunday**, not Monday, and that is not a typo. A Sunday-anchored week puts the ~4 stray Sunday lines that exist chain-wide into the *following* Mon–Sat week, so `week_ending` is always **on or after** every `business_date` in its bucket. `date_trunc(d, week(monday)) + 5` looks equivalent and is not: it hands a Sunday line a `week_ending` six days *earlier* than the line's own date, creating a phantom extra bucket. For all real Mon–Sat trading the two are identical, which is exactly why the difference survives review.
+- **Snap the range to whole weeks before reporting weekly** (steward rule 2026-07-30). A range whose ends fall mid-week produces a short first and last bucket that reads as a dip nobody caused — the most screenshot-ready wrong conclusion this mart can produce. Either widen to the enclosing Sun→Sat boundaries and state the dates actually used, or label the partial buckets with their day count. Never ship an unflagged part-week next to full weeks. Verified: 2026-05-03 → 2026-06-27 is already exactly 8 whole weeks, 6 trading days each.
 - **Year-over-year offset is 364 days, not 1 year** — `date_sub(d, interval 364 day)` (52 × 7) keeps the day-of-week aligned, which matters because the week is Mon–Sat and Sundays are zero. `date_sub(d, interval 1 year)` shifts the weekday and drags a Sunday into the comparison window. Convention observed in analyst SQL 2026-07-24.
 - Timezone: business runs on `America/Denver` for schedule logic; each store's local time is in `order_datetime`, UTC in `order_customer.order_timestamp_utc`.
 - There is **no `order_id` column** on any of these tables — the order key is `brink_order_id` (multiple users have hit this error).

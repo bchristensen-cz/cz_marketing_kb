@@ -96,11 +96,28 @@ Rules:
 |---|---|---|
 | Date range | always, unless explicit | — |
 | Breakdown dimension | the user named a fuzzy one ("market", "area") | — |
-| Measure — units vs dollars | **don't ask — default to units** (see below) | dollars are opt-in and warned; per-item **net is not computable**; dollars = `item_gross_sales` |
+| Measure — units vs dollars | **don't ask — default to units** (see below) | dollars are opt-in and warned; dollars = `item_gross_sales`. `item_net_sales` is reportable on request but never reconciles to order-level net |
 | Catering | always | — |
 | Try 2 Combo | **only** for soups, sandwiches, salads (see below) | — |
 | Which item names | whenever discovery returned >1 candidate | — |
 | Channel | only if the user hints at it | default: all channels |
+
+### A filter and a breakout are two different questions — never one control
+
+Learned the hard way 2026-07-30. A user asked to *"include catering but don't break out catering data."* The tool already did exactly that — its **Include catering** option filters and never groups. The user still had to say it, which means the control read as a breakout. That is a design failure, not a user failure.
+
+Every attribute has two independent jobs:
+
+| | Question it answers | Example |
+|---|---|---|
+| **Filter** | what gets counted | catering: exclude / include / only |
+| **Breakout** | how the answer is split | catering as its own row or column |
+
+Collapse them into one control and you get a dropdown that silently answers a question the user didn't ask. Keep them separate — in a clarifying question, in an artifact, and in your own SQL — and phrase each so its job is obvious ("this only decides what's *counted*"). The same applies to combo handling: *filter* to standalone-only is a different request from *breaking out* alone-vs-combo, and the old builder had them fused into one three-way toggle.
+
+### When the same request comes back a third time, generalise the axis
+
+Also 2026-07-30. The item builder was asked for market, then week-ending + store name, then more. None of those were new features — they were the same feature (group by something) unable to hold more than one value. The tell that you're patching the wrong axis: **each new request is the same verb with a different noun.** When you see that, widen the axis (make grouping a set) rather than adding another option to a fixed list. Adding the option ships faster and guarantees a fourth request.
 
 ### Answer item questions in UNITS by default — dollars are opt-in (steward rule 2026-07-30)
 
@@ -231,11 +248,28 @@ that item by about 71%.
 ## Installing the report builder (Cowork artifact)
 
 The repo ships a persistent click-to-run report page at
-[`artifacts/item-sales-builder.html`](../../artifacts/item-sales-builder.html): search
-resolves item names against the data, dropdowns cover dates / market / catering / combos,
-the locked rules are applied, the generated SQL is always shown, and results download as
-CSV. It answers the recurring "sales for these items, broken out by X" shape without the
-user typing a question at all.
+[`artifacts/item-sales-builder.html`](../../artifacts/item-sales-builder.html) — a general
+report builder over `claude.order_lines`, not just an item report (rebuilt 2026-07-30; the
+filename and artifact id are kept for continuity so existing pinned pages keep working).
+
+What it covers:
+
+| | |
+|---|---|
+| **Items** | optional — search resolves names against live data; leave empty for all items |
+| **Time grain** | none / week ending (Saturday) / day / month / quarter / year, with snap-to-whole-weeks |
+| **Break out by** | any combination, in the order clicked: market, store, item, item category, menu section, menu group, item size, catering, sale shape |
+| **Filters** | catering (exclude / include / only) and combo handling (all / alone / in-combo) — **independent of** whether either is broken out |
+| **Measures** | units (default), orders, item gross sales, item net sales — multi-select, each with its warning |
+
+Locked rules are applied and listed on the page: stores 1111 and 999 excluded, null-safe
+discount exclusions, 10,000-row cap with a truncation warning. The generated SQL is always
+shown and copyable, and results export to CSV.
+
+**Its answers must match yours.** If you answer one of these questions in chat, use the
+same expressions — particularly `week_ending`, the null-safe discount filters, and the
+`store_id not in (1111, 999)` exclusion. A tool and a chat answer that disagree is worse
+than either one alone.
 
 **It does not arrive by cloning.** Cloning gives an inert HTML file in a temp folder.
 Cowork artifacts live in a per-user manifest, so the page has to be registered inside the

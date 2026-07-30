@@ -174,7 +174,12 @@ This works fine, but it puts the burden on discipline rather than structure:
 | Person | Granted | `jobUser` | `dataViewer` on `claude` | Notes |
 |---|---|---|---|---|
 | bchristensen@cafezupas.com | — | OWNER | OWNER | Steward; also OWNER on source datasets |
-| _add each new person here_ | | | | |
+| thood@cafezupas.com | - | standard | standard | user |
+| melspencer@cafezupas.com | - | standard | standard | user |
+| mhaacke@cafezupas.com | - | standard | standard | user |
+| salmquist@cafezupas.com | - | standard | standard | user |
+| jelgie@cafezupas.comm | - | standard | standard | user |
+| dgetz@cafezupas.com | - | standard | standard | user |
 
 ### 3.2 Grant 1 — the ability to run queries (project level)
 

@@ -383,11 +383,38 @@ bo.Id as brink_order_id
 -- match across all 7,893,337 pulse order_customers rows). The value wanted is the boolean
 -- itself, negated.
 --
--- Validation that is_loyalty_user = false IS the guest signal: it runs flat at 49-51% of
--- pulse orders Jan-Jun 2026, then steps to 56.2% in July — guest checkout went live
--- 2026-07-01.
-, case when ocs.order_id is null then null
-		else not ocs.is_loyalty_user end as is_guest_order
+-- '2026-07-29' NARROWED: guest also requires a FIRST-PARTY digital source. Third-party and
+-- kiosk orders are non-loyalty by construction, not by guest choice, and would swamp the real
+-- guest population. July 2026 (07-01..07-28) non-loyalty share by raw po.source:
+--     checkmate          90,834 orders  100.0% non-loyalty  -> excluded (third party)
+--     ezcater             1,118          100.0%             -> excluded (third party)
+--     Outdoor Kiosk      34,024           88.7%             -> excluded (in-store terminal)
+--     operator            1,869            0.0%             -> excluded (call center)
+--     mobile_web_source  28,878           48.6%  <- guest checkout
+--     web_source         15,983           19.9%  <- guest checkout
+--     iOS                62,692            0.1%             (native app requires login)
+--     Android            12,668            0.3%             (native app requires login)
+-- Guest checkout is a WEB / MOBILE-WEB feature; the native apps still require login. July
+-- guest orders under this definition: 17,320. Including Outdoor Kiosk would have added 30,165
+-- in-store terminal orders and made the metric meaningless.
+--
+-- NOTE: 'iOS' and 'Android' ARE raw po.source values, not just the cleaned order_source
+-- labels. 'mobile_source' is the legacy iOS value (1,518 orders, 2023 only) and is included
+-- for full-history correctness — order_source maps it to 'iOS'.
+--
+-- MATCH IS CASE-INSENSITIVE by design. Full history holds exactly 10 distinct po.source
+-- values, and one of them is 'IOS' — a single order on 2023-06-14 that a case-sensitive
+-- in-list would drop. Same failure class as the case-SENSITIVE aggregator branches in
+-- customer_type below: one oddly-cased value from upstream silently changes an order's
+-- classification. lower() removes the whole category of problem.
+--   guest-eligible : iOS 2,094,394 · mobile_web_source 950,282 · web_source 898,673
+--                    Android 467,369 · mobile_source 1,518 · IOS 1
+--   excluded       : checkmate 2,519,649 · Outdoor Kiosk 900,124 · operator 73,832
+--                    ezcater 19,149
+, case
+    when ocs.is_loyalty_user = false
+     and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
+    then true else false end as is_guest_order
 , po.customer_id as pulse_customer_id
 , t.external_user_id as sm_external_user_id
 , bo.BusinessDate as business_date

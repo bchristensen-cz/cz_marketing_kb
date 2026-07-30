@@ -67,7 +67,7 @@
 |---|---|---|
 | `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater` **or** the pulse order is flagged catering. **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. |
 | `customer_type` | STRING | **New 2026-07-24.** Classifies the customer **on this order**. NULL when the order has no identified customer. Order-level, not customer-level — see the table below. |
-| `is_guest_order` | BOOLEAN (nullable) | **Redefined 2026-07-29.** Guest checkout is a **digital/Pulse concept only**. TRUE = digital order placed without a loyalty account; FALSE = digital order by a loyalty member; **NULL = in-store POS order, where the distinction does not exist.** Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
+| `is_guest_order` | BOOLEAN | **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = false`. FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
 | `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
 
 #### `customer_type` values
@@ -280,28 +280,68 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   Every real digital guest was labelled a member; 94,754 loyalty scanners were labelled guests.
   **Any pre-2026-07-29 analysis that split on `is_guest_order` split on channel, not loyalty.**
 
-  **New definition (steward):** guest checkout is a digital/Pulse concept. In-store POS orders
-  have no guest/member distinction, so the flag is **NULL** there — `is_guest_order = false` no
-  longer sweeps them in. Boolean filters must handle three states:
+  **New definition (steward):** a guest order is **first-party digital** *and* non-loyalty.
+  Both halves matter — third-party and kiosk orders are non-loyalty by construction, not by
+  guest choice.
 
   ```sql
-  -- digital guests
-  where oc.is_guest_order = true
-  -- digital members
-  where oc.is_guest_order = false
-  -- everything that isn't a digital order
-  where oc.is_guest_order is null
+  ocs.is_loyalty_user = false
+  and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
   ```
 
-  ⚠️ **The near-miss:** the first proposed fix added `ocs.order_id is not null` to the old
-  predicate. That removes the only case that ever satisfied `is null`, so the column would have
-  been `false` on **every order** — verified 0 matching rows across all 7,893,337
+  **The match is case-insensitive on purpose.** Full history holds exactly 10 distinct
+  `po.source` values and one of them is `IOS` — a single order on 2023-06-14 that a
+  case-sensitive in-list drops. That is the same failure class as the case-**sensitive**
+  aggregator branches in `customer_type` (documented below): one oddly-cased value from
+  upstream silently changes an order's classification.
+
+  | Guest-eligible | Orders | Excluded | Orders |
+  |---|---|---|---|
+  | `iOS` | 2,094,394 | `checkmate` | 2,519,649 |
+  | `mobile_web_source` | 950,282 | `Outdoor Kiosk` | 900,124 |
+  | `web_source` | 898,673 | `operator` | 73,832 |
+  | `Android` | 467,369 | `ezcater` | 19,149 |
+  | `mobile_source` | 1,518 | | |
+  | `IOS` | 1 | | |
+
+  July 2026 (07-01 → 07-28), non-loyalty share by raw `po.source`:
+
+  | `po.source` | Orders | Non-loyalty | % | Guest-eligible |
+  |---|---|---|---|---|
+  | `checkmate` | 90,834 | 90,834 | 100% | no — third party |
+  | `ezcater` | 1,118 | 1,118 | 100% | no — third party |
+  | `Outdoor Kiosk` | 34,024 | 30,165 | 88.7% | no — in-store terminal |
+  | `operator` | 1,869 | 0 | 0% | no — call center |
+  | `mobile_web_source` | 28,878 | **14,040** | **48.6%** | **yes** |
+  | `web_source` | 15,983 | **3,186** | **19.9%** | **yes** |
+  | `iOS` | 62,692 | 62 | 0.1% | yes |
+  | `Android` | 12,668 | 32 | 0.3% | yes |
+
+  **Guest checkout is a web / mobile-web feature.** The native apps sit at 0.1–0.3%
+  non-loyalty — they still require login. July guest orders: **17,320**. Including
+  `Outdoor Kiosk` would have added 30,165 in-store terminal orders and made the metric
+  meaningless; that exclusion is the judgment call most likely to be questioned, and this is
+  the reason.
+
+  `iOS` and `Android` are genuine **raw** `po.source` values, not only the cleaned
+  `order_source` labels. `mobile_source` is the legacy iOS value (1,518 orders, 2023 only) and
+  is included so a full-history rebuild doesn't drop it.
+
+  **FALSE is a catch-all, not "was a member."** It covers POS orders, third-party, kiosk,
+  operator, *and* digital loyalty orders. Never read `is_guest_order = false` as "loyalty
+  member" — for that, test loyalty directly (`sm_external_user_id is not null`,
+  `mapped_cust_id`, or `claude.loyalty_user`). A guest *rate* must be computed against a
+  first-party-digital denominator, not all orders.
+
+  ⚠️ **The near-miss:** an interim fix added `ocs.order_id is not null` to the old predicate.
+  That removes the only case that ever satisfied `is null`, so the column would have been
+  `false` on **every order** — verified 0 matching rows across all 7,893,337
   `pulse.order_customers` rows. When a boolean column looks wrong, check the source column's
   null rate before patching the null test.
 
-  Validation that `is_loyalty_user = false` is the right signal: it holds flat at 49–51% of
-  pulse orders Jan–Jun 2026, then steps to **56.2% in July** — matching guest checkout going
-  live 2026-07-01.
+  Independent validation of the launch date: overall non-loyalty share of pulse orders holds
+  flat at 49–51% Jan–Jun 2026, then steps to **56.2% in July** — driven entirely by
+  `mobile_web_source` going to 48.6%. Guest checkout went live 2026-07-01.
 
 - **⚠️ `mapped_cust_id` is NOT a valid join key to `claude.loyalty_user`** (steward 2026-07-29).
   `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)` mixes two id spaces, so

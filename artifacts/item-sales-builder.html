@@ -141,6 +141,15 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     <button id="csv" disabled>Download CSV</button>
   </div>
   <div id="res"></div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
+    <label style="margin:0">Chart order</label>
+    <select id="csort" style="width:auto;height:30px;font-size:12px">
+      <option value="desc">Highest first</option>
+      <option value="asc">Lowest first</option>
+      <option value="label">By name</option>
+    </select>
+    <span class="muted" id="chartnote"></span>
+  </div>
   <div class="chartbox"><canvas id="cv"></canvas></div>
 </div>
 
@@ -364,6 +373,45 @@ function drawTable(){
   el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; sortDir=(sortCol===i)?-sortDir:-1; sortCol=i; drawTable(); });
 }
 
+function drawChart(){
+  if(chart){ chart.destroy(); chart=null; }
+  document.getElementById('chartnote').textContent='';
+  if(!lastRows.length) return;
+
+  const lbls=lastCols.filter(isLabelCol);
+  const vc=lastCols.find(c=>c.includes('sales')) || lastCols.find(c=>!isLabelCol(c)) || lastCols[lastCols.length-1];
+  const isMoney=vc.includes('sales');
+
+  // With a second grouping level there would be one bar per dimension x item, which is
+  // unreadable past a handful of rows. Roll back up to the first level and say so — the
+  // per-item detail is in the table and the CSV.
+  let pairs;
+  if(lbls.length>1){
+    const m=new Map();
+    lastRows.forEach(r=>{ const k=r[lbls[0]]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
+    pairs=[...m].map(([label,value])=>({label,value}));
+    document.getElementById('chartnote').textContent=
+      `totalled by ${lbls[0].replace(/_/g,' ')} — per-item detail is in the table above and in the CSV`;
+  } else {
+    pairs=lastRows.map(r=>({label:r[lastCols[0]]||'(blank)', value:Number(r[vc])||0}));
+  }
+
+  // The SQL orders by dimension first when a second grouping level is on, so the rolled-up
+  // series arrives alphabetically. Sort here rather than relying on row order.
+  const mode=document.getElementById('csort').value;
+  pairs.sort(mode==='label' ? (a,b)=>String(a.label).localeCompare(String(b.label))
+           : mode==='asc'   ? (a,b)=>a.value-b.value
+           :                  (a,b)=>b.value-a.value);
+
+  chart=new Chart(document.getElementById('cv'),{type:'bar',
+    data:{labels:pairs.map(p=>p.label),datasets:[{label:vc.replace(/_/g,' '),data:pairs.map(p=>p.value),backgroundColor:'#378ADD'}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{y:{ticks:{callback:v=> isMoney
+        ? '$'+Math.round(v/1000).toLocaleString()+'k'
+        : Number(v).toLocaleString()}}}}});
+}
+document.getElementById('csort').onchange=drawChart;
+
 document.getElementById('csv').onclick=()=>{
   if(!lastRows.length) return;
   const q=v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
@@ -388,32 +436,13 @@ document.getElementById('run').onclick=async()=>{
     lastCols=cols; lastRows=rows; sortCol=null; sortDir=-1; drawTable();
     document.getElementById('csv').disabled=!rows.length;
     document.getElementById('rowcount').textContent=rows.length?`· ${rows.length.toLocaleString()} row${rows.length>1?'s':''}`:'';
-    if(chart){ chart.destroy(); chart=null; }
-    if(rows.length){
-      const lbls=cols.filter(isLabelCol);
-      const vc=cols.find(c=>c.includes('sales')) || cols.find(c=>!isLabelCol(c)) || cols[cols.length-1];
-      const isMoney=vc.includes('sales');
-      // With a second grouping level the chart would have one bar per dimension x item,
-      // which is unreadable past a handful of rows. Roll back up to the first level and
-      // say so — the per-item detail is in the table and the CSV.
-      let labels, data, note='';
-      if(lbls.length>1){
-        const m=new Map();
-        rows.forEach(r=>{ const k=r[lbls[0]]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
-        labels=[...m.keys()]; data=[...m.values()];
-        note=`Chart totals by ${lbls[0].replace(/_/g,' ')} — per-item detail is in the table above and in the CSV.`;
-      } else {
-        labels=rows.map(r=>r[cols[0]]||'(blank)'); data=rows.map(r=>Number(r[vc])||0);
-      }
-      if(note) document.getElementById('res').insertAdjacentHTML('beforeend',`<div class="muted" style="margin-top:10px">${note}</div>`);
-      chart=new Chart(document.getElementById('cv'),{type:'bar',
-        data:{labels,datasets:[{label:vc.replace(/_/g,' '),data,backgroundColor:'#378ADD'}]},
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-          scales:{y:{ticks:{callback:v=> isMoney
-            ? '$'+Math.round(v/1000).toLocaleString()+'k'
-            : Number(v).toLocaleString()}}}}});
-    }
-  }catch(e){ document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`; document.getElementById('csv').disabled=true; }
+    drawChart();
+  }catch(e){
+    lastRows=[]; lastCols=[];
+    document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`;
+    document.getElementById('csv').disabled=true;
+    drawChart();   // clears any chart left over from the previous successful run
+  }
   btn.disabled=false; btn.textContent='Run report';
 };
 

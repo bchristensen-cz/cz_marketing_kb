@@ -217,8 +217,8 @@ order by ca.mapped_cust_id, s.orders desc
 | First-time order | `order_sequence.customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 (see gotchas) |
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
 | Lifetime orders per customer | **`customer_attribute.lifetime_order_count`** — one row per person customer, already person-only and store-1111-excluded. **`order_sequence.lifetime_customer_order_count` was DROPPED 2026-07-29** — any query using it now errors |
-| Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)` |
-| Item sales | `sum(item_gross_sales)` from `order_lines`. Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart — use gross for item mix. ⚠️ See the `item_net_sales` note below before telling a user the column doesn't exist |
+| Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)`. **This is the default measure for item questions** — see the units-vs-dollars rule below |
+| Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it (see below). Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart. ⚠️ See the `item_net_sales` note below before telling a user the column doesn't exist |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
@@ -516,6 +516,33 @@ order by 1, 2
 | **Standalone** | `line_item_type = 'item'` and `composite_item_id is null` | Yes — full menu price |
 | **Combo component (priced)** | `line_item_type = 'item'` and `composite_item_id is not null`, `parent_rev_center_name = 'Try 2 Combo'` | **Yes** — real allocated price (~$6.64/line for UGC) |
 | **Combo slot (zero-priced)** | `line_item_type = 'modifier'` **and `parent_rev_center_name = 'Try 2 Combo'`** | No — ~$0.01/line; the entrée recorded as a modifier selection |
+
+#### Item questions default to UNITS — dollars are opt-in and warned (steward rule 2026-07-30)
+
+The three sale shapes carry **three different prices for the same sandwich**, so a per-item
+dollar total is not the figure it looks like. Ultimate Grilled Cheese, 2026-05-03 →
+2026-06-27, non-catering, store 1111 excluded:
+
+| Sale shape | Units | Gross | **Per unit** |
+|---|---|---|---|
+| Sold alone | 24,125 | $215,890 | **$8.95** ← menu price |
+| In a combo, paid | 47,461 | $315,280 | **$6.64** ← allocated, 26% under menu |
+| In a combo, free | 37,623 | $386 | **$0.01** |
+| **Blended** | **109,209** | **$531,556** | **$4.87** |
+
+**A blended average price lands 46% below the menu price** — and it moves with combo mix,
+not with any pricing decision. Two items on the same menu price will show different average
+prices purely because one gets bundled more often. This is the most quotable wrong number
+the mart can produce.
+
+- **Report units unless dollars were explicitly asked for.**
+- **When you do report dollars**, say in the same sentence that combo components are booked
+  at an allocated price and that this is *gross* — it will not tie to net sales.
+- **A revenue number someone needs to reconcile is not an item question.** Use order-level
+  `net_sales` from `order_customer` and say why you switched.
+
+`artifacts/item-sales-builder.html` enforces this same default, so chat answers and the
+report builder agree.
 
 #### Equivalent formulation without `line_item_type` (verified 2026-07-30)
 

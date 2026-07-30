@@ -96,11 +96,46 @@ Rules:
 |---|---|---|
 | Date range | always, unless explicit | — |
 | Breakdown dimension | the user named a fuzzy one ("market", "area") | — |
-| Measure — units vs dollars | always for item questions | per-item **net is not computable**; dollars = `item_gross_sales` |
+| Measure — units vs dollars | **don't ask — default to units** (see below) | dollars are opt-in and warned; per-item **net is not computable**; dollars = `item_gross_sales` |
 | Catering | always | — |
 | Try 2 Combo | **only** for soups, sandwiches, salads (see below) | — |
 | Which item names | whenever discovery returned >1 candidate | — |
 | Channel | only if the user hints at it | default: all channels |
+
+### Answer item questions in UNITS by default — dollars are opt-in (steward rule 2026-07-30)
+
+**Combo pricing makes per-item dollar totals misleading**, so don't reach for dollars just
+because someone said "sales." Report units, and offer dollars as a follow-up with the
+caveat attached.
+
+Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27, non-catering, store 1111 excluded:
+
+| Sale shape | Units | Gross | **Per unit** |
+|---|---|---|---|
+| Sold alone | 24,125 | $215,890 | **$8.95** ← the menu price |
+| In a combo, paid | 47,461 | $315,280 | **$6.64** ← allocated, 26% below menu |
+| In a combo, free | 37,623 | $386 | **$0.01** |
+| **Blended** | **109,209** | **$531,556** | **$4.87** |
+
+A naive average price is **46% below the menu price**, and it moves with combo mix rather
+than with anything anyone changed. Two items with identical menu prices will show different
+"average prices" purely because one is bundled more often.
+
+Rules:
+
+- **Default to units.** They're unambiguous across all three shapes.
+- **If the user explicitly asks for dollars or revenue**, give `item_gross_sales` and say in
+  the same breath that combo components are booked at an allocated price, not the menu
+  price, and that this is *gross* — order-level discounts and promotions are not allocated
+  per item, so it will not tie to net sales.
+- **If they want a revenue number to quote or reconcile**, that is not an item question —
+  point them at order-level `net_sales` from `order_customer` and say why.
+- **Never compute an "average item price"** by dividing item gross by units without stating
+  the combo mix. It is the single most quotable wrong number this mart can produce.
+
+The `artifacts/item-sales-builder.html` report builder enforces exactly this: units by
+default, dollars behind a checkbox that surfaces the warning. **Chat answers and the tool
+must agree.**
 
 ### Try 2 Combo applies to soups, sandwiches, and salads — NOT bowls (verified 2026-07-30)
 

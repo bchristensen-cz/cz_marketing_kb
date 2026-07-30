@@ -101,7 +101,14 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
         <span id="byitemlbl">One row per item as well</span>
       </label>
     </div>
+    <div><label>Dollars</label>
+      <label style="display:flex;align-items:center;gap:8px;height:34px;margin:0;font-size:13px;color:var(--ink);cursor:pointer">
+        <input type="checkbox" id="dollars" style="width:auto;height:auto;margin:0">
+        <span>Include dollar amounts</span>
+      </label>
+    </div>
   </div>
+  <div id="dollarnote"></div>
 
   <label style="margin-top:14px">How should combo sales be counted?</label>
   <div class="seg" id="combo">
@@ -112,7 +119,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <div id="combonote"></div>
 
   <div class="lock">
-    Applied for you: test store 1111 excluded &middot; discount lines excluded (they repeat the item's name and would double-count) &middot; dollars are <b>item gross sales</b>, because order-level discounts aren't split out per item &middot; free items inside a combo are counted as units, never as dollars &middot; <code>claude</code> dataset, history from 2023-01-01
+    Applied for you: test store 1111 excluded &middot; discount lines excluded (they repeat the item's name and would double-count) &middot; <b>units only unless you tick dollars</b> &mdash; combo pricing makes item dollar totals misleading &middot; free items inside a combo are counted as units, never as dollars &middot; <code>claude</code> dataset, history from 2023-01-01
   </div>
 </div>
 
@@ -222,21 +229,34 @@ function buildSql(){
   const SLOT="ol.composite_item_id is null and ol.parent_rev_center_name = 'Try 2 Combo'";
   const BOX="ol.composite_item_id is null and ol.parent_rev_center_name not in ('Try 2 Combo', 'Discount') and ol.parent_rev_center_name <> ol.rev_center_name";
 
-  let measures, shape='';
+  // Dollars are OFF by default. A combo component carries an ALLOCATED price, not the menu
+  // price, and the free slot line carries ~$0 — so a dollar total summed across shapes is
+  // not a figure anyone should quote. Units are unambiguous; dollars are opt-in and warned.
+  const wantDollars=document.getElementById('dollars').checked;
+  const dnote=document.getElementById('dollarnote');
+  dnote.innerHTML = wantDollars
+    ? '<div class="note"><b>Read dollars carefully.</b> An item sold inside a Try&nbsp;2&nbsp;Combo is booked at an allocated price, not its menu price, and the free half is booked at about $0. Dollars here are <b>item gross sales</b> and exclude order-level discounts and promotions, so they will not tie to net sales. For a revenue figure anyone can quote, ask for net sales at the order level instead.</div>'
+    : '';
+
+  let measures, shape='', primary;
   if(comboMode==='split'){
+    primary='units_sold_alone';
     measures=`, sum(case when ${SOLO} then ol.qty end) as units_sold_alone
 , sum(case when ${INCOMBO} then ol.qty end) as units_in_combo_paid
 , sum(case when ${SLOT} then ol.qty end) as units_in_combo_free
-, sum(case when ${BOX} then ol.qty end) as units_in_catering_box
-, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`;
+, sum(case when ${BOX} then ol.qty end) as units_in_catering_box`
+      + (wantDollars?`\n, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`:'');
   } else if(comboMode==='standalone'){
+    primary='units_sold_alone';
     shape=`and ${SOLO}`;
-    measures=`, sum(ol.qty) as units_sold_alone
-, round(sum(ol.item_gross_sales), 0) as item_gross_sales`;
+    measures=`, sum(ol.qty) as units_sold_alone`
+      + (wantDollars?`\n, round(sum(ol.item_gross_sales), 0) as item_gross_sales`:'');
   } else {
-    measures=`, sum(ol.qty) as units
-, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`;
+    primary='units';
+    measures=`, sum(ol.qty) as units`
+      + (wantDollars?`\n, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`:'');
   }
+  const sortKey = wantDollars ? 'item_gross_sales' : primary;
 
   const off=[...typeOff];
   const typef = types.length && off.length
@@ -258,12 +278,12 @@ ${catf}
 group by
   ${grp}
 order by
-  ${byitem ? dimAs+'\n, item_gross_sales desc' : 'item_gross_sales desc'}`;
+  ${byitem ? dimAs+'\n, '+sortKey+' desc' : sortKey+' desc'}`;
   pre.textContent=sql;
 
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
   const cm={split:'combos split out',standalone:'sold alone only',all:'combined'}[comboMode];
-  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${byitem?' · per item':''}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
+  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm} · ${wantDollars?'units + dollars':'units'}${byitem?' · per item':''}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
   return sql;
 }
 
@@ -315,7 +335,7 @@ document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#combo button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); comboMode=b.dataset.v; buildSql();
 });
-['d1','d2','dim','cat','byitem'].forEach(id=>document.getElementById(id).onchange=buildSql);
+['d1','d2','dim','cat','byitem','dollars'].forEach(id=>document.getElementById(id).onchange=buildSql);
 document.getElementById('toggle').onclick=()=>{
   const p=document.getElementById('sql'), t=document.getElementById('toggle');
   const h=p.style.display==='none'; p.style.display=h?'block':'none'; t.textContent=h?'Hide SQL':'Show SQL';
@@ -370,8 +390,9 @@ document.getElementById('run').onclick=async()=>{
     document.getElementById('rowcount').textContent=rows.length?`· ${rows.length.toLocaleString()} row${rows.length>1?'s':''}`:'';
     if(chart){ chart.destroy(); chart=null; }
     if(rows.length){
-      const vc=cols.find(c=>c.includes('sales'))||cols[1];
       const lbls=cols.filter(isLabelCol);
+      const vc=cols.find(c=>c.includes('sales')) || cols.find(c=>!isLabelCol(c)) || cols[cols.length-1];
+      const isMoney=vc.includes('sales');
       // With a second grouping level the chart would have one bar per dimension x item,
       // which is unreadable past a handful of rows. Roll back up to the first level and
       // say so — the per-item detail is in the table and the CSV.
@@ -388,7 +409,9 @@ document.getElementById('run').onclick=async()=>{
       chart=new Chart(document.getElementById('cv'),{type:'bar',
         data:{labels,datasets:[{label:vc.replace(/_/g,' '),data,backgroundColor:'#378ADD'}]},
         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-          scales:{y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}}});
+          scales:{y:{ticks:{callback:v=> isMoney
+            ? '$'+Math.round(v/1000).toLocaleString()+'k'
+            : Number(v).toLocaleString()}}}}});
     }
   }catch(e){ document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`; document.getElementById('csv').disabled=true; }
   btn.disabled=false; btn.textContent='Run report';

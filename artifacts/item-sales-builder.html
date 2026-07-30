@@ -97,7 +97,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     </select></div>
     <div><label>Detail</label>
       <label style="display:flex;align-items:center;gap:8px;height:34px;margin:0;font-size:13px;color:var(--ink);cursor:pointer">
-        <input type="checkbox" id="byitem" style="width:auto;height:auto;margin:0">
+        <input type="checkbox" id="byitem" checked style="width:auto;height:auto;margin:0">
         <span id="byitemlbl">One row per item as well</span>
       </label>
     </div>
@@ -112,9 +112,9 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 
   <label style="margin-top:14px">How should combo sales be counted?</label>
   <div class="seg" id="combo">
-    <button data-v="split" class="on">Show sold alone vs in a combo</button>
+    <button data-v="all" class="on">Combined total</button>
+    <button data-v="split">Show sold alone vs in a combo</button>
     <button data-v="standalone">Sold alone only</button>
-    <button data-v="all">Combined total</button>
   </div>
   <div id="combonote"></div>
 
@@ -154,7 +154,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 const TOOL='__BQ_TOOL__';
 const PROJ='marketing-data-442316';
 const COMBO_RC=['Sandwiches','Soups','Salads'];
-let picked=[], candRows=[], types=[], typeOff=new Set(), comboMode='split';
+let picked=[], candRows=[], types=[], typeOff=new Set(), comboMode='all';
 let chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[];
 
 const esc=s=>String(s).replace(/'/g,"\\'");

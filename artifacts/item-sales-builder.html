@@ -95,6 +95,12 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
       <option value="incl">Include catering</option>
       <option value="only">Catering only</option>
     </select></div>
+    <div><label>Detail</label>
+      <label style="display:flex;align-items:center;gap:8px;height:34px;margin:0;font-size:13px;color:var(--ink);cursor:pointer">
+        <input type="checkbox" id="byitem" style="width:auto;height:auto;margin:0">
+        <span id="byitemlbl">One row per item as well</span>
+      </label>
+    </div>
   </div>
 
   <label style="margin-top:14px">How should combo sales be counted?</label>
@@ -198,6 +204,17 @@ function buildSql(){
   const dimAs={market:'market',store:'store',item:'item_name',itemtype:'item_category',month:'month'}[dim];
   const names=picked.map(p=>"'"+esc(p.name)+"'").join(', ');
 
+  // Optional second grouping level: one row per item within each dimension value.
+  // Deliberately long format, not pivoted — export to CSV and pivot in Excel.
+  const byitemEl=document.getElementById('byitem');
+  const redundant = dim==='item';
+  byitemEl.disabled=redundant;
+  document.getElementById('byitemlbl').textContent = redundant
+    ? 'Already one row per item' : 'One row per item as well';
+  const byitem = byitemEl.checked && !redundant;
+  const grp = byitem ? `${dimAs}\n, item_name` : dimAs;
+  const sel2 = byitem ? '\n, ol.item_name as item_name' : '';
+
   const SOLO="ol.composite_item_id is null and ol.parent_rev_center_name = ol.rev_center_name";
   const INCOMBO="ol.composite_item_id is not null";
   const SLOT="ol.composite_item_id is null and ol.parent_rev_center_name = 'Try 2 Combo'";
@@ -226,7 +243,7 @@ function buildSql(){
   const catf={excl:'and ol.is_catering = false',incl:'-- catering included',only:'and ol.is_catering = true'}[cat];
 
   const sql=`select
-  ${dimSql} as ${dimAs}
+  ${dimSql} as ${dimAs}${sel2}
 ${measures}
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
@@ -237,14 +254,14 @@ and ol.item_type <> 'Discount'
 ${typef}${shape?'\n'+shape:''}
 ${catf}
 group by
-  ${dimAs}
+  ${grp}
 order by
-  item_gross_sales desc`;
+  ${byitem ? dimAs+'\n, item_gross_sales desc' : 'item_gross_sales desc'}`;
   pre.textContent=sql;
 
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
   const cm={split:'combos split out',standalone:'sold alone only',all:'combined'}[comboMode];
-  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
+  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${byitem?' · per item':''}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
   return sql;
 }
 
@@ -296,23 +313,32 @@ document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#combo button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); comboMode=b.dataset.v; buildSql();
 });
-['d1','d2','dim','cat'].forEach(id=>document.getElementById(id).onchange=buildSql);
+['d1','d2','dim','cat','byitem'].forEach(id=>document.getElementById(id).onchange=buildSql);
 document.getElementById('toggle').onclick=()=>{
   const p=document.getElementById('sql'), t=document.getElementById('toggle');
   const h=p.style.display==='none'; p.style.display=h?'block':'none'; t.textContent=h?'Hide SQL':'Show SQL';
 };
 
+// A column is a label if its first present value isn't numeric. Detected from the data
+// rather than hardcoded, so adding a grouping level doesn't break the rendering.
+const isLabelCol=c=>{
+  const v=lastRows.map(r=>r[c]).find(x=>x!==null&&x!=='');
+  return v===undefined ? true : !isFinite(Number(v));
+};
+
 function drawTable(){
   const el=document.getElementById('res');
   if(!lastRows.length){ el.innerHTML='<div class="muted">No rows. Check the item names, the dates, and that the range starts on or after 2023-01-01.</div>'; return; }
+  const labels=lastCols.filter(isLabelCol), nums=lastCols.filter(c=>!isLabelCol(c));
   const rows=[...lastRows];
   if(sortCol!==null){ const c=lastCols[sortCol];
     rows.sort((a,b)=>{ const x=Number(a[c]), y=Number(b[c]);
-      return (!isNaN(x)&&!isNaN(y)) ? (x-y)*sortDir : String(a[c]).localeCompare(String(b[c]))*sortDir; }); }
-  const tot={}; lastCols.slice(1).forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
+      return (!isNaN(x)&&!isNaN(y)) ? (x-y)*sortDir : String(a[c]??'').localeCompare(String(b[c]??''))*sortDir; }); }
+  const tot={}; nums.forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
+  const cell=(r,c)=>labels.includes(c) ? (r[c]||'(blank)') : (c.includes('sales')?money(r[c]):num(r[c]));
   el.innerHTML=`<table><thead><tr>${lastCols.map((c,i)=>`<th data-i="${i}">${c.replace(/_/g,' ')}</th>`).join('')}</tr></thead>
-  <tbody>${rows.map(r=>`<tr>${lastCols.map((c,i)=>`<td>${i===0?(r[c]||'(blank)'):(c.includes('sales')?money(r[c]):num(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>
-  <tfoot><tr><td>Total</td>${lastCols.slice(1).map(c=>`<td>${c.includes('sales')?money(tot[c]):num(tot[c])}</td>`).join('')}</tr></tfoot></table>`;
+  <tbody>${rows.map(r=>`<tr>${lastCols.map(c=>`<td>${cell(r,c)}</td>`).join('')}</tr>`).join('')}</tbody>
+  <tfoot><tr><td>Total</td>${labels.slice(1).map(()=>'<td></td>').join('')}${nums.map(c=>`<td>${c.includes('sales')?money(tot[c]):num(tot[c])}</td>`).join('')}</tr></tfoot></table>`;
   el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; sortDir=(sortCol===i)?-sortDir:-1; sortCol=i; drawTable(); });
 }
 
@@ -340,8 +366,22 @@ document.getElementById('run').onclick=async()=>{
     if(chart){ chart.destroy(); chart=null; }
     if(rows.length){
       const vc=cols.find(c=>c.includes('sales'))||cols[1];
+      const lbls=cols.filter(isLabelCol);
+      // With a second grouping level the chart would have one bar per dimension x item,
+      // which is unreadable past a handful of rows. Roll back up to the first level and
+      // say so — the per-item detail is in the table and the CSV.
+      let labels, data, note='';
+      if(lbls.length>1){
+        const m=new Map();
+        rows.forEach(r=>{ const k=r[lbls[0]]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
+        labels=[...m.keys()]; data=[...m.values()];
+        note=` — chart totals by ${lbls[0].replace(/_/g,' ')}; per-item detail is in the table and CSV`;
+      } else {
+        labels=rows.map(r=>r[cols[0]]||'(blank)'); data=rows.map(r=>Number(r[vc])||0);
+      }
+      if(note) document.getElementById('res').insertAdjacentHTML('beforeend',`<div class="muted" style="margin-top:10px">${rows.length} rows${note}</div>`);
       chart=new Chart(document.getElementById('cv'),{type:'bar',
-        data:{labels:rows.map(r=>r[cols[0]]||'(blank)'),datasets:[{label:vc.replace(/_/g,' '),data:rows.map(r=>Number(r[vc])||0),backgroundColor:'#378ADD'}]},
+        data:{labels,datasets:[{label:vc.replace(/_/g,' '),data,backgroundColor:'#378ADD'}]},
         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
           scales:{y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}}});
     }

@@ -515,7 +515,28 @@ order by 1, 2
 |---|---|---|
 | **Standalone** | `line_item_type = 'item'` and `composite_item_id is null` | Yes — full menu price |
 | **Combo component (priced)** | `line_item_type = 'item'` and `composite_item_id is not null`, `parent_rev_center_name = 'Try 2 Combo'` | **Yes** — real allocated price (~$6.64/line for UGC) |
-| **Combo slot (zero-priced)** | `line_item_type = 'modifier'` | No — ~$0.01/line; the entrée recorded as a modifier selection |
+| **Combo slot (zero-priced)** | `line_item_type = 'modifier'` **and `parent_rev_center_name = 'Try 2 Combo'`** | No — ~$0.01/line; the entrée recorded as a modifier selection |
+
+#### Equivalent formulation without `line_item_type` (verified 2026-07-30)
+
+`line_item_type` is a POS-internal concept — **"item" vs "modifier" means nothing to a
+business user**, and exposing it in a user-facing tool invites the wrong question. The same
+four shapes are fully separable from `composite_item_id` and `parent_rev_center_name`
+alone, which name things people recognise:
+
+| Shape | Filter | Plain English |
+|---|---|---|
+| Sold alone | `composite_item_id is null and parent_rev_center_name = rev_center_name` | Bought on its own |
+| In a combo, paid | `composite_item_id is not null` | The priced half of a Try 2 Combo |
+| In a combo, free | `composite_item_id is null and parent_rev_center_name = 'Try 2 Combo'` | The zero-priced slot |
+| In a catering box | `composite_item_id is null and parent_rev_center_name not in ('Try 2 Combo','Discount') and parent_rev_center_name <> rev_center_name` | Box Lunches / Party Trays |
+
+The tell for a standalone line is that its **`parent_rev_center_name` equals its own
+`rev_center_name`** — an unbundled item is its own parent. Verified to produce identical
+numbers to the `line_item_type` version on the four-item test set over 2026-05-03 →
+2026-06-27: 211,033 sold alone / 90,226 in-combo paid / 71,330 in-combo free / 19,638
+catering box, and $1,260,795 Utah gross either way. Use whichever is clearer for the
+audience; **prefer this one in anything a non-analyst will read.**
 
 - **`line_item_type = 'item'` is NOT the same as "standalone."** For Ultimate Grilled Cheese over 2026-05-03 → 2026-06-27: 71,586 `item` lines, but only **24,125** were standalone — the other **47,461** were priced combo components. Treating all `item` lines as standalone overstates standalone units ~3x and understates combo units.
 - **The two combo shapes are mutually exclusive per `combo_order_line_item_id`** (verified: 47,461 groups have exactly one priced component line and zero modifier lines; 37,623 have exactly one modifier line and zero component lines). So **combo units = component lines + modifier lines, with no double-counting.** Both shapes appear across all 88 stores in both months and both combo types, so this is a per-combo-slot POS structure, not a config migration or a store/size split.

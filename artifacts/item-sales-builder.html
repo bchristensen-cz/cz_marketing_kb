@@ -13,8 +13,10 @@ h2 { font-size:14px; font-weight:500; margin:0 0 10px; }
 .sub { color:var(--ink2); font-size:13px; margin:0 0 18px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
 label { display:block; font-size:12px; color:var(--ink2); margin-bottom:5px; }
-input,select,button { font:inherit; color:var(--ink); }
-input[type=text],input[type=date],select { width:100%; height:34px; padding:0 9px; border:1px solid var(--line); border-radius:7px; background:#fff; }
+input,select,button,textarea { font:inherit; color:var(--ink); }
+input[type=text],input[type=date],select,textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:#fff; }
+input[type=text],input[type=date],select { height:34px; padding:0 9px; }
+textarea { resize:vertical; min-height:56px; line-height:1.5; }
 button { height:34px; padding:0 14px; border:1px solid #c9c7c0; border-radius:7px; background:#fff; cursor:pointer; }
 button:hover { background:#f3f1ea; }
 button.primary { background:var(--ink); color:#fff; border-color:var(--ink); }
@@ -25,8 +27,11 @@ button:disabled { opacity:.45; cursor:not-allowed; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; min-height:30px; }
 .chip { font-size:12px; padding:4px 9px; border-radius:7px; background:var(--accentbg); color:#0c447c; display:inline-flex; align-items:center; gap:6px; }
 .chip b { font-weight:500; }
-.chip span { cursor:pointer; opacity:.6; }
-.chip span:hover { opacity:1; }
+.chip i { font-style:normal; opacity:.65; }
+.chip span.x { cursor:pointer; opacity:.6; }
+.chip span.x:hover { opacity:1; }
+.tchip { font-size:12px; padding:5px 11px; border-radius:7px; border:1px solid var(--line); cursor:pointer; user-select:none; background:#fff; }
+.tchip.on { border-color:var(--accent); background:var(--accentbg); color:#0c447c; }
 .cand { display:flex; align-items:center; gap:10px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; margin-bottom:5px; cursor:pointer; background:#fff; }
 .cand:hover { background:#f3f1ea; }
 .cand.on { border-color:var(--accent); background:var(--accentbg); }
@@ -53,23 +58,24 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 <body>
 
 <h1>Item sales report</h1>
-<p class="sub">Every choice here is a fork that changes the number. Locked rules are applied for you.</p>
+<p class="sub">Every choice here changes the number. The rules that aren't choices are applied for you and listed at the bottom of step 2.</p>
 
 <div class="card">
-  <h2>1 &nbsp;Items</h2>
-  <div class="grid g2" style="margin-bottom:10px">
-    <div>
-      <label>Search item names</label>
-      <input type="text" id="q" placeholder="grilled cheese" autocomplete="off">
-    </div>
-    <div style="display:flex;align-items:flex-end;gap:8px">
-      <button id="find">Find matches</button>
-      <span class="muted" id="findmsg"></span>
-    </div>
+  <h2>1 &nbsp;Which items?</h2>
+  <label>Type one or more items, separated by commas. Partial names are fine.</label>
+  <textarea id="q" placeholder="Ultimate Grilled Cheese, Honey Bacon Club, Power Bowl, Hot Honey Cottage Cheese Bowl"></textarea>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+    <button id="find">Find matches</button>
+    <span class="muted" id="findmsg"></span>
   </div>
-  <div id="cands"></div>
+  <div id="cands" style="margin-top:12px"></div>
   <label style="margin-top:12px">Selected</label>
   <div class="chips" id="chips"><span class="muted">Nothing selected yet.</span></div>
+
+  <div id="typewrap" style="display:none;margin-top:14px">
+    <label>Item categories to include <span class="muted">— from the items you selected</span></label>
+    <div class="chips" id="types"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -81,8 +87,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
       <option value="market">Market (= store state)</option>
       <option value="store">Store</option>
       <option value="item">Item name</option>
-      <option value="itemtype">Item type</option>
-      <option value="revcenter">Revenue center</option>
+      <option value="itemtype">Item category</option>
       <option value="month">Month</option>
     </select></div>
     <div><label>Catering</label><select id="cat">
@@ -90,25 +95,18 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
       <option value="incl">Include catering</option>
       <option value="only">Catering only</option>
     </select></div>
-    <div><label>Item type</label><select id="itype">
-      <option value="">All item types</option>
-    </select></div>
-    <div><label>Line shapes counted</label><select id="lshape">
-      <option value="std">Items and modifiers (excludes discounts, fees, tips, gift cards)</option>
-      <option value="itemonly">Item lines only</option>
-    </select></div>
   </div>
 
-  <label style="margin-top:14px">Try 2 Combo handling</label>
+  <label style="margin-top:14px">How should combo sales be counted?</label>
   <div class="seg" id="combo">
-    <button data-v="split" class="on">Split standalone vs combo</button>
-    <button data-v="standalone">Standalone only</button>
+    <button data-v="split" class="on">Show sold alone vs in a combo</button>
+    <button data-v="standalone">Sold alone only</button>
     <button data-v="all">Combined total</button>
   </div>
   <div id="combonote"></div>
 
   <div class="lock">
-    Locked by the knowledge base: store 1111 excluded &middot; <b>discount lines excluded</b> (they carry the item's own name in <code>item_type</code> and would double-count units in an item report) &middot; dollars are <b>item_gross_sales</b> (order-level discounts have no per-item allocation) &middot; zero-priced slot lines carry no revenue and are counted as units only, split into Try&nbsp;2&nbsp;Combo vs Box Lunch &middot; <code>claude</code> dataset, history starts 2023-01-01
+    Applied for you: test store 1111 excluded &middot; discount lines excluded (they repeat the item's name and would double-count) &middot; dollars are <b>item gross sales</b>, because order-level discounts aren't split out per item &middot; free items inside a combo are counted as units, never as dollars &middot; <code>claude</code> dataset, history from 2023-01-01
   </div>
 </div>
 
@@ -117,11 +115,12 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     <h2 style="margin:0">3 &nbsp;Run</h2>
     <span class="badge" id="scope">&nbsp;</span>
   </div>
-  <div style="display:flex;gap:8px;margin-bottom:12px">
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="primary" id="run">Run report</button>
     <button id="toggle">Hide SQL</button>
+    <button id="csv" disabled>Download CSV</button>
   </div>
-  <pre id="sql">-- select at least one item</pre>
+  <pre id="sql">-- pick at least one item</pre>
 </div>
 
 <div class="card" id="out" style="display:none">
@@ -134,11 +133,12 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 const TOOL='mcp__f3b27eab-feb3-4d29-9559-bc8d966e8419__execute_sql_readonly';
 const PROJ='marketing-data-442316';
 const COMBO_RC=['Sandwiches','Soups','Salads'];
-let picked=[], comboMode='split', chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[], lastCandTypes=[];
+let picked=[], candRows=[], types=[], typeOff=new Set(), comboMode='split';
+let chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[];
 
-function esc(s){return String(s).replace(/'/g,"\\'");}
-function money(n){return n==null?'—':'$'+Math.round(n).toLocaleString();}
-function num(n){return n==null?'—':Math.round(n).toLocaleString();}
+const esc=s=>String(s).replace(/'/g,"\\'");
+const money=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+const num=n=>n==null?'—':Math.round(n).toLocaleString();
 
 async function bq(sql){
   const r=await window.cowork.callMcpTool(TOOL,{projectId:PROJ,query:sql});
@@ -147,65 +147,78 @@ async function bq(sql){
   if(!d){ try{d=JSON.parse(r.content[0].text);}catch(e){throw new Error(r.content[0].text);} }
   if(d.error) throw new Error(JSON.stringify(d.error));
   const cols=(d.schema&&d.schema.fields||[]).map(f=>f.name);
-  const rows=(d.rows||[]).map(rw=>{
-    if(rw.f){const o={};cols.forEach((c,i)=>{let v=rw.f[i].v;o[c]=(v===null||v==='')&&v!==0?v:v;});return o;}
-    return rw;
-  });
+  const rows=(d.rows||[]).map(rw=>{ if(!rw.f) return rw; const o={}; cols.forEach((c,i)=>o[c]=rw.f[i].v); return o; });
   return {cols,rows};
 }
 
-function eligible(){return picked.filter(p=>COMBO_RC.includes(p.rc));}
+const eligible=()=>picked.filter(p=>COMBO_RC.includes(p.rc));
+const activeTypes=()=>types.filter(t=>!typeOff.has(t));
 
-function syncItemTypes(){
-  const sel=document.getElementById('itype'), cur=sel.value;
-  const seen=[...new Set([...picked.map(p=>p.it), ...lastCandTypes])].filter(Boolean).sort();
-  sel.innerHTML='<option value="">All item types</option>'+seen.map(t=>`<option value="${t}">${t}</option>`).join('');
-  sel.value=seen.includes(cur)?cur:'';
+function renderTypes(){
+  const wrap=document.getElementById('typewrap'), el=document.getElementById('types');
+  const names=new Set(picked.map(p=>p.name));
+  types=[...new Set(candRows.filter(r=>names.has(r.item_name)).map(r=>r.item_type))].filter(Boolean).sort();
+  typeOff=new Set([...typeOff].filter(t=>types.includes(t)));
+  wrap.style.display=types.length?'block':'none';
+  el.innerHTML=types.map(t=>`<span class="tchip${typeOff.has(t)?'':' on'}" data-t="${t}">${t}</span>`).join('');
+  el.querySelectorAll('.tchip').forEach(c=>c.onclick=()=>{
+    const t=c.dataset.t;
+    if(typeOff.has(t)) typeOff.delete(t); else if(activeTypes().length>1) typeOff.add(t);
+    renderTypes(); buildSql();
+  });
 }
 
 function renderChips(){
   const el=document.getElementById('chips');
-  if(!picked.length){el.innerHTML='<span class="muted">Nothing selected yet.</span>';}
-  else el.innerHTML=picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <em style="font-style:normal;opacity:.7">${p.it||'?'}</em> <span data-i="${i}">&times;</span></span>`).join('');
-  el.querySelectorAll('span[data-i]').forEach(s=>s.onclick=()=>{picked.splice(+s.dataset.i,1);renderChips();});
-  syncItemTypes();
-  const note=document.getElementById('combonote');
-  const el2=eligible();
+  el.innerHTML=picked.length
+    ? picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <i>${p.it||''}</i> <span class="x" data-i="${i}">&times;</span></span>`).join('')
+    : '<span class="muted">Nothing selected yet.</span>';
+  el.querySelectorAll('span.x').forEach(s=>s.onclick=()=>{picked.splice(+s.dataset.i,1);renderChips();});
+  const note=document.getElementById('combonote'), el2=eligible();
   if(!picked.length) note.innerHTML='';
-  else if(!el2.length) note.innerHTML='<div class="note">None of the selected items are Try&nbsp;2&nbsp;Combo eligible &mdash; combos cover Sandwiches, Soups and Salads only, never Bowls. This choice has no effect on combos. Note these items <em>can</em> still appear as zero-priced Box Lunch slot lines when catering is included &mdash; that is catering, not a combo.</div>';
-  else if(el2.length<picked.length) note.innerHTML=`<div class="note">Applies to ${el2.length} of ${picked.length} selected items (${el2.map(p=>p.name).join(', ')}). The rest are not combo eligible and are counted standalone.</div>`;
+  else if(!el2.length) note.innerHTML='<div class="note">None of these items come in a Try&nbsp;2&nbsp;Combo &mdash; combos are sandwiches, soups and salads only, never bowls. This choice won\'t change the number. They can still appear free inside a catering box lunch if catering is included.</div>';
+  else if(el2.length<picked.length) note.innerHTML=`<div class="note">Applies to ${el2.length} of ${picked.length} items (${el2.map(p=>p.name).join(', ')}). The rest are never sold in a combo and are counted as sold alone.</div>`;
   else note.innerHTML='';
-  buildSql();
+  renderTypes(); buildSql();
 }
 
 function buildSql(){
-  const d1=document.getElementById('d1').value,d2=document.getElementById('d2').value;
-  const dim=document.getElementById('dim').value,cat=document.getElementById('cat').value;
-  if(!picked.length||!d1||!d2){document.getElementById('sql').textContent='-- select at least one item and a date range';return '';}
-  const dimSql={market:"coalesce(ol.store_state, '(unmapped)')",store:'ol.store_name',item:'ol.item_name',itemtype:'ol.item_type',revcenter:'ol.rev_center_name',month:'date_trunc(ol.business_date, month)'}[dim];
-  const dimAs={market:'market',store:'store',item:'item_name',itemtype:'item_type',revcenter:'rev_center_name',month:'month'}[dim];
+  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
+  const dim=document.getElementById('dim').value, cat=document.getElementById('cat').value;
+  const pre=document.getElementById('sql');
+  if(!picked.length||!d1||!d2){ pre.textContent='-- pick at least one item and a date range'; return ''; }
+
+  const dimSql={market:"coalesce(ol.store_state, '(unmapped)')",store:'ol.store_name',item:'ol.item_name',itemtype:'ol.item_type',month:'date_trunc(ol.business_date, month)'}[dim];
+  const dimAs={market:'market',store:'store',item:'item_name',itemtype:'item_category',month:'month'}[dim];
   const names=picked.map(p=>"'"+esc(p.name)+"'").join(', ');
-  const lshape=document.getElementById('lshape').value;
-  const shapes=comboMode==='standalone'
-    ? "and ol.line_item_type = 'item'\nand ol.composite_item_id is null"
-    : (lshape==='itemonly' ? "and ol.line_item_type = 'item'" : "and ol.line_item_type in ('item', 'modifier')");
-  const itype=document.getElementById('itype').value;
-  const itypef=itype ? `and ol.item_type = '${esc(itype)}'` : '-- all item types';
-  const catf={excl:'and ol.is_catering = false',incl:'-- catering included',only:'and ol.is_catering = true'}[cat];
-  let measures;
+
+  const SOLO="ol.composite_item_id is null and ol.parent_rev_center_name = ol.rev_center_name";
+  const INCOMBO="ol.composite_item_id is not null";
+  const SLOT="ol.composite_item_id is null and ol.parent_rev_center_name = 'Try 2 Combo'";
+  const BOX="ol.composite_item_id is null and ol.parent_rev_center_name not in ('Try 2 Combo', 'Discount') and ol.parent_rev_center_name <> ol.rev_center_name";
+
+  let measures, shape='';
   if(comboMode==='split'){
-    measures=`, sum(case when ol.line_item_type = 'item' and ol.composite_item_id is null then ol.qty end) as standalone_units
-, sum(case when ol.line_item_type = 'item' and ol.composite_item_id is not null then ol.qty end) as combo_units
-, sum(case when ol.line_item_type = 'modifier' and ol.parent_rev_center_name = 'Try 2 Combo' then ol.qty end) as combo_slot_units
-, sum(case when ol.line_item_type = 'modifier' and ol.parent_rev_center_name <> 'Try 2 Combo' then ol.qty end) as box_lunch_units
-, round(sum(case when ol.line_item_type = 'item' then ol.item_gross_sales end), 0) as item_gross_sales`;
+    measures=`, sum(case when ${SOLO} then ol.qty end) as units_sold_alone
+, sum(case when ${INCOMBO} then ol.qty end) as units_in_combo_paid
+, sum(case when ${SLOT} then ol.qty end) as units_in_combo_free
+, sum(case when ${BOX} then ol.qty end) as units_in_catering_box
+, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`;
   } else if(comboMode==='standalone'){
-    measures=`, sum(ol.qty) as standalone_units
+    shape=`and ${SOLO}`;
+    measures=`, sum(ol.qty) as units_sold_alone
 , round(sum(ol.item_gross_sales), 0) as item_gross_sales`;
   } else {
     measures=`, sum(ol.qty) as units
-, round(sum(case when ol.line_item_type = 'item' then ol.item_gross_sales end), 0) as item_gross_sales`;
+, round(sum(case when ${SOLO} or ${INCOMBO} then ol.item_gross_sales end), 0) as item_gross_sales`;
   }
+
+  const off=[...typeOff];
+  const typef = types.length && off.length
+    ? `and ol.item_type in (${activeTypes().map(t=>"'"+esc(t)+"'").join(', ')})`
+    : '-- all item categories';
+  const catf={excl:'and ol.is_catering = false',incl:'-- catering included',only:'and ol.is_catering = true'}[cat];
+
   const sql=`select
   ${dimSql} as ${dimAs}
 ${measures}
@@ -214,28 +227,29 @@ where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id <> 1111
 and ol.item_name in (${names})
-and ol.rev_center_name <> 'Discount'
 and ol.item_type <> 'Discount'
-${itypef}
-${shapes}
+${typef}${shape?'\n'+shape:''}
 ${catf}
 group by
   ${dimAs}
 order by
   item_gross_sales desc`;
-  document.getElementById('sql').textContent=sql;
+  pre.textContent=sql;
+
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
-  const cm={split:'combo split out',standalone:'standalone only',all:'combined'}[comboMode];
-  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${itype?' · '+itype:''}`;
+  const cm={split:'combos split out',standalone:'sold alone only',all:'combined'}[comboMode];
+  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${off.length?' · '+activeTypes().length+'/'+types.length+' categories':''}`;
   return sql;
 }
 
 document.getElementById('find').onclick=async()=>{
-  const q=document.getElementById('q').value.trim();
-  const d1=document.getElementById('d1').value,d2=document.getElementById('d2').value;
+  const raw=document.getElementById('q').value;
+  const frags=raw.split(',').map(s=>s.trim()).filter(Boolean);
+  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
   const msg=document.getElementById('findmsg');
-  if(!q){msg.textContent='type a fragment first';return;}
-  msg.textContent='searching…';
+  if(!frags.length){ msg.textContent='type at least one item name'; return; }
+  msg.textContent=`searching ${frags.length} name${frags.length>1?'s':''}…`;
+  const likes=frags.map(f=>`lower(ol.item_name) like '%${esc(f.toLowerCase())}%'`).join('\n   or ');
   try{
     const {rows}=await bq(`select
   ol.item_name
@@ -247,67 +261,77 @@ from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id <> 1111
-and lower(ol.item_name) like '%${esc(q.toLowerCase())}%'
-and ol.rev_center_name <> 'Discount'
 and ol.item_type <> 'Discount'
-and ol.line_item_type <> 'discount'
+and (${likes})
 group by
   ol.item_name
 , ol.rev_center_name
 , ol.item_type
 order by
   lines desc
-limit 25`);
-    msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click to add`:'no matches, widen the fragment';
-    lastCandTypes=rows.map(r=>r.item_type);
+limit 60`);
+    candRows=rows;
+    msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click the ones you want`:'no matches — try a shorter fragment';
     document.getElementById('cands').innerHTML=rows.map(r=>{
       const on=picked.some(p=>p.name===r.item_name)?' on':'';
-      const el=COMBO_RC.includes(r.rev_center_name)?' · combo eligible':'';
-      return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}" data-it="${r.item_type}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · ${r.rev_center_name} / <b>${r.item_type}</b>${el}</span></div>`;
+      const el=COMBO_RC.includes(r.rev_center_name)?' · comes in a combo':'';
+      return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}" data-it="${r.item_type}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · <b>${r.item_type}</b>${el}</span></div>`;
     }).join('');
     document.querySelectorAll('.cand').forEach(c=>c.onclick=()=>{
-      const n=c.dataset.n;const i=picked.findIndex(p=>p.name===n);
-      if(i>=0){picked.splice(i,1);c.classList.remove('on');}
-      else{picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});c.classList.add('on');}
+      const n=c.dataset.n, i=picked.findIndex(p=>p.name===n);
+      if(i>=0) picked.splice(i,1); else picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});
+      document.querySelectorAll(`.cand[data-n="${CSS.escape(n)}"]`).forEach(x=>x.classList.toggle('on',i<0));
       renderChips();
     });
-    syncItemTypes();
-  }catch(e){msg.textContent='';document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`;}
+  }catch(e){ msg.textContent=''; document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`; }
 };
 
 document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#combo button').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on');comboMode=b.dataset.v;buildSql();
+  b.classList.add('on'); comboMode=b.dataset.v; buildSql();
 });
-['d1','d2','dim','cat','itype','lshape'].forEach(id=>document.getElementById(id).onchange=buildSql);
-document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('find').click();});
+['d1','d2','dim','cat'].forEach(id=>document.getElementById(id).onchange=buildSql);
 document.getElementById('toggle').onclick=()=>{
-  const p=document.getElementById('sql'),t=document.getElementById('toggle');
-  const h=p.style.display==='none';p.style.display=h?'block':'none';t.textContent=h?'Hide SQL':'Show SQL';
+  const p=document.getElementById('sql'), t=document.getElementById('toggle');
+  const h=p.style.display==='none'; p.style.display=h?'block':'none'; t.textContent=h?'Hide SQL':'Show SQL';
 };
 
 function drawTable(){
   const el=document.getElementById('res');
-  if(!lastRows.length){el.innerHTML='<div class="muted">No rows. Check the item names, the date window, and that the range sits inside the 3-year history floor.</div>';return;}
+  if(!lastRows.length){ el.innerHTML='<div class="muted">No rows. Check the item names, the dates, and that the range starts on or after 2023-01-01.</div>'; return; }
   const rows=[...lastRows];
-  if(sortCol!==null){const c=lastCols[sortCol];rows.sort((a,b)=>{const x=a[c],y=b[c];const nx=Number(x),ny=Number(y);
-    if(!isNaN(nx)&&!isNaN(ny))return (nx-ny)*sortDir;return String(x).localeCompare(String(y))*sortDir;});}
-  const tot={};lastCols.slice(1).forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
+  if(sortCol!==null){ const c=lastCols[sortCol];
+    rows.sort((a,b)=>{ const x=Number(a[c]), y=Number(b[c]);
+      return (!isNaN(x)&&!isNaN(y)) ? (x-y)*sortDir : String(a[c]).localeCompare(String(b[c]))*sortDir; }); }
+  const tot={}; lastCols.slice(1).forEach(c=>tot[c]=lastRows.reduce((s,r)=>s+(Number(r[c])||0),0));
   el.innerHTML=`<table><thead><tr>${lastCols.map((c,i)=>`<th data-i="${i}">${c.replace(/_/g,' ')}</th>`).join('')}</tr></thead>
   <tbody>${rows.map(r=>`<tr>${lastCols.map((c,i)=>`<td>${i===0?(r[c]||'(blank)'):(c.includes('sales')?money(r[c]):num(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>
   <tfoot><tr><td>Total</td>${lastCols.slice(1).map(c=>`<td>${c.includes('sales')?money(tot[c]):num(tot[c])}</td>`).join('')}</tr></tfoot></table>`;
-  el.querySelectorAll('th').forEach(th=>th.onclick=()=>{const i=+th.dataset.i;sortDir=(sortCol===i)?-sortDir:-1;sortCol=i;drawTable();});
+  el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; sortDir=(sortCol===i)?-sortDir:-1; sortCol=i; drawTable(); });
 }
 
+document.getElementById('csv').onclick=()=>{
+  if(!lastRows.length) return;
+  const q=v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  const lines=[lastCols.join(','), ...lastRows.map(r=>lastCols.map(c=>q(r[c])).join(','))];
+  const blob=new Blob([lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob), a=document.createElement('a');
+  const d1=document.getElementById('d1').value, d2=document.getElementById('d2').value;
+  a.href=url; a.download=`item_sales_${d1}_to_${d2}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+
 document.getElementById('run').onclick=async()=>{
-  const sql=buildSql();if(!sql)return;
-  const btn=document.getElementById('run');btn.disabled=true;btn.textContent='Running…';
+  const sql=buildSql(); if(!sql) return;
+  const btn=document.getElementById('run'); btn.disabled=true; btn.textContent='Running…';
   document.getElementById('out').style.display='block';
   document.getElementById('res').innerHTML='<div class="muted">Querying BigQuery…</div>';
   try{
     const {cols,rows}=await bq(sql);
-    lastCols=cols;lastRows=rows;sortCol=null;sortDir=-1;drawTable();
-    if(chart){chart.destroy();chart=null;}
+    lastCols=cols; lastRows=rows; sortCol=null; sortDir=-1; drawTable();
+    document.getElementById('csv').disabled=!rows.length;
+    if(chart){ chart.destroy(); chart=null; }
     if(rows.length){
       const vc=cols.find(c=>c.includes('sales'))||cols[1];
       chart=new Chart(document.getElementById('cv'),{type:'bar',
@@ -315,8 +339,8 @@ document.getElementById('run').onclick=async()=>{
         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
           scales:{y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}}});
     }
-  }catch(e){document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`;}
-  btn.disabled=false;btn.textContent='Run report';
+  }catch(e){ document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`; document.getElementById('csv').disabled=true; }
+  btn.disabled=false; btn.textContent='Run report';
 };
 
 buildSql();

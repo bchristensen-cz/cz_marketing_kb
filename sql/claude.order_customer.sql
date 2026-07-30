@@ -10,8 +10,9 @@
 --   * order sequence    — customer_order_count, days_since_prev_order
 --   * customer lifetime — from sales_ops.customer_attribute
 --   * account_type      — CATERING vs INDIVIDUAL at the ACCOUNT level (new 2026-07-29)
+--   * store_state       — the canonical "market" dimension (new 2026-07-30)
 --
--- Created 2026-07-29.
+-- Created 2026-07-29. store_state added 2026-07-30.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -59,6 +60,34 @@ select
 -- qualify added to that view 2026-07-29 and verified live (1,775,284 rows = 1,774,963 distinct
 -- external ids + 321 NULL). Without it this view fans out.
 , lu.member_program as account_type
+-- "Market" = store_state (steward decision 2026-07-30). There is no market/region/DMA/metro
+-- column anywhere in sales_ops; denormalising state here means market questions need no join.
+--
+-- ⚠️ REDUNDANT — pending steward decision. `oc.state` (from `oc.*`) is ALREADY the store state
+-- and is already documented in data_dictionaries/sales_ops.order_customer.md line 58. Verified
+-- 2026-07-30 over 2026-05-03 → 2026-06-27: 1,326,905 orders, **zero** disagreements between
+-- `state` and `store_state`, identical nulls (the same 1,154 store-1111/999 orders). So this
+-- join buys a duplicate column at the cost of a join against a ~50M-row view.
+--
+-- The cheaper equivalent, if the steward wants it, is no join at all:
+--     , oc.state as store_state
+--
+-- Left in place deliberately for now — a redeploy dropping the join was proposed and declined
+-- 2026-07-30. Note `order_lines` is a genuinely different case: it has no state column at all
+-- (only store_id / store_name), so the join in sql/claude.order_lines.sql IS required.
+--
+-- Root-cause lesson worth keeping: the "market" dimension was documented and available the
+-- whole time under a name nobody searched for. The INFORMATION_SCHEMA sweep for
+-- %market%/%region%/%dma%/%metro% missed it, and so did two people. Grep the dictionaries for
+-- the *concept*, not just the warehouse for the *word* — this is now step 1 of the
+-- ask-a-data-question skill.
+--
+-- ⚠️ This is a LEFT join and store_info has no row for store 1111 or 999, so both get a NULL
+-- store_state. A market breakdown without `store_id <> 1111` therefore grows a phantom tenth
+-- market — 1,154 orders / $117,196 over 2026-05-03 → 2026-06-27 — presenting as an unnamed
+-- NULL group that reads like a data defect rather than the test store. The exclusion filter is
+-- load-bearing for geography, not just for totals.
+, si.store_state
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os
 	on os.brink_order_id = oc.brink_order_id
@@ -66,6 +95,8 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 		on ca.mapped_cust_id = oc.mapped_cust_id
 			left join `marketing-data-442316`.claude.loyalty_user lu
 			on lu.sm_external_user_id = oc.mapped_cust_id
+				left join `marketing-data-442316`.sales_ops.store_info si
+				on si.store_id = oc.store_id
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
 ;

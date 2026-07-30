@@ -13,6 +13,12 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 >
 > One fix is written but **not yet redeployed**: the `pulse.orders` fan-out dedupe (Asana 1216918745136203). Until the next full rebuild, `brink_order_id` 2279778269187 still has two rows.
 
+> **⚠️ Breaking change 2026-07-30 — `order_lines` was rebuilt across all history.** Two schema changes, both good, both breaking:
+> - **`BusinessDate` is now `business_date`.** The old spelling is **gone**, so every table now uses the same partition column name and the two-spellings trap is closed. **Any saved query, template or shared workbook writing `ol.BusinessDate` now fails** with `Unrecognized name: BusinessDate`. Loud, not silent — but it will hit the shared analyst workbook.
+> - **`store_state` is now a native column.** "Market" questions need no `store_info` join on either side. It is NULL for stores missing from `store_info` (1111 and 999), so `store_id <> 1111` is now load-bearing for geography, not just for totals.
+>
+> `claude.order_lines` was simplified to a plain `select *` passthrough the same day.
+
 > **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Five scope items — store 1111, date range, catering, Try 2 Combo inclusion, and named-product resolution — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
 
 Project: `marketing-data-442316`. The four approved tables for order/sales analysis:
@@ -49,7 +55,11 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
    ```
    So in `claude`, `revenue_category = 'Catering'` and `is_catering = true` are **equivalent**, and the documented superset/subset gotcha is collapsed away. In `sales_ops` they differ — `is_catering` is a superset (48 extra orders in June 2026 flagged catering on In-Store/Digital destinations). Consequence: a channel breakdown from `claude` assigns those orders to Catering; the same breakdown from `sales_ops` leaves them in In-Store/Digital. **Neither is wrong. They are different definitions.** Don't "fix" one to match the other — state which you used.
 
-3. **`claude.order_lines` exposes `business_date`**, renamed from `BusinessDate`. Nice for consistency, but SQL copied out of this skill (which documents `sales_ops`) needs the column name adjusted when run against `claude`.
+3. **`claude.order_lines` is now a plain passthrough.** It used to rename the partition column and left-join `store_info`; the 2026-07-30 full-history rebuild moved both upstream, so the view is `select *` over `sales_ops.order_lines` with the 3-year history filter. SQL written against either side is now identical apart from that floor.
+
+4. **`store_state` is carried on both order views** (added 2026-07-30) — so **market questions need no join** in `claude`, while in `sales_ops` you must join `store_info`. There is also a new **`claude.store_info`** view for the attributes that aren't denormalised (city, zip, address, open date, comp status, lat/long, timezone); it carries a `market` column aliasing `store_state`, and drops three non-store rows. See [`data_dictionaries/claude.store_info.md`](../../data_dictionaries/claude.store_info.md).
+
+   > **⚠️ `store_state` is NULL for store 1111 and 999.** Both order views `left join` `store_info`, which has no row for either, so a market breakdown **without `store_id <> 1111` grows a phantom tenth market** — 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
 
 ### `claude.order_customer` folds in the sequencing and lifetime columns
 
@@ -178,7 +188,7 @@ order by ca.mapped_cust_id, s.orders desc
 ## Hard rules (consistency guarantees)
 
 1. **Never query upstream/raw datasets** (`brink.*`, `pulse.*`, `sessionM.*`) to answer business questions. They contain voided rows, duplicates, and unfiltered records that these marts already handle. If the marts can't answer the question, say so — don't improvise from raw tables.
-2. **Always filter the partition column** on every table. `order_customer` and `order_sequence` use `business_date`; `order_lines` still uses `BusinessDate`. Never run unbounded scans.
+2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans.
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only; hours 0–3 and 5–7 skip). Yesterday and older is stable after the 4am run.
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
@@ -202,7 +212,7 @@ order by ca.mapped_cust_id, s.orders desc
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
 | Lifetime orders per customer | **`customer_attribute.lifetime_order_count`** — one row per person customer, already person-only and store-1111-excluded. **`order_sequence.lifetime_customer_order_count` was DROPPED 2026-07-29** — any query using it now errors |
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)` |
-| Item sales | `sum(item_gross_sales)` from `order_lines`. Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart — use gross for item mix |
+| Item sales | `sum(item_gross_sales)` from `order_lines`. Discounts/promotions are order-level lines with no per-item allocation, so per-item **net is not computable** from the mart — use gross for item mix. ⚠️ See the `item_net_sales` note below before telling a user the column doesn't exist |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
@@ -254,6 +264,24 @@ Any question naming a soup, sandwich, or salad (or the `Soups` / `Sandwiches` / 
 
 This is not a rounding difference. For Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27: **24,125 standalone vs 85,084 inside combos** — combos are ~78% of units. Answering the wrong one is off by 4x. See the combo line taxonomy below for the exact SQL, and **present the split** rather than a single blended number whenever combos are included.
 
+**Bowls are NOT combo-eligible — don't ask the question for them** (verified 2026-07-30). `parent_rev_center_name = 'Try 2 Combo'` spans only these revenue centers over 2026-05-03 → 2026-06-27 (store 1111 excluded): `Combos` (863,383 lines), `Sandwiches` (705,355 / 14 items), `Modifiers` (684,714), `Soups` (565,433 / 14), `Salads` (465,498 / 10), `Sides/Misc Items` (114,094), `Non Food/Bev Mis` (54,845), `Desserts` (10,069). **`Bowls` never appears.** Confirmed at item level: `Power Bowl` and `Hot Honey Cottage Cheese Bowl` have **zero** `parent_rev_center_name = 'Try 2 Combo'` lines of either shape. So a question mixing sandwiches and bowls needs the combo fork asked **once and applied only to the eligible items**; say which items it affected. Asking it about a bowl is a dead question that makes the clarification protocol look like noise.
+
+> **⚠️ "Zero combo lines" does NOT mean "zero modifier lines"** (corrected 2026-07-30 — the first draft of this note got it wrong and it's worth keeping the correction visible). Bowls **do** appear as zero-priced `line_item_type = 'modifier'` lines: 5,615 over 2026-05-03 → 2026-06-27 (Power Bowl 3,833, Hot Honey Cottage Cheese Bowl 1,782), **every one of them `is_catering = true` with `parent_rev_center_name = 'Box Lunches'`**. They are invisible under `is_catering = false`, which is exactly how the wrong conclusion was reached. **So the taxonomy row "Combo slot (zero-priced) = `line_item_type = 'modifier'`" is incomplete as written** — always qualify it with `parent_rev_center_name = 'Try 2 Combo'`, or Box Lunch units silently land in the combo bucket the moment catering is included.
+
+### Discount lines masquerade as items — exclude them from item reports (steward rule 2026-07-30)
+
+A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `rev_center_name = 'Discount'`, `line_item_type = 'discount'`, and — the trap — **`item_type` set to the item name too**, not to `'Entree'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**.
+
+Two consequences. They inflate any unit count not filtered to `line_item_type in ('item','modifier')`. And, more insidiously, they surface as a **separate candidate row in the name-discovery query** (protocol item 5) — so a user resolving "Hot Honey Cottage Cheese Bowl" sees two entries for one product with no way to tell which is real. Filter them in **both** the discovery query and the metric query:
+
+```sql
+and ol.rev_center_name <> 'Discount'
+and ol.item_type <> 'Discount'
+and ol.line_item_type <> 'discount'
+```
+
+Because `item_type` is unreliable on these rows, don't rely on `item_type = 'Entree'` alone to exclude them.
+
 ### 5. Named products — resolve the name against the data FIRST, then confirm
 
 When the user asks about a specific product by name, **do not guess the string and go straight to the metric query.** `item_name` values don't match how people speak, one spoken name can span several rows (sizes, catering variants, LTO renames, seasonal spellings), and a wrong guess returns a clean-looking wrong number — or zero rows presented as "no sales."
@@ -269,7 +297,7 @@ ol.item_name
 , round(sum(ol.item_gross_sales), 0) as gross_sales
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
-and ol.BusinessDate between @start and @end
+and ol.business_date between @start and @end
 and ol.store_id <> 1111
 and lower(ol.item_name) like '%grilled cheese%'   -- broadest distinctive fragment, lowercased
 group by 1, 2, 3
@@ -277,7 +305,7 @@ order by 4 desc
 ```
 
 - Match on the **shortest distinctive fragment**, lowercased on both sides. `like '%ultimate grilled cheese%'` misses `Ultimate Grilled Cheese Box`; `like '%grilled cheese%'` finds the family.
-- `item_name` is a **cluster field** — these filters are cheap. Still filter `BusinessDate`.
+- `item_name` is a **cluster field** — these filters are cheap. Still filter `business_date`.
 - Show the candidate names with their volumes and revenue centers so the user can see what they're choosing between, then ask which to include. Zero rows = say so and widen the fragment; never report `$0`.
 - Only after the name list is confirmed, run the metric query against the agreed `item_name in (...)` set.
 
@@ -310,7 +338,7 @@ All SQL — shown to users or executed — follows the steward's format so he ca
    - `order_customer` → **`oc`**
    - `order_lines` → **`ol`**
    - `order_sequence` → `os`, `customer_attribute` → `ca`, `store_info` → `si`
-3. **Lowercase whenever possible**: keywords, functions, aliases, CTE names. Case only where the identifier or value requires it — schema column names as they actually exist (`BusinessDate` on `order_lines`) and string literals being compared (`'Third Party'`).
+3. **Lowercase whenever possible**: keywords, functions, aliases, CTE names. Case only where the identifier or value requires it — schema column names as they actually exist (`business_date` on `order_lines`) and string literals being compared (`'Third Party'`).
 4. **Layout**:
    - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
    - CTEs: `with name as (` … `)`, chained as `, next_name as (`
@@ -332,7 +360,7 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 		on os.brink_order_id = oc.brink_order_id
 where 1=1
 and oc.business_date between @start and @end
-and ol.BusinessDate between @start and @end
+and ol.business_date between @start and @end
 and oc.store_id <> 1111
 group by
   oc.business_date
@@ -344,7 +372,7 @@ order by
 
 ## Join patterns
 
-**order_customer → order_lines** (note the two different partition column spellings):
+**order_customer → order_lines** (partition-prune both sides — same column name on each since 2026-07-30):
 ```sql
 select
 ...
@@ -352,7 +380,7 @@ from `marketing-data-442316`.sales_ops.order_lines ol
 	join `marketing-data-442316`.sales_ops.order_customer oc
 	on oc.brink_order_id = ol.brink_order_id
 where 1=1
-and ol.BusinessDate between @start and @end
+and ol.business_date between @start and @end
 and oc.business_date between @start and @end   -- partition-prune BOTH tables
 ```
 
@@ -438,7 +466,7 @@ ol.item_name
 , round(sum(ol.item_gross_sales), 0) as gross_sales
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
-and ol.BusinessDate >= date_sub(current_date('America/Denver'), interval 90 day)
+and ol.business_date >= date_sub(current_date('America/Denver'), interval 90 day)
 and ol.store_id <> 1111
 and ol.line_item_type = 'item'
 and ol.item_type = 'Entree'
@@ -453,7 +481,7 @@ An entrée appears in `order_lines` in **three** distinct shapes. Getting these 
 
 ```sql
 select
-date_trunc(ol.BusinessDate, week(monday)) as week
+date_trunc(ol.business_date, week(monday)) as week
 , case
     when ol.line_item_type = 'item' and ol.composite_item_id is null then 'Standalone'
     when ol.line_item_type = 'item' and ol.composite_item_id is not null then 'Combo component (priced)'
@@ -463,7 +491,7 @@ date_trunc(ol.BusinessDate, week(monday)) as week
 , round(sum(ol.item_gross_sales), 2) as gross_sales
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
-and ol.BusinessDate between @start and @end
+and ol.business_date between @start and @end
 and ol.store_id <> 1111
 and ol.item_name = 'Ultimate Grilled Cheese'
 and ol.is_catering = false
@@ -491,7 +519,7 @@ ol.parent_item_grp_name
 , count(distinct ol.combo_order_line_item_id) as combos
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
-and ol.BusinessDate >= date_sub(current_date('America/Denver'), interval 30 day)
+and ol.business_date >= date_sub(current_date('America/Denver'), interval 30 day)
 and ol.store_id <> 1111
 and ol.parent_rev_center_name = 'Try 2 Combo'
 group by 1
@@ -572,12 +600,12 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **`revenue_category` means something different in `claude` than in `sales_ops`.** The `claude` view forces it to `'Catering'` whenever `is_catering = true`, making the two equivalent; in `sales_ops`, `is_catering` is a superset (48 extra orders in June 2026). Channel breakdowns from the two datasets will legitimately disagree — state which you queried instead of reconciling them.
 - **In `claude.order_customer`, `0` in a folded count column means "no upstream row," not zero orders.** `customer_order_count = 0` ⟺ unidentified (46.4% of June 2026 orders); `lifetime_order_count = 0` is broader at 51.5% — it also catches all kiosk, most internal, and most store-1111 orders, so 36,261 orders have a real sequence number but zero lifetime. Never `avg()` a lifetime column unfiltered; never present `lifetime_order_count = 0` as a cohort. The FLOAT/DATE lifetime columns are *not* coalesced and stay NULL, so the same absent customer reads `0` in one column and `NULL` in the next. Details in `data_dictionaries/claude.order_customer.md`.
 - **There is no `claude.order_sequence` or `claude.customer_attribute`** — both are folded into `claude.order_customer`. Don't tell a user the data is unavailable; it's on the order view.
-- **Partition columns differ by table**: `order_customer.business_date` and `order_sequence.business_date` vs `order_lines.BusinessDate`. A rename of `order_lines` is planned; until then, spell both correctly or the query fails or scans everything.
-  - **It's the underscore, not the capitals.** BigQuery column references are case-insensitive, so `ol.businessdate` resolves fine against `BusinessDate`. The failure mode is mixing the two *names*: writing `BusinessDate` against `order_customer` gives `Unrecognized name: BusinessDate; Did you mean business_date?` (observed in an analyst MCP session 2026-07-27). Read the error literally — it names the table's real column.
+- **The partition column is `business_date` on every table** as of 2026-07-30. `order_lines` was rebuilt across full history that day and its `BusinessDate` column is **gone** — the long-standing two-spellings trap is closed. ⚠️ **Any saved query, template or workbook still writing `ol.BusinessDate` now fails outright** with `Unrecognized name: BusinessDate`. That is the good failure mode (loud, not silent), but it will hit the shared analyst workbook — read the error literally and swap in `business_date`.
 - **`order_lines` has no `order_id`** — this now leads the gotcha list because it is the single most-repeated error in the query log: `Name order_id not found inside ol`, hit three more times on 2026-07-27/28 and **again on 2026-07-28 at 09:12** by the same analyst. The order key is `brink_order_id` on every one of these tables. The 2026-07-28 instance selected `ol.order_id` in a CTE and then joined `oc.brink_order_id = ol.order_id` — i.e. the correct column name was already in the query, on the other side of the join. Read your own join predicate before selecting.
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
 - **Always `lower()` an email before matching, grouping, or counting it** (audited 2026-07-29). `order_customer.mapped_email` and `email` are **not** normalised — 4% of `mapped_email` values are not lowercase, and `count(distinct mapped_email)` **overstates by ~17,900** because the same address in different case counts twice. `mapped_email_domain` *is* already lowercase and is safe as-is. Root cause is Pulse (8.7% non-lowercase); Braze and SessionM emails are 100% clean. Also relevant to identity: 5,604 emails have one person split across several `mapped_cust_id`s by case alone.
 - **Per-customer questions should use `sales_ops.customer_attribute`, not a hand-rolled `group by mapped_cust_id`** (new 2026-07-29). Lifetime orders, spend, AOV, recency, tenure, store affinity and trailing 30/90/365-day activity are all precomputed there — that's the whole point, so two sessions can't produce two different LTV numbers. It is already person-only (adding `customer_type = 'person'` errors), it has **no partition column**, and you must check `attribute_asof_date = yesterday` before trusting the window columns. See its section above.
+- **⚠️ UNRESOLVED — `order_lines.item_net_sales` exists and is fully populated, but this skill tells users per-item net isn't computable** (found 2026-07-30). The column is live on **both** `sales_ops.order_lines` and `claude.order_lines`, with **zero nulls**: for 2026-06-01 → 2026-06-07, `line_item_type = 'item'`, store 1111 excluded — 712,458 lines, $4,291,648 gross vs **$4,178,409 net**, a 2.6% spread. The 2026-07-24 breaking-change note says `item_net_sales` is "gone," but that removal applied to the **order-level** rollups on `order_customer`, not to the line-level column here. Until the steward rules on what the 2.6% represents (item-level discount only? tax? something else?) and whether it reconciles to order-level `net_sales`: **keep using `item_gross_sales` for item mix, and do not present `item_net_sales` as a net-sales figure.** But don't tell a user the column doesn't exist — they can see it in the schema, and that answer destroys trust in the rest of this skill. Say it's undocumented and unvalidated (Asana: `KB finding: item_net_sales is live but undocumented`).
 - **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
 - **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
 - **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it.
@@ -603,10 +631,11 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - Timezone: business runs on `America/Denver` for schedule logic; each store's local time is in `order_datetime`, UTC in `order_customer.order_timestamp_utc`.
 - There is **no `order_id` column** on any of these tables — the order key is `brink_order_id` (multiple users have hit this error).
 - A legacy table `sales_ops.OrderCustomer` also exists (different schema: `netsales`, `iscatering`, `storeid`, `lifetime_order_cnt`, `first_order_datetime`, `order_count`, `mapped_domain`, `source`, …). **Do not use it** — it predates this mart and gives different answers. `sales_ops.order_customer` (lowercase) is the only canonical order table.
-  - **It is now also going stale**: on 2026-07-27 its `max(BusinessDate)` was **2026-07-25** while `order_customer` had loaded through 2026-07-27. Answers from it are silently 1–2 days short of current. Three separate users queried it during 2026-07-24 → 2026-07-26.
+  - **It is now also going stale**: on 2026-07-27 its `max(business_date)` was **2026-07-25** while `order_customer` had loaded through 2026-07-27. Answers from it are silently 1–2 days short of current. Three separate users queried it during 2026-07-24 → 2026-07-26.
   - **🛑 If you are working from a saved query or a shared template, assume it targets this legacy table and rewrite it before running.** Query-log review counted **188 non-steward runs against `OrderCustomer` in the five business days 2026-07-24 → 2026-07-29**, and every one of the 115 raw-`pulse.*` wall breaches in that window came through it. The pattern is a *shared workbook* — byte-identical query text ran under two different users' accounts hours apart on 2026-07-28, eight of them inside a single minute (batch execution). Legacy schema is the tell: `businessdate`, `storeid`, `iscatering = 0`, `source`, `lifetime_order_cnt`, `first_order_datetime`. Translate to `business_date`, `store_id`, `is_catering = false`, `order_source`, and `order_sequence.lifetime_customer_order_count` — and if the template reached into `pulse.*` for identity, stop and say the mart can't answer it (Asana 1216992461499656).
   - `iscatering` on the legacy table is **INT64** (`iscatering = 0`); `is_catering` on the canonical mart is **BOOL** (`is_catering = false`). Writing `is_catering = 0` fails with `No matching signature for operator = for argument types: BOOL, INT64` (observed 2026-07-24) — a reliable sign a query was written against the legacy schema.
-- **`sales_ops.store_info` column names are not the obvious ones** — it's `store_state`, not `state`; `store_city`, `store_zip`, `store_address`, `store_short_name`. Full column list: `store_id`, `store_name`, `store_address`, `store_city`, `store_state`, `store_zip`, `store_phone`, `store_short_name`, `store_tz`, `store_open_date`, `is_comp_store`, `latitude`, `longitude`, `weather_cluster_id`, `timezone_name`. Join `store_info.store_id = order_customer.store_id`. (Guessing `state` failed an analyst session 2026-07-24; a full dictionary is still pending — Asana 1216807058217060.)
+- **`sales_ops.store_info` column names are not the obvious ones** — it's `store_state`, not `state`; `store_city`, `store_zip`, `store_address`, `store_short_name`. Full column list: `store_id`, `store_name`, `store_address`, `store_city`, `store_state`, `store_zip`, `store_phone`, `store_short_name`, `store_tz`, `store_open_date`, `is_comp_store`, `latitude`, `longitude`, `weather_cluster_id`, `timezone_name`. Join `store_info.store_id = order_customer.store_id`. Full dictionary: [`data_dictionaries/sales_ops.store_info.md`](../../data_dictionaries/sales_ops.store_info.md). (Guessing `state` failed an analyst session 2026-07-24.)
+- **"Market" means `store_state`** (steward decision 2026-07-30). There is **no** `market` / `region` / `dma` / `metro` column anywhere in `sales_ops` — verified against `INFORMATION_SCHEMA.COLUMNS`. When a user asks for anything "by market," join `store_info` and group by `si.store_state`, and **say in the answer that market = state**. Ten values, one of which is **blank** (one store has no `store_state`) — it becomes a nameless row in any breakdown, so exclude or label it. Caveat worth stating: Utah is 35 of ~90 stores across 28 cities, so one "Utah" row hides most of the geographic spread. `store_city` is finer but `West Valley` and `West Valley City` are separate values for the same metro. A real metro/DMA rollup is an open KB gap — don't invent one per-session.
 - `sales_ops.order_discount` exists (order-level discount lines: `order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, …) but is **not yet documented** — join keys unverified. If a question needs it, treat answers as provisional until its dictionary lands.
 - **Employee/test exclusion:** internal accounts are identifiable via `customer_type = 'internal'` (`@cafezupas.com`, `@tkxel.com`, `@tkxel.io`) — 119 ids / 736 orders in June 2026. The new `mapped_email_domain` column closes the old `mapped_domain` mart gap on this table. Unidentified internal orders still can't be flagged.
 - The old `cowork_interim` and `nces_staging` scratch datasets were dropped 2026-07-22. Any saved query referencing them must be rebuilt against the marts (materialize intermediates in `scratch` if needed).

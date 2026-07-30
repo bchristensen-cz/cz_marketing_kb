@@ -8,7 +8,7 @@
 |---|---|
 | Grain | 1 row per line element within an order (see line types below) |
 | Row count | ~377M rows across ~49M orders, 2018-08-13 to present |
-| Partitioned by | `BusinessDate` (DAY) — **always filter on it** |
+| Partitioned by | `business_date` (DAY) — **always filter on it** |
 | Clustered by | `rev_center_name`, `item_name`, `parent_item_grp_name`, `parent_rev_center_name` |
 | Refresh | Hourly at minute :02. Intraday runs (8am–11pm MT) reload **today only**. 4am daily reloads 8 days; Monday 4am reloads 5 weeks; 1st of month 4am reloads ~13 months. |
 | Source build script | `sql/sales_ops.order_lines.sql` in this repo |
@@ -43,9 +43,10 @@
 ### Dates, store
 | Column | Type | Description |
 |---|---|---|
-| `BusinessDate` | DATE | Operating day (partition column). |
+| `business_date` | DATE | Operating day (partition column). **Renamed from `BusinessDate` in the 2026-07-30 full-history rebuild** — the old spelling is gone and any saved query using it now fails outright. |
 | `order_datetime` | DATETIME | Local order time (same logic as `order_customer`). |
 | `store_id`, `store_name` | | Store. **Store 1111 is a test/training store — ALWAYS exclude** (`store_id <> 1111`); no exceptions (steward rule 2026-07-23). |
+| `store_state` | STRING | Full state name (`Utah`, not `UT`). **This is "market"** — there is no market/region/DMA/metro column anywhere; see [`sales_ops.store_info`](sales_ops.store_info.md). Added in the 2026-07-30 rebuild, so item-by-market questions need no join. ⚠️ **NULL for stores absent from `store_info`** — 512 lines in 2026-06-01 → 2026-06-07, all store 1111 / 999. Without `store_id <> 1111` a market breakdown grows a phantom unnamed group; `coalesce` the label so nothing ships nameless. |
 | `is_catering` | BOOLEAN | Catering flag from pulse. |
 
 ### Item descriptors
@@ -74,7 +75,7 @@
 | `qty` | **Derived**: `round(item_gross_sales / price)`, floored at 1. Approximate — wrong when price is 0/missing or item was price-overridden. Good for menu-mix counts on `line_item_type='item'`. |
 
 ## Gotchas
-- **Always filter `BusinessDate`** (partition). Cluster fields (`rev_center_name`, `item_name`, parent fields) make filters on them cheap.
+- **Always filter `business_date`** (partition). Cluster fields (`rev_center_name`, `item_name`, parent fields) make filters on them cheap.
 - **Item counts**: filter `line_item_type = 'item'` — otherwise modifiers/fees inflate counts ~2x.
 - **Order-level sales**: use `order_customer` — gross = `gross_sales`, net = calculated `gross_sales - total_discount_amount - total_promotions_amount` (the `net_sales` column is validation-only). Line-level sums won't exactly reconcile to order-level (order-level discounts, rounding).
 - **Line-level reconstruction (revalidated 2026-07-23 after the modifier-gross fix):** gross = `sum(amount)` over `item/fee/surcharge/modifier` lines; net = gross + `discount/promotion` amounts (negative). Matches order-level for **99.99% of orders that have lines** (90d: gross diff −$1.5K, net diff −$0.4K on $55M). Order-level `order_customer` remains the truth for reported sales.

@@ -454,7 +454,7 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 | Claude answers instantly without asking anything | Working from a saved copy or general knowledge | Confirm no `.skill` packages installed; re-paste `CLIENT_SETUP.md` Step 2 |
 | Claude brings up BigQuery on unrelated questions | Conditional line missing from the global block | Re-paste `CLIENT_SETUP.md` Step 3 exactly |
 | Two people got different numbers for the same question | Almost always different scope assumptions (dates, catering, combos), not a data bug | Compare their assumption lines before suspecting the mart |
-| Query is enormous / times out | Missing partition filter | The skill requires one; check the SQL for `business_date` / `BusinessDate` |
+| Query is enormous / times out | Missing partition filter | The skill requires one; check the SQL for `business_date` / `business_date` |
 
 **General rule:** if the symptom is "Claude is broken," it is a Cowork-mode, connector, or permission
 problem the large majority of the time. Work down the table above before reading any SQL.
@@ -687,7 +687,7 @@ questions all work from the one view.
   unidentified order shows `customer_order_count = 0` and `lifetime_order_count = 0`. That means
   "no customer attached," not "a customer with no orders." Filtering `customer_order_count = 1` for
   first-time orders is right; treating `0` as a real count is not.
-- **`order_lines` exposes `business_date`** (renamed from `BusinessDate`). `claude` users get the
+- **`order_lines` exposes `business_date`** (the `BusinessDate` spelling was retired in the 2026-07-30 rebuild). `claude` users get the
   consistent spelling; SQL copied from the skill, which documents `sales_ops`, needs adjusting.
 - ~~`pulse.orders` fan-out duplicating orders~~ — **resolved 2026-07-29** by the full-history
   rebuild. Spot-checked through the view: June 2026 returns 713,575 rows = 713,575 distinct

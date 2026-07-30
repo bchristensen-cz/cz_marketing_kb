@@ -8,8 +8,46 @@ duplicated here. Two copies of the same prompt text will drift, and drift produc
 answers that are very hard to diagnose. This document gets the person *ready* to run
 `CLIENT_SETUP.md`; that file gets them *working*.
 
-Budget about 30 minutes of your time per person, spread across two sittings (GCP propagation is
-not instant).
+Budget about 30 minutes of your time per person. IAM changes can take a few minutes to propagate.
+
+---
+
+## TL;DR — the whole job in one page
+
+If you read nothing else, read this.
+
+**Four things to do per person:**
+
+| # | Do this | Where | Detail |
+|---|---|---|---|
+| 1 | Invite them to the Claude org | Claude admin console | §2 |
+| 2 | Grant **BigQuery Job User** on project `marketing-data-442316` | GCP → IAM | §3.2 |
+| 3 | Grant **BigQuery Data Viewer** on dataset **`claude`** only | BigQuery → `claude` → Sharing → Permissions | §3.3 |
+| 4 | Send them [`CLIENT_SETUP.md`](CLIENT_SETUP.md) | link it, don't retype it | §5 |
+
+That's it. Asana is already shared company-wide, the source datasets are already authorized, and
+nobody needs `scratch`.
+
+**Four things that will bite you:**
+
+1. **They must use Cowork mode in the Claude desktop app.** Data questions need `git clone`, which
+   needs a shell, and only Cowork has one. Browser, mobile, and plain desktop chat all fail with
+   "the knowledge base is unavailable." That message is Claude working correctly, not a bug. This is
+   the #1 support call. (§2)
+2. **Grant Data Viewer on the `claude` dataset, never at project level.** Every dataset in this
+   project carries a `projectReaders` entry, so a project-level Data Viewer grant silently opens
+   `brink`, `pulse`, and `sessionM`. (§3.3, §3.6)
+3. **If you add a new source dataset later, authorize `claude` on it** or every view over it breaks
+   with a permission error naming a table the user can't see. Already done for `sales_ops`,
+   `sessionM`, and `braze`. (§3.3a)
+4. **The `claude` views only go back to 2023-01-01** and older dates return **zero rows, not an
+   error** — which reads as "no sales." (§10)
+
+**What they can and can't answer:** orders, sales, channels, customers, menu/items, order
+sequencing, lifetime customer metrics, and loyalty — yes. Campaigns/email/SMS — not yet (`braze`
+views are coming). Store attributes beyond `store_id` / `store_name` — not yet.
+
+**Before you hand it over,** skim §8 and send it to them.
 
 ---
 
@@ -25,15 +63,19 @@ Employee's Claude  ──(project instructions)──►  clone the KB fresh, ev
         │                                        (canonical definitions, gotchas)
         ▼
    BigQuery MCP connector  ──►  marketing-data-442316
-        │                          claude.*      ← what employees can read
-        │                          scratch       ← write, analysts only (7-day expiry)
-        └── not granted ────────►  sales_ops.*, braze.*, brink.*, pulse.*,
-                                   sessionM.*, and every other dataset
+        │
+        ├──► claude.*  ← the ONLY thing employees can read (read-only views)
+        │       │
+        │       │  claude is an authorized dataset on the three sources below,
+        │       │  so its views read through on their own authority
+        │       ▼
+        └──► sales_ops.*   sessionM.*   braze.*     ← employees: no direct access
+             brink.*  pulse.*  everything else      ← nobody queries these for answers
 ```
 
-⚠️ **Read §10 before relying on that diagram.** It is the *target* state. Today the `claude`
-dataset does not carry working equivalents for most of what the skills document, and `braze` isn't
-covered at all — so a `claude`-only user is far more limited than this picture suggests.
+The shape to hold onto: **`claude` can read the sources; the user can only read `claude`.** That's
+what lets you hand someone real numbers without handing them the raw warehouse. See §10 for which
+domains are covered today.
 
 Three ideas do all the work:
 
@@ -55,8 +97,8 @@ Three ideas do all the work:
 |---|---|---|
 | Employee's `@cafezupas.com` Google account | Already exists if they're onboarded to Workspace | Must be the Workspace account, not a personal Gmail |
 | Claude seat | Claude Team/Enterprise admin console | Needs a free seat on the plan, or you're buying one |
-| Your own admin rights | Claude admin + GCP IAM Admin on `marketing-data-442316` + Asana project admin | If you can't do all three, find who can before starting |
-| Their role / what they'll actually ask about | Conversation with them or their manager | Determines whether they need `scratch` write access — see §3.4 |
+| Your own admin rights | Claude admin + GCP IAM Admin on `marketing-data-442316` | If you can't do both, find who can before starting. No Asana admin needed — the board is company-wide |
+| Their role / what they'll actually ask about | Conversation with them or their manager | Shapes what you tell them is in and out of scope — see §10 |
 
 **Decide up front whether this person should have data access at all.** Everything below is
 reversible, but the cheapest access review is the one you do before granting.
@@ -100,23 +142,39 @@ reversible, but the cheapest access review is the one you do before granting.
 ## 3. Step 2 — GCP / BigQuery provisioning
 
 **Policy: the `claude` dataset is the only company data employees read.** Not `sales_ops`, and
-absolutely not `brink`, `pulse`, or `sessionM`. (Analysts also get write on `scratch` — §3.4 —
-which is working space, not company data.) **See §10 first: the `claude` layer is not yet complete
-enough to stand alone, so this policy currently constrains what anyone can be asked to answer.** Raw datasets carry voids, duplicates, and
-grain defects that the marts already handle; a well-meaning person querying `brink.orders`
-directly will produce a number that looks clean and is wrong.
+absolutely not `brink`, `pulse`, or `sessionM`. (`scratch` is steward working space and is not
+granted — §3.4.) Raw datasets carry voids, duplicates, and grain defects that the marts already
+handle; a well-meaning person querying `brink.orders` directly will produce a number that looks
+clean and is wrong.
 
-### 3.1 Use a Google Group, not per-person grants
+Check §10 for the two remaining coverage gaps — `braze` views and store attributes — so you can set
+expectations before they hit them.
 
-Create it once, then onboarding is a single membership add and offboarding is a single remove.
+### 3.1 Grants are per-person
 
-```
-gcp-claude-data-users@cafezupas.com
-```
+The steward does **not** have Google Workspace admin, so there's no group to manage — both grants
+below go directly to the individual's `@cafezupas.com` address.
 
-If the group doesn't exist yet, create it in Google Workspace admin first, then apply the two
-grants below **to the group**. Per-person IAM bindings are how permission sprawl starts — six
-months from now nobody will remember why `someone@` has `dataViewer` on `pulse`.
+This works fine, but it puts the burden on discipline rather than structure:
+
+- **Keep a running list.** Add every person you grant to the "who has access" list at the bottom of
+  this section, with the date. Per-person bindings are how permission sprawl starts — a year from
+  now, nobody will remember why `someone@` has `dataViewer` on something.
+- **Offboarding is now two removals per person, not one.** §9 covers it. Don't skip it.
+- **Audit quarterly.** Read the `claude` dataset ACL and the project IAM page and confirm every
+  name still belongs. Five minutes.
+
+> **Worth revisiting:** if you ever get Workspace admin (or can get someone who has it to make one
+> group), a single `gcp-claude-data-users@cafezupas.com` group turns onboarding into one membership
+> add and offboarding into one removal, and makes the audit a single page. Not a blocker — just the
+> cheaper long-run shape.
+
+#### Who has access (keep this current)
+
+| Person | Granted | `jobUser` | `dataViewer` on `claude` | Notes |
+|---|---|---|---|---|
+| bchristensen@cafezupas.com | — | OWNER | OWNER | Steward; also OWNER on source datasets |
+| _add each new person here_ | | | | |
 
 ### 3.2 Grant 1 — the ability to run queries (project level)
 
@@ -124,7 +182,7 @@ In GCP console → **IAM & Admin → IAM → Grant access** on project `marketin
 
 | Principal | Role | Why |
 |---|---|---|
-| `gcp-claude-data-users@cafezupas.com` | **BigQuery Job User** (`roles/bigquery.jobUser`) | Lets them *start* a query. Grants no data access by itself. Also carries `resourcemanager.projects.get`, so the project shows up in their tooling. |
+| `newperson@cafezupas.com` | **BigQuery Job User** (`roles/bigquery.jobUser`) | Lets them *start* a query. Grants no data access by itself. Also carries `resourcemanager.projects.get`, so the project shows up in their tooling. |
 
 This is the counterintuitive part: Job User lets someone start a query and read no data — it
 carries no `bigquery.tables.getData`, no `bigquery.datasets.get`, no `bigquery.tables.list`. All
@@ -136,7 +194,7 @@ Or via CLI:
 
 ```bash
 gcloud projects add-iam-policy-binding marketing-data-442316 \
-  --member="group:gcp-claude-data-users@cafezupas.com" \
+  --member="user:newperson@cafezupas.com" \
   --role="roles/bigquery.jobUser"
 ```
 
@@ -151,7 +209,7 @@ Add principal**:
 
 | Principal | Role |
 |---|---|
-| `gcp-claude-data-users@cafezupas.com` | **BigQuery Data Viewer** (`roles/bigquery.dataViewer`) |
+| `newperson@cafezupas.com` | **BigQuery Data Viewer** (`roles/bigquery.dataViewer`) |
 
 Or via SQL DCL — **use this, not `bq`.** `bq add-iam-policy-binding` does not support datasets
 (tables and views only), and the `bq show`/`bq update --source` route overwrites the whole ACL:
@@ -159,12 +217,18 @@ Or via SQL DCL — **use this, not `bq`.** `bq add-iam-policy-binding` does not 
 ```sql
 grant `roles/bigquery.dataViewer`
 on schema `marketing-data-442316`.claude
-to "group:gcp-claude-data-users@cafezupas.com"
+to "user:newperson@cafezupas.com"
 ```
 
-### 3.3a Authorize `claude` on every source dataset — the step everyone misses
+### 3.3a Authorize `claude` on every source dataset — ✅ already done, but read this once
 
-**This is the one that breaks rollouts.** Dataset access to `claude` is *not* enough on its own.
+> **Status 2026-07-29 — nothing to do for a new person.** `claude` is registered as an **authorized
+> dataset** (`targetTypes: ["VIEWS"]`) on all three sources: **`sales_ops`**, **`sessionM`**, and
+> **`braze`**. Verified in the live ACLs. This section matters when you add a *new source dataset*,
+> not when you add a person.
+
+Dataset access to `claude` is *not* enough on its own — this is worth understanding because it's the
+most confusing error class in the system.
 
 A view in `claude` that reads `sales_ops` or `sessionM` is, by default, a **plain view**: BigQuery
 evaluates it with the **caller's** credentials against the underlying tables. So a `claude`-only
@@ -180,49 +244,49 @@ read happens on the *view's* authority — the employee needs only `jobUser` + `
 `claude`, and still cannot see or query `sales_ops` directly. That's the wall working as designed.
 
 **Authorize the whole `claude` dataset, not view by view.** An *authorized dataset* covers every
-current and future view in `claude`, so you never have to remember this step again when you add a
-mart. Per source dataset:
+current and future view in `claude`, so you never have to repeat this when you add a mart — which is
+why it's already handled for the three current sources. When you add a **new** source dataset:
 
 ```
-BigQuery console → dataset sales_ops → Sharing → Authorize datasets
+BigQuery console → dataset <new_source> → Sharing → Authorize datasets
   → add marketing-data-442316.claude
 ```
 
-Repeat for **`sessionM`** (the six `loyalty_*` views read it) and for any other dataset a `claude`
-view reaches into. This is safe because only the steward can write to `claude` — it *is* the
-curated interface layer, so granting it blanket read on the sources doesn't widen anyone's access.
+This is safe because only the steward can write to `claude` — it *is* the curated interface layer,
+so granting it blanket read on the sources doesn't widen anyone's access.
 
-**Verify** — the source dataset's ACL should contain a `view` or `dataset` entry:
+**Verify** — the source dataset's ACL should contain a `dataset` entry pointing at `claude`:
 
 ```
-BigQuery console → dataset sales_ops → Sharing → Authorize datasets / Authorized views
+BigQuery console → dataset <source> → Sharing → Authorize datasets
 ```
 
-> **Status 2026-07-29:** both `sales_ops` and `sessionM` have **zero** authorized views and **zero**
-> authorized datasets, while all eight objects in `claude` are plain views reaching into them. **A
-> user provisioned per this runbook today would get a permission error on every single one.** Do
-> this step before you onboard anyone, then re-verify.
+**The rule to remember:** *any time a `claude` view reads a dataset that isn't already authorized,
+every user hits a permission error naming a table they can't see.* That error means you missed this
+step — it is never a sign the user's access is wrong. Most likely trigger: the upcoming `braze`
+views (source already authorized, so they should just work) or any new source added later.
 
 Three caveats worth knowing before you debug one:
 
 - Source and view datasets must be in the **same region** (all of these are `US` — fine).
-- **De-authorizing** can take up to **24 hours** to propagate. Removing access is not instant — if
-  you need someone cut off now, remove their group membership too.
+- **De-authorizing a dataset** can take up to **24 hours** to propagate. This does *not* apply to
+  revoking a person — to cut someone off now, remove both of their IAM bindings (§9), which takes
+  effect in minutes.
 - Authorizing a dataset does **not** grant the user anything on the source. It only lets views in
   `claude` read through. The employee still can't query `sales_ops` by name.
 
-### 3.4 Grant 3 — `scratch` write access (only if they need it)
+### 3.4 `scratch` write access — don't grant it
 
-The `sales-ops-orders` skill tells Claude to materialize intermediate results into
-`marketing-data-442316.scratch` (7-day auto-expiry) rather than building views over heavy
-queries. Anyone doing multi-step cohort or funnel analysis will hit this.
+**Nobody needs this. Skip it.** Two grants (§3.2 and §3.3) are the complete provisioning set.
 
-| Principal | Role | Scope |
-|---|---|---|
-| individual or group | **BigQuery Data Editor** (`roles/bigquery.dataEditor`) | dataset `scratch` **only** |
+Background, so you know what you're saying no to: the `sales-ops-orders` skill tells Claude to
+materialize intermediate results into `marketing-data-442316.scratch` (7-day auto-expiry) rather
+than building views over heavy queries. That's a steward-workflow convenience for multi-step cohort
+and funnel work, not something a normal user hits. If someone ever genuinely needs it, the grant is
+**BigQuery Data Editor** (`roles/bigquery.dataEditor`) on dataset `scratch` **only** — and it should
+be a deliberate, logged exception, never part of the default onboarding.
 
-Skip it for casual users — they'll never notice. Grant it for analysts. Never grant Data Editor
-anywhere else.
+Never grant Data Editor anywhere else.
 
 ### 3.5 Confirm the API is enabled and propagation has finished
 
@@ -235,22 +299,24 @@ permission error, wait five minutes and retry once before debugging anything.** 
 
 Say this out loud to the new person — it prevents them from filing bugs against the design:
 
-- No access to `sales_ops`, `brink`, `pulse`, `sessionM`, or any other dataset in the project.
-  Not an oversight.
-- **No access to `braze` either** — which means campaign, email, and SMS questions are currently
-  out of reach for a standard user, even though the repo ships a `braze-campaigns` skill and
-  README lists `braze.*` as an approved source. If this person's job involves campaign reporting,
-  you need a decision before they start: grant dataset-level `dataViewer` on `braze` as an
-  explicit exception, or tell them the domain is out of scope for now. Don't leave it implicit.
-- Read access to `scratch` comes bundled with the Data Editor grant in §3.4 — so "the `claude`
-  dataset only" is precise for *reading company data*, not literally the only dataset they can see.
+- No **direct** access to `sales_ops`, `braze`, `brink`, `pulse`, `sessionM`, or any other dataset.
+  Not an oversight. They read those sources *only* through `claude` views, and only the columns and
+  date range those views expose.
+- No write access anywhere — including `scratch` (§3.4).
 - No BigQuery Admin, no dataset creation, no scheduled-query editing.
+
+Note the distinction that trips people up: `claude` **is** authorized to read `sales_ops`,
+`sessionM`, and `braze` (§3.3a). The *user* is not. A user typing
+`select * from sales_ops.order_customer` gets denied; the same data reached through
+`claude.order_customer` works. That's the design, not an inconsistency.
 
 **Two standing hygiene issues on this project** (found 2026-07-28, worth fixing independent of any
 onboarding):
 
 - `sales_ops` grants READER to `hassaan.akmal@tkxel.io`, an outside developer account — the exact
-  category the query-log review rules exclude.
+  category the query-log review rules exclude. `sessionM` grants READER +
+  `roles/bigquery.user` to `drobins@cafezupas.com` directly; now that `claude.loyalty_*` exists,
+  check whether that can be dropped.
 - Every dataset, including `brink`, `pulse`, and `sessionM`, carries a `projectReaders`
   special-group READER entry. That means **any** project-level Viewer or Data Viewer binding
   silently opens all raw data. It's why §3.3 insists on dataset-level grants, and it's worth
@@ -258,19 +324,27 @@ onboarding):
 
 ---
 
-## 4. Step 3 — Asana access
+## 4. Step 3 — Asana — ✅ nothing to grant
 
-The **Claude Data** board is the users' only write path into the knowledge base.
+The **Claude Data** board is already **shared company-wide**, so there's no per-person step here.
 
 - Workspace: `cafezupas.com`
 - Project: [Claude Data](https://app.asana.com/1/47693676899341/project/1216769551099591/list)
   (project id `1216769551099591`)
 
-Add them as a member with edit rights so Claude can create tasks on their behalf. Tell them the
-convention: findings are titled `KB finding: <short title>`, and you review and merge them.
+What you *do* still owe the new person is the **convention**, because access without knowing the
+protocol is useless:
 
-Without this, the "found something wrong?" loop dead-ends and people start keeping private
-workaround queries — which is exactly the fragmentation this whole system exists to prevent.
+> Found something wrong or missing? Don't try to fix it yourself and don't keep a private
+> workaround query. Ask Claude to log a task on the Claude Data board titled
+> `KB finding: <short title>`, with what you saw and the query. Brent reviews it, merges it into the
+> knowledge base, and everyone's next session picks up the fix automatically.
+
+They do need to have **authorized the Asana connector** in their own Claude settings for this to
+work — that's `CLIENT_SETUP.md` Step 0, on their side, not an admin grant.
+
+This loop is the reason the system stays accurate. Without it people quietly build their own
+spreadsheets, which is exactly the fragmentation the whole project exists to prevent.
 
 ---
 
@@ -281,7 +355,7 @@ them about five minutes and covers, in order:
 
 | Their step | What it is | Where the text goes in Claude |
 |---|---|---|
-| 0 | Authorize the **BigQuery** and **Asana** connectors | Settings → Connectors |
+| 0 | Authorize the **BigQuery** and **Asana** connectors (both required — Asana is how they file findings) | Settings → Connectors |
 | 1 | Create a project, e.g. `Cafe Zupas Data` | Projects → + New Project |
 | 2 | Paste the **KB protocol block** | That project → *Set project instructions* |
 | 3 | Paste the **global backstop block** | Settings → General → *Instructions for Claude* |
@@ -342,8 +416,10 @@ and user_email = 'newperson@cafezupas.com'
 order by creation_time desc
 ```
 
-A job hitting `sales_ops.*`, `brink.*`, `pulse.*`, or `sessionM.*` directly means a permission
-grant went to the wrong scope. Fix the IAM binding, don't just ask them to stop.
+A job whose SQL names `sales_ops.*`, `brink.*`, `pulse.*`, or `sessionM.*` **directly** — rather than
+reaching them through a `claude` view — means a grant went to the wrong scope. Fix the IAM binding,
+don't just ask them to stop. (Referencing `claude.order_customer` is correct and expected, even
+though it reads `sales_ops` underneath.)
 
 **Check B — ask them to paste you their Check 1 result** from `CLIENT_SETUP.md` §5. You're
 looking for two things: a **commit hash** in the answer, and **clarifying questions asked before
@@ -366,9 +442,10 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 |---|---|---|
 | "Claude says a server requires authentication" | Connector not authorized | `CLIENT_SETUP.md` Step 0; complete the Google sign-in prompt |
 | "Access Denied: User does not have `bigquery.jobs.create`" | Missing project-level Job User | §3.2 |
-| "Permission denied on table `sales_ops.…`" (or `sessionM.…`) **while querying a `claude` view** | `claude` isn't authorized on the source dataset — the view runs with *their* credentials | **§3.3a.** This is the most likely error in the whole document |
-| "Permission denied on table `sales_ops.…`" while querying `sales_ops` **by name** | Working as designed, or the skill pointed them at a table with no `claude` equivalent | §10 — tell them the question type is out of scope; don't grant `sales_ops` |
-| "No sales" / zero rows for an older period | The `claude` views only go back to **2024-01-01** (rolling 2-year window), and truncation is silent | §10 — confirm the date range is inside the window |
+| "Permission denied on table `X`" **while querying a `claude` view** | A source dataset isn't authorized for `claude`. Shouldn't happen for `sales_ops`/`sessionM`/`braze` — suspect a newly added source | §3.3a |
+| "Permission denied on table `sales_ops.…`" while querying `sales_ops` **by name** | Working as designed, or the skill pointed them at something with no `claude` equivalent | §10 — tell them it's out of scope; don't grant `sales_ops` |
+| "No sales" / zero rows for an older period | The `claude` views only go back to **2023-01-01**, and truncation is silent | §10 — confirm the date range is inside the window |
+| A number doesn't match one the steward produced | Often the `revenue_category` override, or the 3-year window | §10 — compare which side of `claude` each query ran on |
 | "Permission denied on dataset `claude`" | Missing dataset-level Data Viewer, or IAM hasn't propagated | §3.3, then wait 5 min |
 | "I can't see the dataset in the Explorer pane" | Expected — a dataset grant doesn't add it to Explorer | They can still query it by full name; not a bug |
 | Answers arrive with no SQL shown | Instructions didn't load, or they're outside the project | Re-check `CLIENT_SETUP.md` Steps 2 and 3; move the chat into the project |
@@ -379,8 +456,8 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 | Two people got different numbers for the same question | Almost always different scope assumptions (dates, catering, combos), not a data bug | Compare their assumption lines before suspecting the mart |
 | Query is enormous / times out | Missing partition filter | The skill requires one; check the SQL for `business_date` / `BusinessDate` |
 
-**General rule:** if the symptom is "Claude is broken," it is a connector or permission problem
-about 90% of the time. Check §7 top to bottom before reading any SQL.
+**General rule:** if the symptom is "Claude is broken," it is a Cowork-mode, connector, or permission
+problem the large majority of the time. Work down the table above before reading any SQL.
 
 ---
 
@@ -389,6 +466,81 @@ about 90% of the time. Check §7 top to bottom before reading any SQL.
 Give this section to the new person. It's the difference between a useful first week and a
 frustrated one. The system is designed to ask clarifying questions rather than guess, so the
 better your question, the fewer rounds it takes.
+
+### First — where the numbers actually come from
+
+You don't need this to use the system, but it explains why Claude behaves the way it does, and it's
+the context that stops people mistrusting a correct answer.
+
+**The path a question takes:**
+
+1. **You ask in plain English**, inside your Claude project, in Cowork mode.
+2. **Claude pulls the knowledge base** — a fresh copy of the shared repo, every session. That repo
+   holds the *definitions*: what "net sales" means, which tables are approved, which traps to avoid,
+   what to ask you before querying. Nobody's Claude keeps its own copy, which is why two people
+   asking the same question get the same answer.
+3. **Claude writes SQL** and runs it against **BigQuery**, our data warehouse, in the Google Cloud
+   project `marketing-data-442316`. It shows you that SQL every time.
+4. **You get the number, plus the assumptions** it rests on.
+
+**What's underneath, in order of trust:**
+
+- **Brink** is the point-of-sale system and the **single source of truth for money** — sales,
+  discounts, tax, tips. Every financial figure traces to Brink.
+- **Pulse** handles digital ordering (app, web, catering) and supplies order and customer metadata.
+  It is *never* used to compute financials.
+- **SessionM** is the loyalty platform — points, offers, tiers, membership.
+- **Braze** is the messaging platform — email and SMS campaign activity.
+
+Those four raw feeds land in BigQuery hourly, and they are **messy**: voided orders, duplicate rows,
+the same customer under several IDs, columns that mean different things than their names suggest.
+Nobody should be querying them directly, and access is deliberately closed.
+
+**So instead you query curated tables.** Brent maintains a cleaned layer where the voids are
+removed, duplicates collapsed, identities stitched together, and every metric has one agreed
+definition. Your access points at a set of read-only views (the `claude` dataset) built on top of
+that layer. You can't reach the raw data even if you ask — and that's the feature, not a limitation:
+it's what makes the answer you get the same answer your colleague gets.
+
+**Two consequences worth internalizing:**
+
+- **Freshness:** data is current as of the top of the current hour. Today's numbers are still moving;
+  yesterday and earlier are stable. Loyalty data loads once a day, so today's loyalty identity
+  coverage is thin by design.
+- **History:** the views cover **2023-01-01 forward**. Ask about 2022 and you get zero rows, which
+  looks like "no sales" but means "outside the window." Ask Claude to confirm the range if a result
+  looks suspiciously empty.
+
+If a number looks wrong, the productive question is *"what assumptions did you make and can I see
+the SQL?"* — not *"is the data broken?"* It usually isn't; it's usually a scope difference, and the
+four items below are almost always the culprit.
+
+### When your question is vague — what should happen
+
+Vague questions are fine. "How are sales doing?" is a perfectly reasonable thing to ask, and you
+shouldn't have to think like an analyst to get an answer.
+
+But a vague question has no single correct answer — "how are sales doing" could mean this week vs
+last, this month vs last year, with or without catering, all channels or just in-store. So there's a
+firm rule, and **you should hold Claude to it**:
+
+> When a question is vague, Claude must either **ask you** which scope you meant, or **state every
+> assumption it made** — plainly, up front, not buried at the end. Never a bare number.
+
+A good response to "how are sales doing?" looks like one of these:
+
+- *"Quick check on scope before I run it: which period, and should catering be in or out?"* — or —
+- *"Here's net sales for the last full business week (Mon 2026-07-20 – Sat 2026-07-25), all
+  channels including catering, all stores except the 1111 test store, compared to the prior week.
+  Say the word if you meant a different cut."*
+
+**What to push back on:** a single number with no stated period, no mention of catering, and no SQL.
+If you get that, reply *"what assumptions did you make?"* — and if it happens repeatedly, something
+in the setup is wrong (see §7).
+
+**Why this is strict.** Every assumption on that list has silently produced a materially wrong
+answer before. The rule exists so that two people asking the same loose question either get the same
+number or get told exactly how their numbers differ.
 
 ### The four things that change the answer most
 
@@ -408,6 +560,9 @@ State them and you'll usually get a number on the first pass.
    third-party funnels — about 38% of identified orders). Sales metrics don't. Say which you mean.
 
 ### Question patterns that work
+
+You don't *have* to ask this way — vague is allowed, per the rule above. This is just how to skip
+the clarifying round when you already know what you want.
 
 | Instead of | Ask |
 |---|---|
@@ -429,15 +584,13 @@ State them and you'll usually get a number on the first pass.
   calculated here?" resolves most disagreements in one message.
 - **Say the shape you want** — table, chart, spreadsheet, deck, or a file saved somewhere.
   Otherwise you get prose.
-- **Expect to be asked questions instead of handed a number.** That's the system working. Each of
-  those questions exists because skipping it produced a materially wrong answer before.
 - **Verify before you circulate.** A number going into a board deck deserves "sanity-check this
   against a different cut" before it leaves your screen.
 
 ### Anti-patterns
 
-- **Don't accept a bare number with no SQL and no stated assumptions.** That's the signature of a
-  setup problem, not an answer.
+- **Don't accept a bare number with no SQL and no stated assumptions** — see the vague-question rule
+  above. That's the signature of a setup problem, not an answer.
 - **Don't ask Claude to query the raw datasets** even if you suspect a mart is wrong. File a
   `KB finding:` task instead — that's how the fix reaches everyone.
 - **Don't paste a number from a past session and ask Claude to extend the analysis.** Definitions
@@ -454,57 +607,95 @@ State them and you'll usually get a number on the first pass.
 Do this the same day they leave or change roles. Access nobody remembers granting is the whole
 problem.
 
-1. Remove from `gcp-claude-data-users@cafezupas.com`. Once the group is in use this revokes both
-   BigQuery grants at once — the reason it exists.
-2. Remove any individual IAM bindings. **Check `scratch` especially** — as of 2026-07-28 it still
-   carries four per-person WRITER grants (`dgetz`, `drobins`, `jelgie`, `thood`) predating the
-   group, so don't assume group removal covered it.
-3. Remove from the Asana **Claude Data** board.
-4. Deactivate the Claude seat.
-5. Check the query log for anything unexpected in their last 30 days — a good habit, not an
+Because grants are per-person (§3.1), there are **two** IAM removals — miss either one and access
+partially survives.
+
+1. **Remove `roles/bigquery.jobUser`** on project `marketing-data-442316` (GCP → IAM). Without this
+   they can't run any query, even with dataset access.
+2. **Remove `roles/bigquery.dataViewer`** on dataset `claude` (BigQuery → `claude` → Sharing →
+   Permissions).
+3. **Update the access table in §3.1** so the list stays honest.
+4. Deactivate the Claude seat. (No Asana step — the board is company-wide.)
+5. Check `scratch` while you're in there. It carries four per-person WRITER grants
+   (`dgetz`, `drobins`, `jelgie`, `thood`) that predate this runbook; nobody should need write
+   access (§3.4), so clear any that belong to the departing person.
+6. Check the query log for anything unexpected in their last 30 days — a good habit, not an
    accusation.
-6. If they built anything worth keeping, get it into the repo *before* the account goes away.
+7. If they built anything worth keeping, get it into the repo *before* the account goes away.
+
+```bash
+# 1 and 2, if you prefer the CLI
+gcloud projects remove-iam-policy-binding marketing-data-442316 \
+  --member="user:departing@cafezupas.com" \
+  --role="roles/bigquery.jobUser"
+```
+
+```sql
+-- 2, via SQL DCL
+revoke `roles/bigquery.dataViewer`
+on schema `marketing-data-442316`.claude
+from "user:departing@cafezupas.com"
+```
 
 ---
 
-## 10. Known gaps to check before you onboard anyone
+## 10. Scope and gaps — what to tell them is in and out
 
-Verify these are still true; they were as of 2026-07-28.
+Verified live 2026-07-29. Re-check before onboarding; this layer is moving fast.
 
-- **🛑 Nothing in `claude` is authorized yet.** All eight views are plain views reaching into
-  `sales_ops` and `sessionM`, and neither source dataset has an authorized-view or
-  authorized-dataset entry. A user provisioned per §3.2–§3.3 hits a permission error on every
-  object. **Do §3.3a first.** This is the single blocker for onboarding anyone.
-- **`claude` is a rolling 2-year window, and the truncation is silent.** Both `claude.order_customer`
-  and `claude.order_lines` filter
-  `>= date_trunc(date_sub(current_date, interval 2 year), year)` — currently **2024-01-01**. A
-  question about 2023 returns **zero rows, not an error**, which reads as "no sales" rather than
-  "outside your window." Tell every new user this explicitly, and check it first whenever someone
-  reports a suspiciously empty result. The steward querying `sales_ops` directly sees the full
-  history, so this discrepancy will come up.
-- **`claude.order_lines` renames `BusinessDate` → `business_date`.** So `claude` users get the
-  consistent spelling while `sales_ops` still has the old one. Good for users; means SQL copied from
-  the skill (which documents `sales_ops`) needs the column name adjusted. The pending rename
-  backlog item is effectively already true for `claude` consumers.
-- **`store_info` has no `claude` equivalent.** README lists `sales_ops.store_info` as approved;
-  it isn't in `claude`. Store-attribute questions (name, state, timezone) are out of reach for a
-  standard user until a view exists. `order_customer` and `order_lines` do carry `store_id` and
-  `store_name`, which covers most practical needs.
-- **`order_sequence` has no `claude` equivalent** either — so first-time vs repeat, recency, and
-  lifetime order counts are out of scope for a standard user.
-- **`braze` is not covered at all.** README lists `braze.*` (69 tables) as approved and there's a
-  full `braze-campaigns` skill, but no `claude` equivalent and no grant. Campaign/email/SMS
-  questions are out of scope for a standard user. See §3.6.
-- **Loyalty *is* covered** — the six `loyalty_*` views are live (built 2026-07-28). Note the
-  unresolved `store_id` → Brink store number mapping, so store-level loyalty reporting isn't
-  possible yet.
-- **`order_lines` still uses `BusinessDate`**, not `business_date`. Rename pending.
-- **`pulse.orders` fan-out** means one `brink_order_id` can appear twice until the next full
-  rebuild. Fix written, not deployed.
-- **A repo commit is not a deployment.** Pushing a build script doesn't refresh the mart. Check
-  `max(business_date)` before trusting a table you just changed.
-- **`is_catering` doesn't flag catering-only SKUs** (e.g. `Ultimate Grilled Cheese Box` is
-  `false`). Relevant if the new person's first project is catering.
+### In scope today
+
+| Domain | Views | Notes |
+|---|---|---|
+| Orders, sales, channels, customers | `claude.order_customer` | One row per order |
+| Menu mix, items, modifiers, combos | `claude.order_lines` | One row per line element |
+| Order sequencing + lifetime customer metrics | folded into `claude.order_customer` | See below |
+| Loyalty — points, offers, tiers, campaigns | `claude.loyalty_*` (6 views) | Live since 2026-07-28 |
+
+**`order_customer` now carries the sequencing and lifetime columns**, so there's no separate
+`order_sequence` view to grant or explain. Folded in: `customer_order_count`,
+`days_since_prev_order` (from `sales_ops.order_sequence`); `lifetime_order_count`,
+`lifetime_catering_order_count`, `lifetime_guest_order_count`, `lifetime_net_sales`,
+`lifetime_gross_sales`, `lifetime_avg_check`, `first_order_date`, `last_order_date`,
+`days_since_last_order`, `customer_tenure_days` (from `sales_ops.customer_attribute`); plus
+`account_type` (from `claude.loyalty_user.member_program`). First-time vs repeat, recency, and LTV
+questions all work from the one view.
+
+### Not in scope yet
+
+- **Campaigns / email / SMS.** `braze` is authorized as a source but the `claude` braze views aren't
+  built yet. Coming soon. Until then, say so plainly rather than letting someone discover it.
+- **Store attributes** beyond `store_id` and `store_name` — no `store_info` view. State, timezone,
+  and other attributes aren't reachable. Covers most practical needs already.
+- **Store-level loyalty reporting** — the SessionM `store_id` → Brink store number mapping is
+  unresolved.
+
+### Gotchas to state up front
+
+- **History starts 2023-01-01, and truncation is silent.** Both order views filter
+  `>= date_trunc(date_sub(current_date, interval 3 year), year)`. A 2022 question returns **zero
+  rows, not an error** — reads as "no sales." Check this first on any suspiciously empty result. The
+  steward querying `sales_ops` sees full history, so expect numbers that don't reconcile with a
+  user's.
+- **`revenue_category` in `claude` is not the same as in `sales_ops`.** The view overrides it:
+  `case when is_catering = true then 'Catering' else revenue_category end`. So for `claude` users,
+  `revenue_category = 'Catering'` and `is_catering = true` are equivalent — the documented
+  superset/subset gotcha is collapsed away. This is a *simplification for users*, but it means a
+  steward query on `sales_ops` and a user query on `claude` can legitimately split catering
+  differently. Know which side you're on before you call one wrong.
+- **Zero doesn't always mean zero.** The sequencing and lifetime columns are `coalesce(…, 0)`, so an
+  unidentified order shows `customer_order_count = 0` and `lifetime_order_count = 0`. That means
+  "no customer attached," not "a customer with no orders." Filtering `customer_order_count = 1` for
+  first-time orders is right; treating `0` as a real count is not.
+- **`order_lines` exposes `business_date`** (renamed from `BusinessDate`). `claude` users get the
+  consistent spelling; SQL copied from the skill, which documents `sales_ops`, needs adjusting.
+- ~~`pulse.orders` fan-out duplicating orders~~ — **resolved 2026-07-29** by the full-history
+  rebuild. Spot-checked through the view: June 2026 returns 713,575 rows = 713,575 distinct
+  `brink_order_id`, 0 duplicates. One row per order holds.
+- **A repo commit is not a deployment.** Pushing a build script doesn't refresh the mart or redeploy
+  a view. Check `max(business_date)` before trusting something you just changed.
+- **`is_catering` doesn't flag catering-only SKUs** (e.g. `Ultimate Grilled Cheese Box` is `false`).
+  Relevant if the new person's first project is catering.
 
 ---
 

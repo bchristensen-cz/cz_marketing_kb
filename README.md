@@ -43,8 +43,12 @@ sql/                  Build scripts for data marts + validated query templates
 
 ## Approved tables
 
+> **Which dataset can you read?** Standard access is `dataViewer` on the **`claude` dataset only** — `sales_ops` returns `Access Denied` for everyone but the steward. If that's you, use `claude.order_customer` and `claude.order_lines` (views over the `sales_ops` tables below) and read `data_dictionaries/claude.order_customer.md` first: the views restrict history to a rolling 3 years, redefine `revenue_category`, and fold in the `order_sequence` / `customer_attribute` columns with `coalesce(…, 0)` traps. The `sales_ops` rows below document the canonical definitions that both sides share.
+
 | Table | Grain | Use for |
 |---|---|---|
+| `marketing-data-442316.claude.order_customer` | 1 row per order | **Standard users' order table.** Everything below plus sequencing, lifetime metrics, `account_type` |
+| `marketing-data-442316.claude.order_lines` | 1 row per line element | **Standard users' line table.** Exposes `business_date` (renamed from `BusinessDate`) |
 | `marketing-data-442316.sales_ops.order_customer` | 1 row per order | Sales, orders, channels, customers, loyalty |
 | `marketing-data-442316.sales_ops.order_lines` | 1 row per line element | Menu mix, items, modifiers, combos |
 | `marketing-data-442316.sales_ops.order_sequence` | 1 row per identified-person order | Order sequencing, first-time vs repeat, recency, lifetime counts |

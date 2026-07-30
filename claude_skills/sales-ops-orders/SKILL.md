@@ -24,6 +24,62 @@ Project: `marketing-data-442316`. The four approved tables for order/sales analy
 
 Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_ops.order_lines.md`, `sales_ops.order_sequence.md`, `sales_ops.customer_attribute.md`. Read them before writing non-trivial queries.
 
+## 🛑 First: which dataset can you actually read? (new 2026-07-29)
+
+**Most users cannot read `sales_ops` at all.** Standard access is `roles/bigquery.dataViewer` on the **`claude` dataset only** — the curated interface layer of read-only views. The steward has direct `sales_ops` access; nobody else does.
+
+So before writing a query, know which side you're on:
+
+| If your access is | Query | Notes |
+|---|---|---|
+| `claude` dataset only (**standard user**) | `claude.order_customer`, `claude.order_lines`, `claude.loyalty_*` | Views over `sales_ops` / `sessionM`. Read the differences below |
+| `sales_ops` direct (**steward only**) | `sales_ops.*` as documented throughout this skill | Full history, unmodified columns |
+
+**How to tell:** if `select 1 from marketing-data-442316.sales_ops.order_customer limit 1` returns `Access Denied`, you're a standard user — use the `claude` views. Don't treat that error as a broken setup; it's the intended wall.
+
+### The `claude` views are not byte-identical to their `sales_ops` parents
+
+Three differences, each of which will make a `claude` answer disagree with a `sales_ops` answer. **Say which dataset you queried whenever a number is being compared to someone else's.**
+
+1. **History is a rolling 3 years, and truncation is silent.** Both order views filter `business_date >= date_trunc(date_sub(current_date, interval 3 year), year)` — **2023-01-01** as of 2026-07-29. A question about 2022 returns **zero rows, not an error**, which presents as "no sales." Before reporting an empty or surprisingly small result, confirm the requested range sits inside the window, and state the floor when the question reaches near it.
+
+2. **`revenue_category` is overridden in `claude`.** The view applies:
+   ```sql
+   case when oc.is_catering = true then 'Catering' else oc.revenue_category end as revenue_category
+   ```
+   So in `claude`, `revenue_category = 'Catering'` and `is_catering = true` are **equivalent**, and the documented superset/subset gotcha is collapsed away. In `sales_ops` they differ — `is_catering` is a superset (48 extra orders in June 2026 flagged catering on In-Store/Digital destinations). Consequence: a channel breakdown from `claude` assigns those orders to Catering; the same breakdown from `sales_ops` leaves them in In-Store/Digital. **Neither is wrong. They are different definitions.** Don't "fix" one to match the other — state which you used.
+
+3. **`claude.order_lines` exposes `business_date`**, renamed from `BusinessDate`. Nice for consistency, but SQL copied out of this skill (which documents `sales_ops`) needs the column name adjusted when run against `claude`.
+
+### `claude.order_customer` folds in the sequencing and lifetime columns
+
+There is **no `claude.order_sequence` and no `claude.customer_attribute`.** They aren't missing — the view left-joins both onto the order grain, so a standard user gets sequencing, first-time-vs-repeat, recency and LTV from the single view.
+
+Folded in: `customer_order_count`, `days_since_prev_order` (from `order_sequence`); `lifetime_order_count`, `lifetime_catering_order_count`, `lifetime_guest_order_count`, `lifetime_net_sales`, `lifetime_gross_sales`, `lifetime_avg_check`, `first_order_date`, `last_order_date`, `days_since_last_order`, `customer_tenure_days` (from `customer_attribute`); plus `account_type` (from `claude.loyalty_user.member_program`).
+
+> **⚠️ Zero does not mean zero — the most likely way to get a wrong number off this view.** Five of those columns are wrapped in `coalesce(…, 0)`: `customer_order_count`, `days_since_prev_order`, `lifetime_order_count`, `lifetime_catering_order_count`, `lifetime_guest_order_count`. **`0` means "no matching upstream row," not "a customer with zero orders"** — no such customer exists.
+>
+> The two joins produce zeros on **different populations** (measured June 2026, 713,575 orders):
+>
+> - **`customer_order_count = 0` ⟺ `mapped_cust_id is null`** — exact, both directions, 330,944 orders (46.4%). A reliable "unidentified order" test.
+> - **`lifetime_order_count = 0` is broader** — 367,205 orders (51.5%). It means "no `customer_attribute` row": every unidentified order, *plus* all 35,553 kiosk orders, most `internal`, most store-1111 person orders, and 231 aggregator. **36,261 orders have a valid sequence number but zero lifetime values.**
+>
+> Rules:
+>
+> - First-time orders: `customer_order_count = 1` ✅ (safe — 0 is the unidentified bucket)
+> - Repeat orders: `customer_order_count > 1` ✅ (not `>= 1`)
+> - **Never** `avg(lifetime_order_count)` across all rows — the zeros crush the mean. Filter `lifetime_order_count > 0` **and** `customer_type = 'person'` first.
+> - **Never** present `lifetime_order_count = 0` as a customer segment. It's the unidentified-and-non-person population, not a behavioral cohort.
+> - Don't reconcile the two counts against each other — different joins, different population rules.
+>
+> The FLOAT columns (`lifetime_net_sales`, `lifetime_gross_sales`, `lifetime_avg_check`) and the DATE columns are **not** coalesced — they stay NULL, so `avg()` over them skips absent customers correctly. That inconsistency is its own trap: two adjacent columns describing the same absent customer, one reading `0` and one reading `NULL`.
+>
+> Also: `customer_attribute` is built **as of yesterday**, so lifetime values exclude today's orders and won't tie to a `count(*)` you compute yourself.
+
+Full column docs: [`data_dictionaries/claude.order_customer.md`](../../data_dictionaries/claude.order_customer.md).
+
+Everything else in this skill — canonical metric definitions, the `customer_type` rule, the pre-query clarification protocol, store 1111, the combo taxonomy — **applies unchanged to the `claude` views.** They pass those columns through untouched.
+
 ## `sales_ops.customer_attribute` — the customer-grain table (new 2026-07-29)
 
 **Reach for this before writing your own `group by mapped_cust_id`.** If a question is about
@@ -511,6 +567,11 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 
 ## Gotchas checklist (scan before answering)
 
+- **Know which dataset you can read before you write SQL.** Standard users have the **`claude` dataset only**; `sales_ops` returns `Access Denied` for them and that is intended, not a broken setup. See the `claude` interface-views section near the top.
+- **`claude` history starts 2023-01-01 and truncates silently.** The order views filter `business_date >= date_trunc(date_sub(current_date, interval 3 year), year)`. An older range returns **zero rows, not an error** — which reads as "no sales." Check the window before reporting an empty result.
+- **`revenue_category` means something different in `claude` than in `sales_ops`.** The `claude` view forces it to `'Catering'` whenever `is_catering = true`, making the two equivalent; in `sales_ops`, `is_catering` is a superset (48 extra orders in June 2026). Channel breakdowns from the two datasets will legitimately disagree — state which you queried instead of reconciling them.
+- **In `claude.order_customer`, `0` in a folded count column means "no upstream row," not zero orders.** `customer_order_count = 0` ⟺ unidentified (46.4% of June 2026 orders); `lifetime_order_count = 0` is broader at 51.5% — it also catches all kiosk, most internal, and most store-1111 orders, so 36,261 orders have a real sequence number but zero lifetime. Never `avg()` a lifetime column unfiltered; never present `lifetime_order_count = 0` as a cohort. The FLOAT/DATE lifetime columns are *not* coalesced and stay NULL, so the same absent customer reads `0` in one column and `NULL` in the next. Details in `data_dictionaries/claude.order_customer.md`.
+- **There is no `claude.order_sequence` or `claude.customer_attribute`** — both are folded into `claude.order_customer`. Don't tell a user the data is unavailable; it's on the order view.
 - **Partition columns differ by table**: `order_customer.business_date` and `order_sequence.business_date` vs `order_lines.BusinessDate`. A rename of `order_lines` is planned; until then, spell both correctly or the query fails or scans everything.
   - **It's the underscore, not the capitals.** BigQuery column references are case-insensitive, so `ol.businessdate` resolves fine against `BusinessDate`. The failure mode is mixing the two *names*: writing `BusinessDate` against `order_customer` gives `Unrecognized name: BusinessDate; Did you mean business_date?` (observed in an analyst MCP session 2026-07-27). Read the error literally — it names the table's real column.
 - **`order_lines` has no `order_id`** — this now leads the gotcha list because it is the single most-repeated error in the query log: `Name order_id not found inside ol`, hit three more times on 2026-07-27/28 and **again on 2026-07-28 at 09:12** by the same analyst. The order key is `brink_order_id` on every one of these tables. The 2026-07-28 instance selected `ol.order_id` in a CTE and then joined `oc.brink_order_id = ol.order_id` — i.e. the correct column name was already in the query, on the other side of the join. Read your own join predicate before selecting.

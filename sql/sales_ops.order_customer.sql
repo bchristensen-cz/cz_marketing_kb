@@ -422,7 +422,7 @@ bo.Id as brink_order_id
 , timestamp(case when date_diff(date(bo.ClosedTime), bo.BusinessDate, day) > 0 then coalesce(po.promise_time, bo.OpenedTime) else bo.ClosedTime end , s.timezone_name) as order_timestamp_utc
 , bo.FKStoreId as store_id
 , s.store_name
-, s.store_state as state
+, s.store_state   -- '2026-07-30' renamed from `state` for consistency with order_lines and store_info
 , bd.name as destination
 , po.`source`
 , case

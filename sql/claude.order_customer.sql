@@ -60,34 +60,34 @@ select
 -- qualify added to that view 2026-07-29 and verified live (1,775,284 rows = 1,774,963 distinct
 -- external ids + 321 NULL). Without it this view fans out.
 , lu.member_program as account_type
--- "Market" = store_state (steward decision 2026-07-30). There is no market/region/DMA/metro
--- column anywhere in sales_ops; denormalising state here means market questions need no join.
+-- NO store_info join here. "Market" = store_state, and it arrives free through `oc.*` —
+-- sales_ops.order_customer already joins store_info in its own build script.
 --
--- ⚠️ REDUNDANT — pending steward decision. `oc.state` (from `oc.*`) is ALREADY the store state
--- and is already documented in data_dictionaries/sales_ops.order_customer.md line 58. Verified
--- 2026-07-30 over 2026-05-03 → 2026-06-27: 1,326,905 orders, **zero** disagreements between
--- `state` and `store_state`, identical nulls (the same 1,154 store-1111/999 orders). So this
--- join buys a duplicate column at the cost of a join against a ~50M-row view.
+-- History, because it churned inside one day (2026-07-30) and the scar tissue is the useful
+-- part:
+--   1. A store_info join was added here to expose store_state, on the belief that no market
+--      dimension existed. An INFORMATION_SCHEMA sweep for %market%/%region%/%dma%/%metro%
+--      had found nothing.
+--   2. It was then found that order_customer ALREADY carried the state, under the column
+--      name `state` — documented all along. The join was a pure duplicate: 1,326,905 orders
+--      over 2026-05-03 → 2026-06-27, zero disagreements, identical nulls.
+--   3. The join was dropped and the base column renamed `state` -> `store_state`, so every
+--      table now agrees: order_customer, order_lines, store_info.
 --
--- The cheaper equivalent, if the steward wants it, is no join at all:
---     , oc.state as store_state
+-- Lesson: the dimension existed the whole time under a name nobody searched for. Grep the
+-- dictionaries for the CONCEPT, not just the warehouse for the WORD. This is now step 1 of
+-- the ask-a-data-question skill.
 --
--- Left in place deliberately for now — a redeploy dropping the join was proposed and declined
--- 2026-07-30. Note `order_lines` is a genuinely different case: it has no state column at all
--- (only store_id / store_name), so the join in sql/claude.order_lines.sql IS required.
+-- ⚠️ Deployment trap: this view is `oc.* except(...)`, and BigQuery expands and FREEZES `*`
+-- at creation time. After the base rename the view still advertised `state` in
+-- INFORMATION_SCHEMA.COLUMNS while `select oc.state` errored and `select oc.store_state`
+-- worked — metadata and behaviour disagreed. A `create or replace view` with identical text
+-- is required to refresh it. Redeploy every `select *` view after any base-column rename.
 --
--- Root-cause lesson worth keeping: the "market" dimension was documented and available the
--- whole time under a name nobody searched for. The INFORMATION_SCHEMA sweep for
--- %market%/%region%/%dma%/%metro% missed it, and so did two people. Grep the dictionaries for
--- the *concept*, not just the warehouse for the *word* — this is now step 1 of the
--- ask-a-data-question skill.
---
--- ⚠️ This is a LEFT join and store_info has no row for store 1111 or 999, so both get a NULL
--- store_state. A market breakdown without `store_id <> 1111` therefore grows a phantom tenth
--- market — 1,154 orders / $117,196 over 2026-05-03 → 2026-06-27 — presenting as an unnamed
--- NULL group that reads like a data defect rather than the test store. The exclusion filter is
--- load-bearing for geography, not just for totals.
-, si.store_state
+-- ⚠️ store_state is NULL for stores 1111 and 999 (absent from store_info). A market
+-- breakdown without `store_id <> 1111` grows a phantom tenth market — 1,154 orders /
+-- $117,196 over 2026-05-03 → 2026-06-27 — presenting as an unnamed NULL group that reads
+-- like a data defect rather than the test store.
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os
 	on os.brink_order_id = oc.brink_order_id
@@ -95,8 +95,6 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 		on ca.mapped_cust_id = oc.mapped_cust_id
 			left join `marketing-data-442316`.claude.loyalty_user lu
 			on lu.sm_external_user_id = oc.mapped_cust_id
-				left join `marketing-data-442316`.sales_ops.store_info si
-				on si.store_id = oc.store_id
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
 ;

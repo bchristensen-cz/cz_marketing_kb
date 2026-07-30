@@ -54,9 +54,8 @@ store count.
 
 ## You usually don't need to join this view
 
-The market dimension is carried directly on both order views, but **under two different
-names** — `claude.order_customer.state` and `claude.order_lines.store_state`. Check which
-view you're on before writing the column. Either way, most market questions need no join:
+The market dimension is carried directly on both order views as **`store_state`** — the
+same name on every table since 2026-07-30. Most market questions need no join at all:
 
 ```sql
 select
@@ -79,10 +78,12 @@ order by
 > sitting in a NULL group that reads like a data problem rather than the test store.
 > Always keep the filter, and `coalesce` the label so no group ships unnamed.
 >
-> Note `claude.order_customer` briefly carried a `store_state` column from a join to this
-> table; it was removed 2026-07-30 after being verified to duplicate the pre-existing
-> `state` column exactly (1,326,905 orders, zero disagreements). **`oc.store_state` does
-> not exist — use `oc.state`.**
+> Naming history, because it churned in a single day: `order_customer` originally carried
+> the state as **`state`**; a join briefly added a duplicate `store_state`; the join was
+> removed once the two were verified identical (1,326,905 orders, zero disagreements); then
+> the base column itself was renamed to **`store_state`** for consistency with `order_lines`
+> and this table. **The settled answer is `store_state` everywhere. `oc.state` no longer
+> exists.**
 
 Reach for `claude.store_info` when you need the attributes that aren't denormalised onto
 the order views — city, zip, address, open date, comp status, lat/long, timezone.

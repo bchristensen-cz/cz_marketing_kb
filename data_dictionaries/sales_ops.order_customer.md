@@ -55,7 +55,7 @@
 |---|---|---|
 | `store_id` | INTEGER | FK to `sales_ops.store_info`. **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales/order metrics. No exceptions (steward rule 2026-07-23). |
 | `store_name` | STRING | Store name (denormalized). |
-| `state` | STRING | Store state. Current footprint: Utah (30 stores), Arizona (14), Minnesota (12), Nevada (9), Wisconsin (8), Idaho (7), Illinois (6), Ohio (3), Texas (1). |
+| `store_state` | STRING | Store state — **this is "market"**; there is no market/region/DMA/metro column anywhere. Full state name (`Utah`, not `UT`). Stores with orders in the window: Utah (30), Arizona (14), Minnesota (12), Nevada (9), Wisconsin (8), Idaho (7), Illinois (6), Ohio (3), Texas (1). **⚠️ Renamed from `state` on 2026-07-30** for consistency with `order_lines` and `store_info` — `oc.state` now fails with `Name state not found inside oc`. **NULL for stores absent from `store_info`** (1111, 999), so `store_id <> 1111` is load-bearing for geography. |
 | `destination` | STRING | Raw Brink destination. Common values: To Stay, Takeout, DoorDash, Online Takeout, Drive Thru, Good Life Lane, UberEats, CZ Delivery, GrubHub, Catering Online Delivery/Takeout, Postmates, Fundraiser, EZ Cater Delivery/Takeout. |
 | `source` | STRING | Raw pulse order source. NULL for in-store orders. |
 | `revenue_category` | STRING | **Canonical channel rollup**: `In-Store`, `Digital`, `Third_Party`, `Catering`, `Fundraiser`, `Other`. Derived from `destination`. |

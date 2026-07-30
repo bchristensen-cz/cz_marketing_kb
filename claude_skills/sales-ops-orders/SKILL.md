@@ -57,14 +57,11 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
 
 3. **`claude.order_lines` is now a plain passthrough.** It used to rename the partition column and left-join `store_info`; the 2026-07-30 full-history rebuild moved both upstream, so the view is `select *` over `sales_ops.order_lines` with the 3-year history filter. SQL written against either side is now identical apart from that floor.
 
-4. **🛑 The two order views use DIFFERENT column names for the market dimension.** This is the single easiest way to write a query that fails, or worse, to conclude the dimension is missing:
+4. **The market dimension is `store_state` on every table** — `sales_ops.order_customer`, `sales_ops.order_lines`, `claude.order_customer`, `claude.order_lines` and `store_info` all agree (settled 2026-07-30). Full state name (`Utah`, not `UT`). No join needed for a market breakdown on either side.
 
-   | View | Market column | Why |
-   |---|---|---|
-   | `claude.order_customer` | **`state`** | It was always there, inherited from `sales_ops.order_customer` via `oc.*` |
-   | `claude.order_lines` | **`store_state`** | `order_lines` had no state column at all; one was added natively in the 2026-07-30 rebuild |
-
-   `oc.store_state` **does not exist** — a redundant join that briefly created it was removed 2026-07-30 after it was verified to duplicate `state` exactly (1,326,905 orders, zero disagreements, identical nulls). Both columns hold the full state name (`Utah`, not `UT`), so results are directly comparable across the two views; only the name differs.
+   > **⚠️ `order_customer.state` is GONE.** It was renamed to `store_state` on 2026-07-30 for consistency. Any saved query using `oc.state` now fails with `Name state not found inside oc`. The column had been documented under the old name, so this will hit saved work.
+   >
+   > **Deployment trap worth knowing** (hit 2026-07-30): `claude.order_customer` is defined as `oc.* except(...)`, and BigQuery **expands and freezes `*` at view-creation time**. After the base-table rename the view kept advertising `state` in `INFORMATION_SCHEMA.COLUMNS` while `select oc.state` errored and `select oc.store_state` worked — i.e. the schema metadata and the actual behaviour disagreed. **A `create or replace view` with identical text is required to refresh it.** If you rename a column on a base table, redeploy every `select *` view over it, then check `INFORMATION_SCHEMA` rather than assuming.
 
    There is also a **`claude.store_info`** view for the attributes that aren't denormalised (city, zip, address, open date, comp status, lat/long, timezone); it carries a `market` column aliasing `store_state`, and drops three non-store rows. See [`data_dictionaries/claude.store_info.md`](../../data_dictionaries/claude.store_info.md).
 

@@ -124,13 +124,15 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="primary" id="run">Run report</button>
     <button id="toggle">Hide SQL</button>
-    <button id="csv" disabled>Download CSV</button>
   </div>
   <pre id="sql">-- pick at least one item</pre>
 </div>
 
 <div class="card" id="out" style="display:none">
-  <h2>Results</h2>
+  <div class="hd">
+    <h2 style="margin:0">Results <span class="muted" id="rowcount" style="font-weight:400"></span></h2>
+    <button id="csv" disabled>Download CSV</button>
+  </div>
   <div id="res"></div>
   <div class="chartbox"><canvas id="cv"></canvas></div>
 </div>
@@ -359,10 +361,13 @@ document.getElementById('run').onclick=async()=>{
   const btn=document.getElementById('run'); btn.disabled=true; btn.textContent='Running…';
   document.getElementById('out').style.display='block';
   document.getElementById('res').innerHTML='<div class="muted">Querying BigQuery…</div>';
+  document.getElementById('rowcount').textContent='';
+  document.getElementById('csv').disabled=true;
   try{
     const {cols,rows}=await bq(sql);
     lastCols=cols; lastRows=rows; sortCol=null; sortDir=-1; drawTable();
     document.getElementById('csv').disabled=!rows.length;
+    document.getElementById('rowcount').textContent=rows.length?`· ${rows.length.toLocaleString()} row${rows.length>1?'s':''}`:'';
     if(chart){ chart.destroy(); chart=null; }
     if(rows.length){
       const vc=cols.find(c=>c.includes('sales'))||cols[1];
@@ -375,11 +380,11 @@ document.getElementById('run').onclick=async()=>{
         const m=new Map();
         rows.forEach(r=>{ const k=r[lbls[0]]||'(blank)'; m.set(k,(m.get(k)||0)+(Number(r[vc])||0)); });
         labels=[...m.keys()]; data=[...m.values()];
-        note=` — chart totals by ${lbls[0].replace(/_/g,' ')}; per-item detail is in the table and CSV`;
+        note=`Chart totals by ${lbls[0].replace(/_/g,' ')} — per-item detail is in the table above and in the CSV.`;
       } else {
         labels=rows.map(r=>r[cols[0]]||'(blank)'); data=rows.map(r=>Number(r[vc])||0);
       }
-      if(note) document.getElementById('res').insertAdjacentHTML('beforeend',`<div class="muted" style="margin-top:10px">${rows.length} rows${note}</div>`);
+      if(note) document.getElementById('res').insertAdjacentHTML('beforeend',`<div class="muted" style="margin-top:10px">${note}</div>`);
       chart=new Chart(document.getElementById('cv'),{type:'bar',
         data:{labels,datasets:[{label:vc.replace(/_/g,' '),data,backgroundColor:'#378ADD'}]},
         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},

@@ -54,8 +54,9 @@ store count.
 
 ## You usually don't need to join this view
 
-`store_state` is now carried directly on **`claude.order_customer`** and
-**`claude.order_lines`** (both 2026-07-30), so most market questions need no join at all:
+The market dimension is carried directly on both order views, but **under two different
+names** — `claude.order_customer.state` and `claude.order_lines.store_state`. Check which
+view you're on before writing the column. Either way, most market questions need no join:
 
 ```sql
 select
@@ -72,12 +73,16 @@ order by
   item_gross_sales desc
 ```
 
-> **⚠️ `store_state` is NULL for store 1111 and 999 on both order views.** They're joined
-> with a `left join` against a `store_info` that has no row for them, so without
-> `store_id <> 1111` a market breakdown grows a phantom tenth market — 1,154 orders and
-> **$117,196** over 2026-05-03 → 2026-06-27, sitting in a NULL group that reads like a
-> data problem rather than the test store. Always keep the filter, and `coalesce` the
-> label so no group ships unnamed.
+> **⚠️ The market column is NULL for stores 1111 and 999 on both order views** — this
+> table has no row for either. Without `store_id <> 1111` a market breakdown grows a
+> phantom tenth market: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27,
+> sitting in a NULL group that reads like a data problem rather than the test store.
+> Always keep the filter, and `coalesce` the label so no group ships unnamed.
+>
+> Note `claude.order_customer` briefly carried a `store_state` column from a join to this
+> table; it was removed 2026-07-30 after being verified to duplicate the pre-existing
+> `state` column exactly (1,326,905 orders, zero disagreements). **`oc.store_state` does
+> not exist — use `oc.state`.**
 
 Reach for `claude.store_info` when you need the attributes that aren't denormalised onto
 the order views — city, zip, address, open date, comp status, lat/long, timezone.

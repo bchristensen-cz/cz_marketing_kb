@@ -79,15 +79,23 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     <div><label>To</label><input type="date" id="d2" value="2026-06-27"></div>
     <div><label>Break out by</label><select id="dim">
       <option value="market">Market (= store state)</option>
-      <option value="city">Store city</option>
       <option value="store">Store</option>
-      <option value="item">Item only (no geography)</option>
+      <option value="item">Item name</option>
+      <option value="itemtype">Item type</option>
+      <option value="revcenter">Revenue center</option>
       <option value="month">Month</option>
     </select></div>
     <div><label>Catering</label><select id="cat">
       <option value="excl">Exclude catering orders</option>
       <option value="incl">Include catering</option>
       <option value="only">Catering only</option>
+    </select></div>
+    <div><label>Item type</label><select id="itype">
+      <option value="">All item types</option>
+    </select></div>
+    <div><label>Line shapes counted</label><select id="lshape">
+      <option value="std">Items and modifiers (excludes discounts, fees, tips, gift cards)</option>
+      <option value="itemonly">Item lines only</option>
     </select></div>
   </div>
 
@@ -126,7 +134,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 const TOOL='mcp__f3b27eab-feb3-4d29-9559-bc8d966e8419__execute_sql_readonly';
 const PROJ='marketing-data-442316';
 const COMBO_RC=['Sandwiches','Soups','Salads'];
-let picked=[], comboMode='split', chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[];
+let picked=[], comboMode='split', chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[], lastCandTypes=[];
 
 function esc(s){return String(s).replace(/'/g,"\\'");}
 function money(n){return n==null?'—':'$'+Math.round(n).toLocaleString();}
@@ -148,11 +156,19 @@ async function bq(sql){
 
 function eligible(){return picked.filter(p=>COMBO_RC.includes(p.rc));}
 
+function syncItemTypes(){
+  const sel=document.getElementById('itype'), cur=sel.value;
+  const seen=[...new Set([...picked.map(p=>p.it), ...lastCandTypes])].filter(Boolean).sort();
+  sel.innerHTML='<option value="">All item types</option>'+seen.map(t=>`<option value="${t}">${t}</option>`).join('');
+  sel.value=seen.includes(cur)?cur:'';
+}
+
 function renderChips(){
   const el=document.getElementById('chips');
   if(!picked.length){el.innerHTML='<span class="muted">Nothing selected yet.</span>';}
-  else el.innerHTML=picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <span data-i="${i}">&times;</span></span>`).join('');
+  else el.innerHTML=picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <em style="font-style:normal;opacity:.7">${p.it||'?'}</em> <span data-i="${i}">&times;</span></span>`).join('');
   el.querySelectorAll('span[data-i]').forEach(s=>s.onclick=()=>{picked.splice(+s.dataset.i,1);renderChips();});
+  syncItemTypes();
   const note=document.getElementById('combonote');
   const el2=eligible();
   if(!picked.length) note.innerHTML='';
@@ -166,12 +182,15 @@ function buildSql(){
   const d1=document.getElementById('d1').value,d2=document.getElementById('d2').value;
   const dim=document.getElementById('dim').value,cat=document.getElementById('cat').value;
   if(!picked.length||!d1||!d2){document.getElementById('sql').textContent='-- select at least one item and a date range';return '';}
-  const dimSql={market:"coalesce(ol.store_state, '(unmapped)')",city:'ol.store_name',store:'ol.store_name',item:'ol.item_name',month:'date_trunc(ol.business_date, month)'}[dim];
-  const dimAs={market:'market',city:'store',store:'store',item:'item_name',month:'month'}[dim];
+  const dimSql={market:"coalesce(ol.store_state, '(unmapped)')",store:'ol.store_name',item:'ol.item_name',itemtype:'ol.item_type',revcenter:'ol.rev_center_name',month:'date_trunc(ol.business_date, month)'}[dim];
+  const dimAs={market:'market',store:'store',item:'item_name',itemtype:'item_type',revcenter:'rev_center_name',month:'month'}[dim];
   const names=picked.map(p=>"'"+esc(p.name)+"'").join(', ');
+  const lshape=document.getElementById('lshape').value;
   const shapes=comboMode==='standalone'
     ? "and ol.line_item_type = 'item'\nand ol.composite_item_id is null"
-    : "and ol.line_item_type in ('item', 'modifier')";
+    : (lshape==='itemonly' ? "and ol.line_item_type = 'item'" : "and ol.line_item_type in ('item', 'modifier')");
+  const itype=document.getElementById('itype').value;
+  const itypef=itype ? `and ol.item_type = '${esc(itype)}'` : '-- all item types';
   const catf={excl:'and ol.is_catering = false',incl:'-- catering included',only:'and ol.is_catering = true'}[cat];
   let measures;
   if(comboMode==='split'){
@@ -197,6 +216,7 @@ and ol.store_id <> 1111
 and ol.item_name in (${names})
 and ol.rev_center_name <> 'Discount'
 and ol.item_type <> 'Discount'
+${itypef}
 ${shapes}
 ${catf}
 group by
@@ -206,7 +226,7 @@ order by
   document.getElementById('sql').textContent=sql;
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
   const cm={split:'combo split out',standalone:'standalone only',all:'combined'}[comboMode];
-  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}`;
+  document.getElementById('scope').textContent=`${picked.length} item${picked.length>1?'s':''} · ${d1} → ${d2} · ${cl} · ${cm}${itype?' · '+itype:''}`;
   return sql;
 }
 
@@ -239,17 +259,19 @@ order by
   lines desc
 limit 25`);
     msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click to add`:'no matches, widen the fragment';
+    lastCandTypes=rows.map(r=>r.item_type);
     document.getElementById('cands').innerHTML=rows.map(r=>{
       const on=picked.some(p=>p.name===r.item_name)?' on':'';
       const el=COMBO_RC.includes(r.rev_center_name)?' · combo eligible':'';
-      return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · ${r.rev_center_name} / ${r.item_type}${el}</span></div>`;
+      return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}" data-it="${r.item_type}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · ${r.rev_center_name} / <b>${r.item_type}</b>${el}</span></div>`;
     }).join('');
     document.querySelectorAll('.cand').forEach(c=>c.onclick=()=>{
       const n=c.dataset.n;const i=picked.findIndex(p=>p.name===n);
       if(i>=0){picked.splice(i,1);c.classList.remove('on');}
-      else{picked.push({name:n,rc:c.dataset.rc});c.classList.add('on');}
+      else{picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});c.classList.add('on');}
       renderChips();
     });
+    syncItemTypes();
   }catch(e){msg.textContent='';document.getElementById('cands').innerHTML=`<div class="err">${e.message}</div>`;}
 };
 
@@ -257,7 +279,7 @@ document.querySelectorAll('#combo button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#combo button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');comboMode=b.dataset.v;buildSql();
 });
-['d1','d2','dim','cat'].forEach(id=>document.getElementById(id).onchange=buildSql);
+['d1','d2','dim','cat','itype','lshape'].forEach(id=>document.getElementById(id).onchange=buildSql);
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('find').click();});
 document.getElementById('toggle').onclick=()=>{
   const p=document.getElementById('sql'),t=document.getElementById('toggle');

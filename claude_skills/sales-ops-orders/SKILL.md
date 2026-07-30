@@ -57,9 +57,18 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
 
 3. **`claude.order_lines` is now a plain passthrough.** It used to rename the partition column and left-join `store_info`; the 2026-07-30 full-history rebuild moved both upstream, so the view is `select *` over `sales_ops.order_lines` with the 3-year history filter. SQL written against either side is now identical apart from that floor.
 
-4. **`store_state` is carried on both order views** (added 2026-07-30) — so **market questions need no join** in `claude`, while in `sales_ops` you must join `store_info`. There is also a new **`claude.store_info`** view for the attributes that aren't denormalised (city, zip, address, open date, comp status, lat/long, timezone); it carries a `market` column aliasing `store_state`, and drops three non-store rows. See [`data_dictionaries/claude.store_info.md`](../../data_dictionaries/claude.store_info.md).
+4. **🛑 The two order views use DIFFERENT column names for the market dimension.** This is the single easiest way to write a query that fails, or worse, to conclude the dimension is missing:
 
-   > **⚠️ `store_state` is NULL for store 1111 and 999.** Both order views `left join` `store_info`, which has no row for either, so a market breakdown **without `store_id <> 1111` grows a phantom tenth market** — 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
+   | View | Market column | Why |
+   |---|---|---|
+   | `claude.order_customer` | **`state`** | It was always there, inherited from `sales_ops.order_customer` via `oc.*` |
+   | `claude.order_lines` | **`store_state`** | `order_lines` had no state column at all; one was added natively in the 2026-07-30 rebuild |
+
+   `oc.store_state` **does not exist** — a redundant join that briefly created it was removed 2026-07-30 after it was verified to duplicate `state` exactly (1,326,905 orders, zero disagreements, identical nulls). Both columns hold the full state name (`Utah`, not `UT`), so results are directly comparable across the two views; only the name differs.
+
+   There is also a **`claude.store_info`** view for the attributes that aren't denormalised (city, zip, address, open date, comp status, lat/long, timezone); it carries a `market` column aliasing `store_state`, and drops three non-store rows. See [`data_dictionaries/claude.store_info.md`](../../data_dictionaries/claude.store_info.md).
+
+   > **⚠️ The market column is NULL for stores 1111 and 999** on both views — `store_info` has no row for either. A market breakdown **without `store_id <> 1111` grows a phantom tenth market**: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
 
 ### `claude.order_customer` folds in the sequencing and lifetime columns
 

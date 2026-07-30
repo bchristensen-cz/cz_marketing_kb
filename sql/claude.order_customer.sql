@@ -38,31 +38,34 @@ select
 -- store 171, To Stay, $55.16) on cater_kim.harston@merit.com — Silver catering member,
 -- is_individual_member = false. June 2026: 343 such orders / $5,284 net / 234 accounts.
 --
--- ⚠️ JOIN KEY IS sm_external_user_id, NOT mapped_cust_id (steward 2026-07-29).
--- mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id) mixes two id spaces, so
--- joining it to loyalty_user.sm_external_user_id compares Pulse ids to SessionM ids. Measured
--- June 2026: of 287,563 pulse-identified orders, 170,160 matched a loyalty row and 7,270 of
--- those matched an account whose email disagrees with the order's — wrong people attached to
--- real orders. A further 142,440 orders carry BOTH ids, and the coalesce throws away the
--- known-good SessionM one.
+-- JOIN KEY IS mapped_cust_id, and that is correct (verified 2026-07-29 against the live
+-- deduped view). pulse_customer_id and sm_external_user_id are the SAME id space, not two:
+-- of 142,386 June orders carrying both, 142,127 (99.8%) hold an identical value. Only 259
+-- differ and just 26 of those resolve to a loyalty account either way.
 --
--- Cost of the correct key: account_type is NULL on pulse-only digital orders that never
--- scanned loyalty. That gap is real and is what the email bridge in
--- design/crm_identity_hygiene_plan.md exists to close. A NULL is recoverable; a wrong
--- attribution is not.
+-- mapped_cust_id also covers materially more: 27,953 June orders are pulse-identified with no
+-- sm_external_user_id, and the order email agrees with the matched loyalty account on 26,632
+-- of them (95.3%) — real matches, not id-range coincidence. Joining on sm_external_user_id
+-- instead silently drops all of them.
+--
+-- ⚠️ Do NOT "fix" this to sm_external_user_id on the basis of an email-mismatch count. Of the
+-- 7,568 June orders where lower(mapped_email) <> loyalty_user.email, 7,088 (93.7%) are the
+-- cater_ prefix and nothing else: sm_external_user_map strips it (regexp_replace ... r'^cater_')
+-- while loyalty_user.email retains it, so mapped_email equals email_normalized exactly. Compare
+-- against email_normalized, not email. Only 480 are genuinely different addresses, and the
+-- sm_external_user_id join carries 6,275 mismatches of its own — the key is not the cause.
 --
 -- Depends on claude.loyalty_user being ONE ROW PER sm_external_user_id — enforced by the
--- qualify added to that view 2026-07-29. Without it, 420 duplicated external ids fan this
--- view out and break order_customer's one-row-per-brink_order_id guarantee.
-, lu.member_program      as account_type
-, lu.is_catering_member  as is_catering_account
+-- qualify added to that view 2026-07-29 and verified live (1,775,284 rows = 1,774,963 distinct
+-- external ids + 321 NULL). Without it this view fans out.
+, lu.member_program as account_type
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os
 	on os.brink_order_id = oc.brink_order_id
 		left join `marketing-data-442316`.sales_ops.customer_attribute ca
 		on ca.mapped_cust_id = oc.mapped_cust_id
 			left join `marketing-data-442316`.claude.loyalty_user lu
-			on lu.sm_external_user_id = oc.sm_external_user_id
+			on lu.sm_external_user_id = oc.mapped_cust_id
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
 ;
@@ -70,14 +73,14 @@ and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year
 
 -- =====================================================================================
 -- Post-deploy validation — grain must be preserved.
--- Expect: rows = distinct brink_order_id. Any gap means a join fanned out.
+-- Expect zero rows. Any row means a join fanned out.
 -- =====================================================================================
 -- select
---   count(*)                          as rows_
--- , count(distinct v.brink_order_id)  as distinct_orders
--- , countif(v.account_type is not null) as with_account_type
--- , countif(v.is_catering_account)      as catering_account_orders
--- from `marketing-data-442316`.claude.order_customer v
+--   oc.brink_order_id
+-- , count(*) as cnt
+-- from `marketing-data-442316`.claude.order_customer oc
 -- where 1=1
--- and v.business_date between date '2026-06-01' and date '2026-06-30'
+-- group by 1
+-- having count(*) > 1
+-- order by count(*) desc
 -- ;

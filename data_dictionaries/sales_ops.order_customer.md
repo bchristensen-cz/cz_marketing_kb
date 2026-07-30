@@ -343,18 +343,28 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   flat at 49–51% Jan–Jun 2026, then steps to **56.2% in July** — driven entirely by
   `mobile_web_source` going to 48.6%. Guest checkout went live 2026-07-01.
 
-- **⚠️ `mapped_cust_id` is NOT a valid join key to `claude.loyalty_user`** (steward 2026-07-29).
-  `mapped_cust_id = coalesce(pulse_customer_id, sm_external_user_id)` mixes two id spaces, so
-  joining it to `loyalty_user.sm_external_user_id` matches **Pulse** ids against **SessionM**
-  ids. June 2026: of 287,563 pulse-identified orders, 170,160 matched a loyalty row and
-  **7,270 of those matched an account whose email disagrees with the order's email** — wrong
-  people. A further 142,440 orders hold *both* ids, and the coalesce discards the known-good
-  SessionM one.
+- **✅ `mapped_cust_id` IS the right join key to `claude.loyalty_user`** (verified 2026-07-29
+  against the live deduped view). `pulse_customer_id` and `sm_external_user_id` are the **same
+  id space**, not two — of 142,386 June orders carrying both, **142,127 (99.8%) hold an
+  identical value**. Only 259 differ, and just 26 of those resolve to a loyalty account.
 
-  **Always join on `oc.sm_external_user_id`** — the dictionary-verified 100%-match key. This
-  yields no loyalty attributes on pulse-only digital orders; that gap is real and is what the
-  email bridge in `design/crm_identity_hygiene_plan.md` exists to close. A NULL is recoverable,
-  a wrong attribution is not.
+  `mapped_cust_id` also covers materially more than `sm_external_user_id`: **27,953** June
+  orders are pulse-identified with no SessionM id, and the order email agrees with the matched
+  loyalty account on **26,632 (95.3%)** of them. Joining on `sm_external_user_id` silently
+  drops all of those.
+
+  ⚠️ **Do not "correct" this on the basis of an email-mismatch count.** Of the 7,568 June
+  orders where `lower(mapped_email) <> loyalty_user.email`, **7,088 (93.7%) are the `cater_`
+  prefix and nothing else**: the build's `sm_external_user_map` strips it
+  (`regexp_replace(..., r'^cater_', '')`) while `loyalty_user.email` retains it, so
+  `mapped_email` equals `email_normalized` exactly. **Compare against `email_normalized`, not
+  `email`.** Only 480 are genuinely different addresses — and the `sm_external_user_id` join
+  carries 6,275 mismatches of its own, so the key is not the cause.
+
+  *(An earlier revision of this file asserted the opposite. It reached that conclusion by
+  attributing the whole email-mismatch count to the join key without testing whether the two
+  ids were actually distinct, or whether the documented `cater_` normalization explained the
+  gap. Both checks reverse the finding.)*
 
 - **Order-level `is_catering` ≠ catering *account*.** A catering account can place an ordinary
   individual order and it will correctly show `is_catering = false`. Worked example: Brink order

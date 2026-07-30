@@ -16,19 +16,20 @@ Budget about 30 minutes of your time per person. IAM changes can take a few minu
 
 If you read nothing else, read this.
 
-**Four things to do per person:**
+**Five things to do per person:**
 
 | # | Do this | Where | Detail |
 |---|---|---|---|
 | 1 | Invite them to the Claude org | Claude admin console | §2 |
 | 2 | Grant **BigQuery Job User** on project `marketing-data-442316` | GCP → IAM | §3.2 |
-| 3 | Grant **BigQuery Data Viewer** on dataset **`claude`** only | BigQuery → `claude` → Sharing → Permissions | §3.3 |
-| 4 | Send them [`CLIENT_SETUP.md`](CLIENT_SETUP.md) | link it, don't retype it | §5 |
+| 3 | Grant **MCP User** (`roles/mcp.user`, carries `mcp.tools.call`) on the same project | GCP → IAM | §3.2a |
+| 4 | Grant **BigQuery Data Viewer** on dataset **`claude`** only | BigQuery → `claude` → Sharing → Permissions | §3.3 |
+| 5 | Send them [`CLIENT_SETUP.md`](CLIENT_SETUP.md) | link it, don't retype it | §5 |
 
 That's it. Asana is already shared company-wide, the source datasets are already authorized, and
 nobody needs `scratch`.
 
-**Four things that will bite you:**
+**Five things that will bite you:**
 
 1. **They must use Cowork mode in the Claude desktop app.** Data questions need `git clone`, which
    needs a shell, and only Cowork has one. Browser, mobile, and plain desktop chat all fail with
@@ -42,6 +43,9 @@ nobody needs `scratch`.
    `sessionM`, and `braze`. (§3.3a)
 4. **The `claude` views only go back to 2023-01-01** and older dates return **zero rows, not an
    error** — which reads as "no sales." (§10)
+5. **`mcp.tools.call` is a separate grant from the two BigQuery ones.** Without it the BigQuery MCP
+   connector authorizes fine and then fails on the first tool call — so it looks like a broken
+   connector, not a missing permission. (§3.2a)
 
 **What they can and can't answer:** orders, sales, channels, customers, menu/items, order
 sequencing, lifetime customer metrics, and loyalty — yes. Campaigns/email/SMS — not yet (`braze`
@@ -152,15 +156,15 @@ expectations before they hit them.
 
 ### 3.1 Grants are per-person
 
-The steward does **not** have Google Workspace admin, so there's no group to manage — both grants
-below go directly to the individual's `@cafezupas.com` address.
+The steward does **not** have Google Workspace admin, so there's no group to manage — all three
+grants below go directly to the individual's `@cafezupas.com` address.
 
 This works fine, but it puts the burden on discipline rather than structure:
 
 - **Keep a running list.** Add every person you grant to the "who has access" list at the bottom of
   this section, with the date. Per-person bindings are how permission sprawl starts — a year from
   now, nobody will remember why `someone@` has `dataViewer` on something.
-- **Offboarding is now two removals per person, not one.** §9 covers it. Don't skip it.
+- **Offboarding is now three removals per person, not one.** §9 covers it. Don't skip it.
 - **Audit quarterly.** Read the `claude` dataset ACL and the project IAM page and confirm every
   name still belongs. Five minutes.
 
@@ -171,15 +175,19 @@ This works fine, but it puts the burden on discipline rather than structure:
 
 #### Who has access (keep this current)
 
-| Person | Granted | `jobUser` | `dataViewer` on `claude` | Notes |
-|---|---|---|---|---|
-| bchristensen@cafezupas.com | — | OWNER | OWNER | Steward; also OWNER on source datasets |
-| thood@cafezupas.com | - | standard | standard | user |
-| melspencer@cafezupas.com | - | standard | standard | user |
-| mhaacke@cafezupas.com | - | standard | standard | user |
-| salmquist@cafezupas.com | - | standard | standard | user |
-| jelgie@cafezupas.comm | - | standard | standard | user |
-| dgetz@cafezupas.com | - | standard | standard | user |
+| Person | Granted | `jobUser` | `mcp.user` | `dataViewer` on `claude` | Notes |
+|---|---|---|---|---|---|
+| bchristensen@cafezupas.com | — | OWNER | yes | OWNER | Steward; also OWNER on source datasets |
+| thood@cafezupas.com | - | standard | | standard | user |
+| melspencer@cafezupas.com | - | standard | | standard | user |
+| mhaacke@cafezupas.com | - | standard | | standard | user |
+| salmquist@cafezupas.com | - | standard | | standard | user |
+| jelgie@cafezupas.comm | - | standard | | standard | user |
+| dgetz@cafezupas.com | - | standard | | standard | user |
+
+> The `mcp.user` column was added 2026-07-30. Existing users predate the grant — **backfill it for
+> anyone whose connector stops working on a tool call**, and confirm it for everyone at the next
+> quarterly audit.
 
 ### 3.2 Grant 1 — the ability to run queries (project level)
 
@@ -203,7 +211,30 @@ gcloud projects add-iam-policy-binding marketing-data-442316 \
   --role="roles/bigquery.jobUser"
 ```
 
-### 3.3 Grant 2 — read the `claude` dataset (dataset level)
+### 3.2a Grant 2 — the ability to call MCP tools (project level)
+
+Same IAM page, same project:
+
+| Principal | Role | Why |
+|---|---|---|
+| `newperson@cafezupas.com` | **MCP User** (`roles/mcp.user`) | Carries `mcp.tools.call` — the permission the BigQuery MCP connector needs to invoke a tool at all. Without it the connector authorizes cleanly and then fails on every call. |
+
+```bash
+gcloud projects add-iam-policy-binding marketing-data-442316 \
+  --member="user:newperson@cafezupas.com" \
+  --role="roles/mcp.user"
+```
+
+**Why this is easy to miss:** it is orthogonal to the two BigQuery grants. Someone can hold
+`jobUser` *and* `dataViewer` on `claude`, sail through the connector's Google sign-in, and still be
+unable to run a single question — because the failure happens one layer earlier, at the MCP tool
+call, before any SQL is submitted. The error text points at MCP rather than at BigQuery, so it reads
+as "the connector is broken." Grant all three at the same time and you never see it.
+
+Like `jobUser`, this grants no data access on its own. It is the ability to *invoke*; §3.3 is the
+only thing that lets anything be *read*.
+
+### 3.3 Grant 3 — read the `claude` dataset (dataset level)
 
 **Dataset level, not project level.** A project-level `BigQuery Data Viewer` grant would expose
 every dataset in the project, including the raw ones. Doing this at the dataset level is the
@@ -282,7 +313,8 @@ Three caveats worth knowing before you debug one:
 
 ### 3.4 `scratch` write access — don't grant it
 
-**Nobody needs this. Skip it.** Two grants (§3.2 and §3.3) are the complete provisioning set.
+**Nobody needs this. Skip it.** Three grants (§3.2, §3.2a and §3.3) are the complete provisioning
+set.
 
 Background, so you know what you're saying no to: the `sales-ops-orders` skill tells Claude to
 materialize intermediate results into `marketing-data-442316.scratch` (7-day auto-expiry) rather
@@ -447,6 +479,7 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 |---|---|---|
 | "Claude says a server requires authentication" | Connector not authorized | `CLIENT_SETUP.md` Step 0; complete the Google sign-in prompt |
 | "Access Denied: User does not have `bigquery.jobs.create`" | Missing project-level Job User | §3.2 |
+| Connector authorizes fine, then every question fails before any SQL runs — error mentions **MCP** or `mcp.tools.call`, not BigQuery | Missing `roles/mcp.user` | §3.2a. Reads as a broken connector; it's a missing grant |
 | "Permission denied on table `X`" **while querying a `claude` view** | A source dataset isn't authorized for `claude`. Shouldn't happen for `sales_ops`/`sessionM`/`braze` — suspect a newly added source | §3.3a |
 | "Permission denied on table `sales_ops.…`" while querying `sales_ops` **by name** | Working as designed, or the skill pointed them at something with no `claude` equivalent | §10 — tell them it's out of scope; don't grant `sales_ops` |
 | "No sales" / zero rows for an older period | The `claude` views only go back to **2023-01-01**, and truncation is silent | §10 — confirm the date range is inside the window |
@@ -612,31 +645,38 @@ the clarifying round when you already know what you want.
 Do this the same day they leave or change roles. Access nobody remembers granting is the whole
 problem.
 
-Because grants are per-person (§3.1), there are **two** IAM removals — miss either one and access
+Because grants are per-person (§3.1), there are **three** IAM removals — miss any one and access
 partially survives.
 
 1. **Remove `roles/bigquery.jobUser`** on project `marketing-data-442316` (GCP → IAM). Without this
    they can't run any query, even with dataset access.
-2. **Remove `roles/bigquery.dataViewer`** on dataset `claude` (BigQuery → `claude` → Sharing →
+2. **Remove `roles/mcp.user`** on the same project. Cutting this alone is the fastest way to stop
+   the connector working, but it is not sufficient on its own — it blocks the MCP path, not
+   BigQuery access by other means.
+3. **Remove `roles/bigquery.dataViewer`** on dataset `claude` (BigQuery → `claude` → Sharing →
    Permissions).
-3. **Update the access table in §3.1** so the list stays honest.
-4. Deactivate the Claude seat. (No Asana step — the board is company-wide.)
-5. Check `scratch` while you're in there. It carries four per-person WRITER grants
+4. **Update the access table in §3.1** so the list stays honest.
+5. Deactivate the Claude seat. (No Asana step — the board is company-wide.)
+6. Check `scratch` while you're in there. It carries four per-person WRITER grants
    (`dgetz`, `drobins`, `jelgie`, `thood`) that predate this runbook; nobody should need write
    access (§3.4), so clear any that belong to the departing person.
-6. Check the query log for anything unexpected in their last 30 days — a good habit, not an
+7. Check the query log for anything unexpected in their last 30 days — a good habit, not an
    accusation.
-7. If they built anything worth keeping, get it into the repo *before* the account goes away.
+8. If they built anything worth keeping, get it into the repo *before* the account goes away.
 
 ```bash
 # 1 and 2, if you prefer the CLI
 gcloud projects remove-iam-policy-binding marketing-data-442316 \
   --member="user:departing@cafezupas.com" \
   --role="roles/bigquery.jobUser"
+
+gcloud projects remove-iam-policy-binding marketing-data-442316 \
+  --member="user:departing@cafezupas.com" \
+  --role="roles/mcp.user"
 ```
 
 ```sql
--- 2, via SQL DCL
+-- 3, via SQL DCL
 revoke `roles/bigquery.dataViewer`
 on schema `marketing-data-442316`.claude
 from "user:departing@cafezupas.com"

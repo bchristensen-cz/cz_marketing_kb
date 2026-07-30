@@ -130,7 +130,13 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
 </div>
 
 <script>
-const TOOL='mcp__f3b27eab-feb3-4d29-9559-bc8d966e8419__execute_sql_readonly';
+// The placeholder on the next line is replaced at install time with THIS SESSION'S
+// BigQuery read-only query tool name. Connector ids are per-user, so a hardcoded one works
+// for exactly one person and fails for everyone else -- after the page renders fine, which
+// is the worst way to fail. Replace the STRING LITERAL only; the token appears exactly once
+// in this file by design, so a plain substitution is safe.
+// See claude_skills/ask-a-data-question/SKILL.md -> "Installing the report builder".
+const TOOL='__BQ_TOOL__';
 const PROJ='marketing-data-442316';
 const COMBO_RC=['Sandwiches','Soups','Salads'];
 let picked=[], candRows=[], types=[], typeOff=new Set(), comboMode='split';
@@ -342,6 +348,16 @@ document.getElementById('run').onclick=async()=>{
   }catch(e){ document.getElementById('res').innerHTML=`<div class="err">${e.message}</div>`; document.getElementById('csv').disabled=true; }
   btn.disabled=false; btn.textContent='Run report';
 };
+
+if(TOOL.indexOf('__BQ')===0){
+  document.body.insertAdjacentHTML('afterbegin',
+    '<div class="err" style="margin-bottom:14px"><b>This report builder was not installed correctly.</b><br>'
+    + 'Its BigQuery connection was never filled in, so no query will run. Ask Claude to '
+    + '&ldquo;reinstall the item sales report builder&rdquo; and it will rebuild this page '
+    + 'against your own BigQuery connector.</div>');
+  document.getElementById('run').disabled=true;
+  document.getElementById('find').disabled=true;
+}
 
 buildSql();
 </script>

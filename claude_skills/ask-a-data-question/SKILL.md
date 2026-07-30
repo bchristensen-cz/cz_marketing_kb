@@ -193,6 +193,43 @@ in Utah. Ultimate Grilled Cheese in Utah: 10,307 standalone units against 25,647
 combo components — i.e. answering "standalone only" without asking would have understated
 that item by about 71%.
 
+## Installing the report builder (Cowork artifact)
+
+The repo ships a persistent click-to-run report page at
+[`artifacts/item-sales-builder.html`](../../artifacts/item-sales-builder.html): search
+resolves item names against the data, dropdowns cover dates / market / catering / combos,
+the locked rules are applied, the generated SQL is always shown, and results download as
+CSV. It answers the recurring "sales for these items, broken out by X" shape without the
+user typing a question at all.
+
+**It does not arrive by cloning.** Cloning gives an inert HTML file in a temp folder.
+Cowork artifacts live in a per-user manifest, so the page has to be registered inside the
+user's own session.
+
+**Install it when the user asks for a report builder, a dashboard, a reusable report, or
+"something I can run myself."** Don't install it unprompted.
+
+Steps:
+
+1. Read `artifacts/item-sales-builder.html` from **this session's fresh clone**.
+2. Replace the placeholder **`__BQ_TOOL__`** with the *fully-qualified name of the BigQuery
+   read-only query tool available in this session* — something shaped like
+   `mcp__<connector-id>__execute_sql_readonly`. **Use your own session's tool name; never
+   copy one out of documentation or a previous session.**
+3. Write the substituted HTML to your working directory and call `create_artifact` with
+   `id: "item-sales-builder"` and that same tool name in `mcp_tools`.
+4. Tell the user it's pinned and re-openable, and that it re-queries live on each open.
+
+> **Why the placeholder exists.** Connector ids are assigned **per user**. A hardcoded id
+> works for exactly one person and fails for everyone else — and it fails *after the page
+> renders correctly*, so it looks like a data problem rather than a setup problem. The page
+> carries a guard: if `__BQ_TOOL__` was never substituted it disables its own buttons and
+> says so, rather than presenting an empty report.
+
+If `create_artifact` isn't available in the session, say so plainly — the user is likely not
+in Cowork mode — and fall back to answering the question in chat with this skill's normal
+clickable-choices flow. Don't paste raw HTML into the conversation as a substitute.
+
 ## What not to do
 
 - **Don't guess and caveat.** "Assuming market means state…" buried under a number the

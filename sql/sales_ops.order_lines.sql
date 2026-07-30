@@ -29,12 +29,18 @@ end if;
 -- drop table `marketing-data-442316`.sales_ops.order_lines;
 -- set start_date = '2018-08-07';
 -- create or replace table `marketing-data-442316`.sales_ops.order_lines
--- partition by businessdate
+-- partition by business_date
 -- cluster by rev_center_name, item_name, parent_item_grp_name, parent_rev_center_name
 -- as
 
+-- ⚠️ 2026-07-30: this predicate MUST be `business_date`. The full-history rebuild that day
+-- renamed the target column from BusinessDate to business_date; the old `businessdate`
+-- spelling here failed with `Unrecognized name: businessdate` and would have broken the
+-- hourly incremental load on its next run. Note `bo.BusinessDate` further down is a
+-- DIFFERENT column on the raw brink.brinkOrder table, which still uses the old spelling —
+-- do not "fix" those to match.
 delete `marketing-data-442316`.sales_ops.order_lines
-where businessdate >= start_date;
+where business_date >= start_date;
 
 insert into `marketing-data-442316`.sales_ops.order_lines
 
@@ -314,10 +320,14 @@ select
 l.brink_order_id
 , l.pulse_order_id
 , l.is_catering
-, l.BusinessDate
+, l.BusinessDate as business_date
 , l.order_datetime
 , l.store_id
 , l.store_name
+-- "Market" = store_state (steward decision 2026-07-30). Denormalised here so item-by-market
+-- questions need no join. NULL for stores absent from store_info (1111, 999) — so
+-- `store_id <> 1111` is load-bearing for geography, not just for totals.
+, si.store_state
 , l.order_item_id
 , l.item_id_seq_num
 , l.line_item_type
@@ -337,10 +347,12 @@ l.brink_order_id
 , l.item_type
 , case
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo'
+	when l.item_type = 'Discount' then 'Discount'   -- 2026-07-30
 	else coalesce(c.rev_center_name, l.description) end as parent_rev_center_name
 , case
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo ' || ca.attr_list
 	when coalesce(c.rev_center_name, l.description) = 'Foutain Beverages' then 'Fountain Beverage'
+	when l.item_type = 'Discount' then 'Discount'   -- 2026-07-30
 	else coalesce(c.item_grp_name, l.description) end as parent_item_grp_name
 from order_lines_detail l
 	left join order_lines_detail c
@@ -349,4 +361,6 @@ from order_lines_detail l
 	and c.line_item_type = 'item'
 		left join combo_attrs ca
 		on ca.combo_order_line_item_id = l.combo_order_line_item_id
+			left join `marketing-data-442316`.sales_ops.store_info si
+			on si.store_id = l.store_id
 ;

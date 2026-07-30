@@ -270,9 +270,13 @@ This is not a rounding difference. For Ultimate Grilled Cheese, 2026-05-03 → 2
 
 ### Discount lines masquerade as items — exclude them from item reports (steward rule 2026-07-30)
 
-A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `rev_center_name = 'Discount'`, `line_item_type = 'discount'`, and — the trap — **`item_type` set to the item name too**, not to `'Entree'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**.
+A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `line_item_type = 'discount'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**.
 
-Two consequences. They inflate any unit count not filtered to `line_item_type in ('item','modifier')`. And, more insidiously, they surface as a **separate candidate row in the name-discovery query** (protocol item 5) — so a user resolving "Hot Honey Cottage Cheese Bowl" sees two entries for one product with no way to tell which is real. Filter them in **both** the discovery query and the metric query:
+Two consequences. They inflate any unit count not filtered to `line_item_type in ('item','modifier')`. And, more insidiously, they surface as a **separate candidate row in the name-discovery query** (protocol item 5) — so a user resolving "Hot Honey Cottage Cheese Bowl" sees two entries for one product with no way to tell which is real.
+
+> **✅ Partly fixed upstream 2026-07-30.** The build script now stamps discount lines consistently: `rev_center_name`, `item_type`, `parent_rev_center_name` and `parent_item_grp_name` are **all `'Discount'`**. Verified live — all 113,136 discount lines in that window carry the identical set. Previously `item_type` held the *item's name*, which is why it couldn't be filtered on. It can now. `item_name` still carries the item's name by design, so the discovery-query collision remains and the filters below are still required.
+
+Filter them in **both** the discovery query and the metric query:
 
 ```sql
 and ol.rev_center_name <> 'Discount'
@@ -280,7 +284,7 @@ and ol.item_type <> 'Discount'
 and ol.line_item_type <> 'discount'
 ```
 
-Because `item_type` is unreliable on these rows, don't rely on `item_type = 'Entree'` alone to exclude them.
+Since the 2026-07-30 fix, `item_type = 'Discount'` is a reliable test on its own — but keep all three conditions: they're free, and they still hold for any pre-fix data you compare against.
 
 ### 5. Named products — resolve the name against the data FIRST, then confirm
 

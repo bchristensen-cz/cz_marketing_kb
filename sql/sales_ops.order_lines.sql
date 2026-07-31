@@ -309,9 +309,13 @@ bol.order_id as brink_order_id
 , coalesce(bi.item_grp_name, bol.description) as item_grp_name
 , bi.item_size
 , bol.item_modifier
--- NOTE: rev_center_name stays NULL on promotion and surcharge lines (no item-master match,
--- so no revenue center). Promotions are filterable on item_type / line_item_type only.
-, case when bol.line_item_type = 'discount' then 'Discount' else brc.name end as rev_center_name
+-- '2026-07-31' (second pass) promotion added here too, so all three line-type markers agree
+-- and promotions are excludable on any of them. Only surcharge lines are left with a NULL
+-- rev_center_name (2 lines over 2026-05-03..06-27) — they have no item-master row.
+, case
+  when bol.line_item_type = 'discount' then 'Discount'
+  when bol.line_item_type = 'promotion' then 'Promotion'
+  else brc.name end as rev_center_name
 , bol.item_gross_sales
 , bi.price
 , round(

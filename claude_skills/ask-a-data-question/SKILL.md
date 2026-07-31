@@ -193,15 +193,15 @@ A discount on an item produces a line with the **item's name** in `item_name`,
 for the same product**, so the user is asked to choose between two entries that look
 equally real.
 
-**Promotion lines do the same thing as of 2026-07-31**, and they hide from one of the
-filters. They now carry the *promotion's* name — `Free Try 2 Combo`, `Free Mini Strawberry
-Cup`, `Free Dubai Cup` — so a search for "try 2 combo" or "strawberry" returns a promotion
-as if it were a menu item. Their `rev_center_name` is **NULL, not `'Promotion'`**, so only
-`item_type` and `line_item_type` catch them. Always add:
+**Promotion lines do the same thing as of 2026-07-31.** They now carry the *promotion's*
+name — `Free Try 2 Combo`, `Free Mini Strawberry Cup`, `Free Dubai Cup` — so a search for
+"try 2 combo" or "strawberry" returns a promotion as if it were a menu item, and it also
+passes the standalone-sale test. All three markers read `'Promotion'` (a second build pass
+that day added `rev_center_name`; earlier the same day it was NULL there). Always add:
 
 ```sql
 and ifnull(ol.item_type, '') not in ('Discount','Promotion')
-and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ```
 

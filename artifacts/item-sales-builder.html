@@ -190,17 +190,18 @@ const COMBO_RC=['Sandwiches','Soups','Salads'];
 // ---------------------------------------------------------------------------
 // Null-safe building blocks.
 //   Re-measured 2026-07-31 (2026-05-03..06-27, stores 1111/999 out, 10,018,577 lines):
-//   item_type 0 nulls | parent_rev_center_name 0 | item_name 0 | rev_center_name 1,113.
-//   The old 1,111 / 1,113 / 497 counts were all unnamed promotion lines; the 2026-07-31
-//   build named them. The 1,113 that remain are 1,111 promotions + 2 surcharges, which
-//   have no revenue center by construction. A plain `col <> 'Discount'` evaluates to NULL
-//   on those rows and silently drops them, so every string exclusion still goes through
-//   ifnull — free, and the next upstream gap won't announce itself.
+//   item_type 0 nulls | parent_rev_center_name 0 | item_name 0 | rev_center_name 2 (both
+//   surcharge lines). The old 1,111 / 1,113 / 497 counts were all unnamed promotion lines;
+//   the 2026-07-31 build named them and stamped their revenue center. A plain
+//   `col <> 'Discount'` evaluates to NULL on a NULL col and silently drops the row, so
+//   every string exclusion still goes through ifnull — free, and the next upstream gap
+//   won't announce itself.
 //
 //   2026-07-31: promotion lines must be excluded too. They now carry the promotion's NAME
 //   in item_name ('Free Try 2 Combo', 'Free Dubai Cup') with qty 1 and $0 gross, so they
-//   look like menu items in search and add phantom units. rev_center_name is NULL on them,
-//   not 'Promotion' — only item_type and line_item_type catch them.
+//   look like menu items in search, add phantom units, and pass the sold-alone test
+//   (parent_rev_center_name = rev_center_name = 'Promotion'). All three markers read
+//   'Promotion' after the second build pass that day.
 // ---------------------------------------------------------------------------
 const SHAPE=`case
     when ol.composite_item_id is not null then 'In combo (paid)'
@@ -423,7 +424,7 @@ where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id not in (1111, 999)
 and ifnull(ol.item_type, '') not in ('Discount','Promotion')
-and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ${wants.join('\n')}
 ${grpBy?`group by\n${grpBy}\n`:''}order by
@@ -477,7 +478,7 @@ where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id not in (1111, 999)
 and ifnull(ol.item_type, '') not in ('Discount','Promotion')
-and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 and (${likes})
 group by

@@ -195,7 +195,48 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
   `safe_cast` yields NULL for the non-numeric ids, which then simply don't join. If you need to know how many you dropped, count them: `countif(safe_cast(external_user_id as int64) is null)`.
 - **`braze.load_watermark.watermark` is already a TIMESTAMP** — it is not epoch seconds. `timestamp_seconds(cast(watermark as int64))` fails with `Invalid cast from TIMESTAMP to INT64` (observed 2026-07-27). Select `watermark` and `updated_at` as-is.
-- **`customevent` payloads** — `properties` is a JSON *string*; read fields with `json_value(properties, '$.field')`. Filter `name = '<event>'` **and** the `event_date` partition. Known Cafe Zupas events: `guest_email_from_order` (`$.order_id` — guest-checkout email linkage) and `protein_amount_tracked` (`$.protein_amount`, `$.order_id` — per-order protein grams, pipeline under steward validation as of 2026-07-26, not yet trustworthy for reporting). `local_event_datetime` gives the user-local time if you need daypart.
+- **`customevent` payloads** — `properties` is a JSON *string*; read fields with `json_value(properties, '$.field')`. Filter `name = '<event>'` **and** the `event_date` partition. `local_event_datetime` gives the user-local time if you need daypart.
+
+  **Verified payload keys (2026-07-23 → 07-29, enumerated not assumed):**
+
+  | Event | Keys actually present | Events |
+  |---|---|---|
+  | `guest_email_from_order` | `order_id`, `customer_id`, `source_event`, `store_name` | 2,523 |
+  | `protein_amount_tracked` | `protein_amount` **only** | 28,813 |
+
+  > **⚠️ Correction 2026-07-31 — `protein_amount_tracked` has NO `$.order_id`.** This skill
+  > previously documented one, and it does not exist: **zero** of the 28,813 events in that week
+  > carried the key. So the Braze protein event **cannot be attributed to an order, item, or store** —
+  > it is a per-user running total and nothing more. Any "protein by order / by store / by daypart"
+  > question is unanswerable from `braze.customevent`, and an analyst who trusts the old note will
+  > write a join that silently returns nothing. Per-order protein is being rebuilt by the steward from
+  > `staging.pulse_item_protein` + `pulse.order_items` (Asana 1216935355461779); until that lands
+  > there is no supported source. `guest_email_from_order` is the opposite case — it carries **three
+  > more keys than were documented**, including `customer_id` and `store_name`.
+
+  **Discovering what keys an event carries — use `json_keys`, and note the exact spelling.**
+  Two separate analyst sessions failed on this on the same day (2026-07-30) by inventing a
+  namespace: `bql.json_keys(...)` and `bigquery.json_keys(...)` both error with
+  `Function not found`. The function is **bare `json_keys`**, it takes **parsed JSON** (so wrap the
+  string in `safe.parse_json`), and the depth argument is **required**:
+
+  ```sql
+  select
+    e.name as event_name
+  , k as property_key
+  , count(*) as events
+  from `marketing-data-442316`.braze.customevent e
+    cross join unnest(json_keys(safe.parse_json(e.properties), 2)) as k
+  where 1=1
+  and e.event_date between @start and @end
+  and e.name = '<event>'
+  group by 1, 2
+  order by 1, 3 desc
+  ```
+
+  Depth `1` gives top-level keys; `2` reaches one level of nesting. Run this **before** writing any
+  `json_value` path — it is cheap, and it is the only way to know a documented key still exists.
+  The same pattern works on `braze.users.custom_attributes`.
 - **The DATETIME/TIMESTAMP trap above is still catching people** — an analyst MCP session hit it again on 2026-07-24 (`order_timestamp_utc` vs a Braze event datetime) despite being documented since 2026-07-23. If a session is failing on this, it is probably not reading a fresh clone of `main`.
 
 ## Currents ingestion integrity (steward findings 2026-07-28)

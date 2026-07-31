@@ -757,3 +757,22 @@ directly. It covers the recurring duties this document doesn't:
 The single most important habit to inherit: when a session teaches you something — a gotcha, a
 definition, a data-quality finding — write it into the skill or dictionary and push it *that
 session*. The system's value is entirely in how current this repo is.
+
+### One trap in the query-log review itself (found 2026-07-31)
+
+**`INFORMATION_SCHEMA.JOBS_BY_PROJECT.referenced_tables` expands view lineage.** It reports the
+base tables a query *resolved to*, not the object the user actually named. Since
+`claude.order_customer` is a view over `sales_ops.*` and `claude.loyalty_user` reaches into
+`sessionM.*`, a user who touches nothing but the curated `claude` layer appears in
+`referenced_tables` as having queried `sales_ops` **and** `sessionM` — i.e. as a wall breach.
+
+This is not hypothetical: on 2026-07-30 a brand-new user ran 9 queries, all against
+`claude.order_customer`, with zero raw references anywhere in the SQL text, and the
+`referenced_tables` test flagged 7 of them. Judge wall violations on the **query text**:
+
+```sql
+regexp_contains(lower(query), r'`?marketing-data-442316`?\.(pulse|sessionm|brink|staging|temp|braze_stream)\.')
+```
+
+Keep `referenced_tables` for cost and volume attribution, where lineage expansion is the behaviour
+you want. Tracked in Asana 1217062212785266.

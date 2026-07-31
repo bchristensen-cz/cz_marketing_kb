@@ -345,6 +345,30 @@ Note `Grilled Cheese Sandwich` is effectively a **combo-only item** — 52 stand
 
 Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 
+### 🟡 Observed but NOT yet canonical: the internal-traffic exclusion (logged 2026-07-31)
+
+The steward's own manual customer-behaviour SQL consistently strips three populations that this
+skill's documented default **keeps**:
+
+```sql
+and coalesce(oc.source, '') <> 'Outdoor Kiosk'
+and coalesce(oc.mapped_email_domain, 'b') not in ('cafezupas.com', 'tkxel.com')
+```
+
+i.e. shared kiosk terminals, employees (`cafezupas.com`) and the outsourced dev team
+(`tkxel.com`). Note the null-safe `coalesce` on both — the bare `<>` / `not in` forms would drop
+every NULL-domain row, which is most in-store orders.
+
+**Do not apply this silently.** It is recorded here because it was observed repeatedly in steward
+work, not because it has been ratified, and it materially changes customer counts and frequency.
+Two conventions genuinely conflict: the kiosk exclusion overlaps `customer_type = 'kiosk'` (already
+the canonical control), and the domain exclusion contradicts "include employee-discount orders."
+If a question is about *customer behaviour* rather than *sales*, raise it as a scope choice with
+the user and say which you used. Steward decision pending — Asana 1217062310224330.
+
+> The legacy column name is `mapped_domain` on `sales_ops.OrderCustomer`; on the current
+> `order_customer` / `claude.order_customer` it is **`mapped_email_domain`**.
+
 ## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
 
 All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. Match the build scripts in `sql/`:

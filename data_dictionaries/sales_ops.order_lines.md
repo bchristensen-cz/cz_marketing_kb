@@ -2,6 +2,11 @@
 
 **One row per order line element** — items, modifiers, fees, tips, discounts, gift cards, promotions, surcharges. This is the canonical table for product/menu-mix, item counts, modifier analysis, and combo composition. For order-level sales, use `sales_ops.order_customer` instead.
 
+> **⚠️ Changed 2026-07-31 (deployed + backfilled across full history).** Three changes, all verified live:
+> - **Promotion lines are now named.** `description` / `item_name` carry the real promotion name (`Free Drink Sign`, `Grand Opening 100%`, …) instead of NULL, and `item_type` / `parent_rev_center_name` / `parent_item_grp_name` are all `'Promotion'`. **New consequence: promotion names now collide with item names in item reports** — see the gotcha below. Any item query must exclude them.
+> - **`is_catering` now matches `order_customer`.** The destination test evaluates first, so POS-only catering is caught. June 2026: **+644 orders / +$71,586 gross** moved into catering on this table. From 2026-07-24 until this change the two marts disagreed on catering by that amount — a catering number pulled from `order_lines` in that window understates.
+> - **`item_type` no longer has NULLs.** The entire NULL population was unnamed promotion lines (1,111 of them over 2026-05-03 → 2026-06-27 — exactly the count previously documented). `rev_center_name` still has NULLs: 1,113 in that window = the same 1,111 promotions + 2 surcharges.
+
 ## Table facts
 
 | Property | Value |
@@ -24,7 +29,7 @@
 | `discount` | 0.6M | Order discounts | `amount` is **negative**; gross/net = 0 |
 | `fee` | 0.4M | Fee items (name matches `\bfee\b`) | Included in gross/net like items |
 | `gift_card` | 13K | Gift card purchases | `amount` = card price; gross/net = 0 |
-| `promotion` | 7K | Order promotions | `amount` is **negative**; gross/net = 0 |
+| `promotion` | 7K | Order promotions | `amount` is **negative**; gross/net = 0; `qty` = 1 (derived floor), so they inflate unit counts |
 | `surcharge` | rare | Surcharges | `amount` = gross = net |
 
 ## Columns
@@ -47,23 +52,23 @@
 | `order_datetime` | DATETIME | Local order time (same logic as `order_customer`). |
 | `store_id`, `store_name` | | Store. **Store 1111 is a test/training store — ALWAYS exclude** (`store_id <> 1111`); no exceptions (steward rule 2026-07-23). |
 | `store_state` | STRING | Full state name (`Utah`, not `UT`). **This is "market"** — there is no market/region/DMA/metro column anywhere; see [`sales_ops.store_info`](sales_ops.store_info.md). Added in the 2026-07-30 rebuild, so item-by-market questions need no join. ⚠️ **NULL for stores absent from `store_info`** — 512 lines in 2026-06-01 → 2026-06-07, all store 1111 / 999. Without `store_id <> 1111` a market breakdown grows a phantom unnamed group; `coalesce` the label so nothing ships nameless. |
-| `is_catering` | BOOLEAN | Catering flag from pulse. |
+| `is_catering` | BOOLEAN | Catering order flag. **Redefined 2026-07-31 to match `order_customer`**: `true` when the Brink destination name contains `cater` **or** `pulse.orders.is_catering = true`, else the pulse flag, else `false`. The destination test is what catches POS-only catering (pulse only sees digital orders). Describes the **order**, not the item — catering-only SKUs like `Ultimate Grilled Cheese Box` can still sit on `is_catering = false` orders. |
 
 ### Item descriptors
 | Column | Type | Description |
 |---|---|---|
-| `description` | STRING | Raw POS description of the line. |
+| `description` | STRING | Raw POS description of the line. On `promotion` lines this is the **promotion name** from `brink.brinkPromotions`, resolved per (promotion id, store) — names are store-specific, e.g. id 642425436 is `50% off Lunch QR Craig rd` at store 164 and `50% off Blue Diamond` at store 168. Falls back to `'Promotion'` for the 4 lines in all history with no name master row. (Before 2026-07-31 this came from `brinkOrderPromotion.Name`, which is NULL on 71.4% of rows.) |
 | `item_name` | STRING | **Normalized item group name** — size prefix (REG/LG/HALF/…) stripped, leading `.`/`--` cleaned. Use this for menu-mix. Falls back to `description` when the item isn't in the item master. |
 | `item_size` | STRING | Parsed size: `Half`, `Large`, `Regular`, `Kids`, `Mini`, `Party`, `Tray`, `Quart`, `Medium` or NULL (NULL for ~80% of rows — non-sized items, modifiers, fees, etc.). |
 | `item_modifier` | STRING | Modifier code on modifier lines; `'none'` otherwise. Seven values: `With`, `No`, `Add`, `Substitute`, `Extra`, `None`, `For`. **`With` is a required build selection (bread choice, combo entrée slot), NOT a customization** — it fires on 99.9% of digital sandwiches. A real customer modification is `No`/`Add`/`Substitute`/`Extra` **and** `rev_center_name = 'Modifiers'` (verified 2026-07-30). |
-| `rev_center_name` | STRING | Revenue center: Sandwiches, Soups, Salads, Bowls, Combos, Modifiers, Kids Meals, Desserts, Bottled Beverages, **Foutain Beverages** (misspelled in source — match as-is), Sides/Misc Items, Non Food/Bev Mis, Box Lunches, Party Trays & Food, Cater Desserts, Cater Beverages, Gift Cards, Discount. |
-| `item_type` | STRING | Reporting rollup: Bowls/Salads/Sandwiches/Soups → `Entree`; Kids Combo → `Kids Meals` (other kids items → `Entree`); beverages → `Beverage`; else the revenue center, else raw description (long tail of one-off values — filter to the big buckets for clean reporting). |
+| `rev_center_name` | STRING | Revenue center: Sandwiches, Soups, Salads, Bowls, Combos, Modifiers, Kids Meals, Desserts, Bottled Beverages, **Foutain Beverages** (misspelled in source — match as-is), Sides/Misc Items, Non Food/Bev Mis, Box Lunches, Party Trays & Food, Cater Desserts, Cater Beverages, Gift Cards, Discount. ⚠️ **NULL on `promotion` and `surcharge` lines** (no item-master row, so no revenue center) — 1,113 lines over 2026-05-03 → 2026-06-27. There is no `'Promotion'` value here, so promotions cannot be excluded on this column; use `item_type` or `line_item_type`. |
+| `item_type` | STRING | Reporting rollup: Bowls/Salads/Sandwiches/Soups → `Entree`; Kids Combo → `Kids Meals` (other kids items → `Entree`); beverages → `Beverage`; `discount` lines → `Discount` (2026-07-30); `promotion` lines → `Promotion` (2026-07-31); else the revenue center, else raw description (long tail of one-off values — filter to the big buckets for clean reporting). **Zero NULLs since 2026-07-31.** |
 
 ### Combo rollups (parent = the line in the combo group with `composite_item_id IS NULL` and `line_item_type = 'item'`)
 | Column | Type | Description |
 |---|---|---|
-| `parent_rev_center_name` | STRING | Parent line's revenue center; `'Combos'` renamed to `'Try 2 Combo'`. For non-combo lines this is the line's own value. |
-| `parent_item_grp_name` | STRING | Parent's item group. For Try 2 Combos, includes the composition, e.g. `Try 2 Combo Salads & Soups` (built from the component entrée rev centers, non-catering only). `'Foutain Beverages'` → `'Fountain Beverage'`. |
+| `parent_rev_center_name` | STRING | Parent line's revenue center; `'Combos'` renamed to `'Try 2 Combo'`. `'Discount'` on discount lines (2026-07-30) and `'Promotion'` on promotion lines (2026-07-31). For other non-combo lines this is the line's own value. |
+| `parent_item_grp_name` | STRING | Parent's item group. For Try 2 Combos, includes the composition, e.g. `Try 2 Combo Salads & Soups` (built from the component entrée rev centers, non-catering only). `'Foutain Beverages'` → `'Fountain Beverage'`; `'Discount'` / `'Promotion'` on those line types. |
 
 ### Amounts (FLOAT, dollars)
 | Column | Description |
@@ -91,7 +96,16 @@
 
   The two combo shapes are **mutually exclusive per `combo_order_line_item_id`**, so combo units = 47,461 + 37,623 = 85,084 with no double count; combos were ~78% of units. Both shapes occur across all 88 stores in both months and both combo compositions — it's a per-combo-slot POS structure, not a store, size, or date split. **Priced combo components hold more gross than standalone**, so don't assume revenue sits only in standalone lines. Catering Box Lunches also emit zero-priced `modifier` entrée lines (`parent_rev_center_name = 'Box Lunches'`).
 - `'Foutain Beverages'` (sic) in `rev_center_name`; corrected to `'Fountain Beverage'` only in `parent_item_grp_name`.
-- `item_type` and `rev_center_name` fall back to raw `description` / NULL for a small tail (~7K rows/yr NULL) — filter to known buckets for clean rollups.
+- **Promotion lines masquerade as items — exclude them, and you can't do it on `rev_center_name`** (new 2026-07-31). Since promotion lines got real names they look like menu items in every item-shaped query: `item_name` = the promotion name, `qty` = 1, `item_gross_sales` = 0, `amount` negative. Names like `Free Try 2 Combo`, `Free Mini Strawberry Cup`, `Free Dubai Cup` will surface in item searches and add phantom zero-dollar units to unit counts. `rev_center_name` is NULL on these rows, so the discount-style triple filter doesn't catch them. Use:
+
+  ```sql
+  and ifnull(ol.item_type, '') not in ('Discount','Promotion')
+  and ifnull(ol.line_item_type, '') not in ('discount','promotion')
+  ```
+
+  Volume is small (1,111 lines over 2026-05-03 → 2026-06-27; ~2K–17K/quarter) but it lands in *item name* space, so it shows up in discovery lists and named-item answers rather than averaging out.
+- **Promotion reporting is now possible and wasn't before.** "Sales/units given away by promotion" is answerable off `line_item_type = 'promotion'` grouped by `description`, full history — 240,191 lines back to 2018-08-28. `amount` is the negative promotion value; `item_gross_sales` is 0, so never use it here.
+- `item_type` and `rev_center_name` fall back to raw `description` / NULL for a small tail — filter to known buckets for clean rollups. `item_type` NULLs are gone as of 2026-07-31; `rev_center_name` NULLs are promotion + surcharge lines only.
 - **Modifier detail is DIGITAL-ONLY** (verified 2026-07-30). In-store POS lines carry essentially no modifiers: 25 explicit ingredient changes on 65,276 standalone POS sandwich lines vs 23,453 on 63,027 digital, and **zero** on 210,154 priced combo components. Any modification/customization rate must filter `pulse_order_id is not null` and be labelled digital-only; a company-wide rate is wrong by ~2x. Capture gap, not behavior — open upstream question.
 - **Modifiers join to their parent on (`brink_order_id`, `order_item_id`)** — the modifier row's `order_item_id` is the *parent item's* id, and `item_id_seq_num` is the modifier's own record id. Not `combo_order_line_item_id`, which groups the whole combo.
 - **Within a Try 2 Combo, modifiers are flat siblings of the entrée slots under the combo parent** — they cannot be attributed to a specific entrée. 143,123 of 143,124 sandwich-bearing combos (2026-06-30 → 2026-07-29, non-catering) also held a soup/salad/bowl, and soup/salad ingredients (`Add Salad Tortilla Strips`, `Add Radiatore Noodle`) appear among their top changes. Per-entrée modifier rates are only exact for standalone lines.

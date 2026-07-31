@@ -185,22 +185,33 @@ which items it affected.
 > `parent_rev_center_name = 'Try 2 Combo'`. **The general lesson is the one that matters:
 > a "zero" you found while a filter was applied is not a zero.**
 
-### Discount lines carry the item's own name — filter them out of discovery
+### Discount and promotion lines carry names that look like items — filter both out of discovery
 
 A discount on an item produces a line with the **item's name** in `item_name`,
-`rev_center_name = 'Discount'`, `line_item_type = 'discount'`, and `item_type` set to the
-item name rather than `'Entree'`. In the discovery query these appear as a **second
-candidate row for the same product**, so the user is asked to choose between two entries
-that look equally real. Always add:
+`rev_center_name = 'Discount'`, `line_item_type = 'discount'`, and (since 2026-07-30)
+`item_type = 'Discount'`. In the discovery query these appear as a **second candidate row
+for the same product**, so the user is asked to choose between two entries that look
+equally real.
+
+**Promotion lines do the same thing as of 2026-07-31**, and they hide from one of the
+filters. They now carry the *promotion's* name — `Free Try 2 Combo`, `Free Mini Strawberry
+Cup`, `Free Dubai Cup` — so a search for "try 2 combo" or "strawberry" returns a promotion
+as if it were a menu item. Their `rev_center_name` is **NULL, not `'Promotion'`**, so only
+`item_type` and `line_item_type` catch them. Always add:
 
 ```sql
-and ol.rev_center_name <> 'Discount'
-and ol.item_type <> 'Discount'
-and ol.line_item_type <> 'discount'
+and ifnull(ol.item_type, '') not in ('Discount','Promotion')
+and ifnull(ol.rev_center_name, '') <> 'Discount'
+and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ```
 
 Show `item_type` alongside `rev_center_name` in the candidate list — it's how a user tells
 a real entrée row from a lookalike (steward rule 2026-07-30).
+
+> **The reusable lesson: an upstream fix can create a downstream trap.** Naming promotions
+> was strictly an improvement to the promotion data — and it moved 240K rows out of "NULL,
+> invisible" into "looks like a menu item." When a build script starts populating a column
+> that used to be empty, ask what *else* reads that column before calling the change safe.
 
 ## Step 3 — answer with the scope visible
 

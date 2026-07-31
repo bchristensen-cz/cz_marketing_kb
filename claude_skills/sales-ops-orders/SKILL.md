@@ -19,6 +19,11 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 >
 > `claude.order_lines` was simplified to a plain `select *` passthrough the same day.
 
+> **⚠️ Changed 2026-07-31 — `order_lines` rebuilt again across full history. No schema change; two value changes and one new capability.**
+> - **`is_catering` now matches `order_customer`.** The destination test evaluates first, so POS-only catering is finally caught on this table. June 2026: **+644 orders / +$71,586 gross** into catering. **Between 2026-07-24 and 2026-07-31 the two marts disagreed on catering** — `order_customer` had the fix, `order_lines` didn't. Any catering item number pulled from `order_lines` in that window understates, and a catering figure that mixed the two tables was internally inconsistent. Re-verified 2026-07-31: June 2026, 703,524 orders present in both, **zero disagreements**, 6,991 catering orders each side.
+> - **Promotion lines are named** and stamped `item_type = 'Promotion'`. This **removes** every `item_type` / `parent_rev_center_name` NULL, and **adds** a new way to get item numbers wrong — promotion names now collide with item names. See [the exclusion rule](#discount-and-promotion-lines-masquerade-as-items--exclude-both-from-item-reports-steward-rule-2026-07-30-extended-2026-07-31).
+> - **New: promotion-level reporting** off `line_item_type = 'promotion'` grouped by `description`.
+
 > **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Five scope items — store 1111, date range, catering, Try 2 Combo inclusion, and named-product resolution — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
 
 Project: `marketing-data-442316`. The four approved tables for order/sales analysis:
@@ -275,7 +280,7 @@ This is not a rounding difference. For Ultimate Grilled Cheese, 2026-05-03 → 2
 
 > **⚠️ "Zero combo lines" does NOT mean "zero modifier lines"** (corrected 2026-07-30 — the first draft of this note got it wrong and it's worth keeping the correction visible). Bowls **do** appear as zero-priced `line_item_type = 'modifier'` lines: 5,615 over 2026-05-03 → 2026-06-27 (Power Bowl 3,833, Hot Honey Cottage Cheese Bowl 1,782), **every one of them `is_catering = true` with `parent_rev_center_name = 'Box Lunches'`**. They are invisible under `is_catering = false`, which is exactly how the wrong conclusion was reached. **So the taxonomy row "Combo slot (zero-priced) = `line_item_type = 'modifier'`" is incomplete as written** — always qualify it with `parent_rev_center_name = 'Try 2 Combo'`, or Box Lunch units silently land in the combo bucket the moment catering is included.
 
-### Discount lines masquerade as items — exclude them from item reports (steward rule 2026-07-30)
+### Discount AND promotion lines masquerade as items — exclude both from item reports (steward rule 2026-07-30, extended 2026-07-31)
 
 A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `line_item_type = 'discount'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**.
 
@@ -283,17 +288,37 @@ Two consequences. They inflate any unit count not filtered to `line_item_type in
 
 > **✅ Partly fixed upstream 2026-07-30.** The build script now stamps discount lines consistently: `rev_center_name`, `item_type`, `parent_rev_center_name` and `parent_item_grp_name` are **all `'Discount'`**. Verified live — all 113,136 discount lines in that window carry the identical set. Previously `item_type` held the *item's name*, which is why it couldn't be filtered on. It can now. `item_name` still carries the item's name by design, so the discovery-query collision remains and the filters below are still required.
 
+> **🆕 2026-07-31 — promotion lines joined the problem, and they're worse.** The build now resolves promotion names from `brink.brinkPromotions`, so a promotion line carries `item_name = 'Free Try 2 Combo'` / `'Free Mini Strawberry Cup'` / `'Grand Opening 100%'` where it used to carry NULL. It also carries `qty = 1` and `item_gross_sales = 0`. So promotions now behave exactly like discount lines in item space — except **`rev_center_name` is NULL on promotion lines, not `'Promotion'`**, because there's no item-master row to give them a revenue center. The three-condition discount filter does **not** catch them. Only `item_type` and `line_item_type` work. Volume over 2026-05-03 → 2026-06-27: 1,111 lines / 1,111 phantom units.
+
 Filter them in **both** the discovery query and the metric query:
 
 ```sql
-and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') <> 'Discount'
-and ifnull(ol.line_item_type, '') <> 'discount'
+and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ```
 
-Since the 2026-07-30 fix, `item_type = 'Discount'` is a reliable test on its own — but keep all three conditions: they're free, and they still hold for any pre-fix data you compare against.
+Since the 2026-07-30/31 fixes, `item_type not in ('Discount','Promotion')` is a reliable test on its own — but keep all three conditions: they're free, and they still hold for any pre-fix data you compare against.
 
-> **⚠️ Wrap every string exclusion in `ifnull` — the bare form silently drops rows** (steward rule 2026-07-30). `col <> 'Discount'` evaluates to NULL, not TRUE, on a NULL `col`, and BigQuery's `WHERE` treats NULL as false. Those rows vanish with no warning. Measured over 2026-05-03 → 2026-06-27 (stores 1111 and 999 excluded): **`item_type` 1,111 nulls, `rev_center_name` 1,113, `parent_rev_center_name` 497** on 10,018,577 lines. Small, but it is a silent, unbounded-by-design loss that grows with whatever upstream defect produces the nulls — and it applies to *any* negated string test, not just discounts. The same trap sits inside combo-shape logic: `parent_rev_center_name = rev_center_name` is NULL-unsafe, so use `ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '')` when testing for a standalone line.
+> **⚠️ Wrap every string exclusion in `ifnull` — the bare form silently drops rows** (steward rule 2026-07-30). `col <> 'Discount'` evaluates to NULL, not TRUE, on a NULL `col`, and BigQuery's `WHERE` treats NULL as false. Those rows vanish with no warning. Re-measured 2026-07-31 over 2026-05-03 → 2026-06-27 (stores 1111 and 999 excluded, 10,018,577 lines): **`item_type` 0 nulls, `parent_rev_center_name` 0, `item_name` 0, `rev_center_name` 1,113.** The earlier counts (1,111 / 1,113 / 497) were *all* unnamed promotion lines — the 2026-07-31 naming fix removed the cause, and the 1,113 that remain are the 1,111 promotion lines plus 2 surcharges, neither of which has a revenue center by construction. **Keep the `ifnull` habit anyway**: it costs nothing, `rev_center_name` still nulls out, and the next upstream gap will arrive unannounced. The same trap sits inside combo-shape logic: `parent_rev_center_name = rev_center_name` is NULL-unsafe, so use `ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '')` when testing for a standalone line.
+
+### Promotion reporting is now answerable (new 2026-07-31)
+
+"What did we give away on promotion X?" used to be unanswerable from the marts — 71.4% of promotion lines (171,522 of 240,191 in full history) had a NULL name because `brinkOrderPromotion.Name` is mostly empty. The build now joins the `brinkPromotions` name master on **(promotion id, store)**; names are store-specific, so an id-only join would mislabel. Promotion value = `sum(ol.amount)` (negative), **not** `item_gross_sales` (always 0). Full history back to 2018-08-28; 4 lines in all history have no master row and read `'Promotion'`.
+
+```sql
+select
+  ol.description as promotion_name
+, count(*) as lines
+, round(sum(ol.amount), 2) as promotion_amount
+from `marketing-data-442316`.claude.order_lines ol
+where 1=1
+and ol.business_date between @start_date and @end_date
+and ol.line_item_type = 'promotion'
+and ol.store_id not in (1111, 999)
+group by 1
+order by promotion_amount
+```
 
 ### Store 999 joins 1111 in the exclusion list (steward rule 2026-07-30)
 
@@ -589,7 +614,7 @@ alone, which name things people recognise:
 | Sold alone | `composite_item_id is null and parent_rev_center_name = rev_center_name` | Bought on its own |
 | In a combo, paid | `composite_item_id is not null` | The priced half of a Try 2 Combo |
 | In a combo, free | `composite_item_id is null and parent_rev_center_name = 'Try 2 Combo'` | The zero-priced slot |
-| In a catering box | `composite_item_id is null and parent_rev_center_name not in ('Try 2 Combo','Discount') and parent_rev_center_name <> rev_center_name` | Box Lunches / Party Trays |
+| In a catering box | `composite_item_id is null and ifnull(parent_rev_center_name, '') not in ('Try 2 Combo','Discount','Promotion') and ifnull(parent_rev_center_name, '') <> ifnull(rev_center_name, '')` | Box Lunches / Party Trays |
 
 The tell for a standalone line is that its **`parent_rev_center_name` equals its own
 `rev_center_name`** — an unbundled item is its own parent. Verified to produce identical
@@ -744,7 +769,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   The spread is **not constant across sale shapes**, so it is not a flat rate and the difference between gross and net cannot be described as "the discount" without evidence. Order-level discounts and promotions are still *not* allocated per item, so **`order_customer.net_sales` remains the only net figure to quote or tie out** — say that whenever you hand over `item_net_sales`. Still open: what the 2.3–3.8% actually represents, and why it is wider on combo components than on standalone lines (Asana: `KB finding: item_net_sales gross-to-net spread varies by sale shape`).
 - **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
 - **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
-- **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it.
+- **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it. **`order_lines` only caught up on 2026-07-31** (+644 June orders / +$71,586 gross); the definition is now identical on both marts and verified to agree on all 703,524 June orders. If you're comparing against a catering number produced between 07-24 and 07-31, ask which table it came from before calling either one wrong.
 - **Grain defect (1 order in ~50M):** `brink_order_id` 2279778269187 has two rows in `order_customer` — two pulse orders point at one Brink order, double-counting $263.99 across two customers. Immaterial to totals; use `count(distinct brink_order_id)` if exact uniqueness matters.
 - **`order_sequence` history starts 2023-03-06**, not 2018. `customer_order_count = 1` means "first order since March 2023", not first-ever. Say so when presenting first-time-guest numbers.
 - **`order_sequence` is a `left join`, never inner** — ~47% of orders have no `mapped_cust_id` and so no row; an inner join silently drops them.

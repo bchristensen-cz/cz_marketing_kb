@@ -26,13 +26,6 @@ if start_date is null then
 end if;
 
 
--- drop table `marketing-data-442316`.sales_ops.order_lines;
--- set start_date = '2018-08-07';
--- create or replace table `marketing-data-442316`.sales_ops.order_lines
--- partition by business_date
--- cluster by rev_center_name, item_name, parent_item_grp_name, parent_rev_center_name
--- as
-
 -- ⚠️ 2026-07-30: this predicate MUST be `business_date`. The full-history rebuild that day
 -- renamed the target column from BusinessDate to business_date; the old `businessdate`
 -- spelling here failed with `Unrecognized name: businessdate` and would have broken the
@@ -44,8 +37,19 @@ where business_date >= start_date;
 
 insert into `marketing-data-442316`.sales_ops.order_lines
 
+
+-- Full-history rebuild: comment out the delete + insert above and uncomment this block.
+--drop table `marketing-data-442316`.sales_ops.order_lines;
+-- declare start_date date;
+-- set start_date = '2018-08-07';
+-- create or replace table `marketing-data-442316`.sales_ops.order_lines
+-- partition by business_date
+-- cluster by rev_center_name, item_name, parent_item_grp_name, parent_rev_center_name
+-- as
+
 with brink_order as (
-select distinct bo.Id
+-- '2026-07-31' FKStoreId added so the promotion branch can resolve names per store.
+select distinct bo.Id, bo.FKStoreId as storeid
 from `marketing-data-442316`.brink.brinkOrder bo
 where 1=1
 and bo.businessdate >= start_date
@@ -63,6 +67,33 @@ select i.id, i.name
 from `marketing-data-442316`.brink.brinkItems i
 where regexp_contains(i.name, r'(?i)\btip\b')
 qualify row_number() over(partition by i.id order by i.name) = 1
+)
+
+-- '2026-07-31' promotion name lookup. `brinkOrderPromotion.Name` is NULL on 171,522 of
+-- 240,191 rows (71.4%) and empty on 319 more, which is why promotion lines used to land with
+-- a NULL description / item_name / item_type. brinkPromotions is the name master: 5,792 rows,
+-- 83 promotion ids, and (Id, StoreId) is UNIQUE — so the join below is exact, one row, and
+-- deterministic. Store scope matters: promotion names are store-specific (id 642425436 is
+-- '50% off Lunch QR Craig rd' at store 164 and '50% off Blue Diamond' at store 168), so an
+-- id-only lookup mislabels 47 lines of full history and, on a name-count tie, can pick a
+-- different winner on each rebuild. Verified 2026-07-31: (Id, StoreId) matches 240,187 of
+-- 240,191 promotion lines; the 4 misses fall back to 'Promotion'.
+, promotions as (
+with prom_cnt as (
+select p.id, p.StoreID
+, p.Name
+, count(*) as cnt
+from `marketing-data-442316`.brink.brinkPromotions p
+group by 1,2,3
+)
+
+select p.id
+, p.storeid
+, p.name
+, p.cnt
+, row_number() over(partition by p.id, p.storeid order by p.cnt desc) as rn
+from prom_cnt p
+qualify rn = 1
 )
 
 , order_lines as (
@@ -169,7 +200,7 @@ p.orderId
 , null
 , 'promotion' as item_type
 , p.PromotionId
-, p.Name
+, coalesce(pn.Name, 'Promotion') as description  -- '2026-07-31' was p.Name, NULL 71.4% of the time
 , p.Amount * -1 as amount
 , 0 as gross
 , 0 as net
@@ -177,6 +208,9 @@ p.orderId
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
 	on bo.id = p.orderid
+    left join promotions pn  -- '2026-07-31' name master, joined per store
+    on pn.id = p.promotionid
+    and pn.storeid = bo.storeid
 
 union all
 
@@ -251,7 +285,14 @@ select
 bol.order_id as brink_order_id
 , po.id as pulse_order_id
 , bo.BusinessDate
-, case when po.is_catering is null or po.is_catering = false then false else true end as is_catering
+-- '2026-07-31' is_catering now matches sales_ops.order_customer's definition (fixed there
+-- 2026-07-24). The destination test evaluates FIRST; previously `when po.is_catering is null
+-- or po.is_catering = false then false` fired first, making the destination branch dead code
+-- and missing every POS-only catering order. June 2026 effect on this table: +644 orders /
+-- +$71,586 gross moved into catering. Until this change the two marts disagreed on catering.
+--, case when po.is_catering is null or po.is_catering = false then false else true end as is_catering
+, case when lower(bd.name) like '%cater%' or po.is_catering = true then true
+		else coalesce(po.is_catering, false) end as is_catering
 , case when date_diff(date(bo.ClosedTime), bo.BusinessDate, day) > 0 then coalesce(po.promise_time, bo.OpenedTime) else bo.ClosedTime end as order_datetime
 , timestamp(case when date_diff(date(bo.ClosedTime), bo.BusinessDate, day) > 0 then coalesce(po.promise_time, bo.OpenedTime) else bo.ClosedTime end , s.timezone_name) as order_timestamp_utc
 , bo.GrossSales
@@ -268,6 +309,8 @@ bol.order_id as brink_order_id
 , coalesce(bi.item_grp_name, bol.description) as item_grp_name
 , bi.item_size
 , bol.item_modifier
+-- NOTE: rev_center_name stays NULL on promotion and surcharge lines (no item-master match,
+-- so no revenue center). Promotions are filterable on item_type / line_item_type only.
 , case when bol.line_item_type = 'discount' then 'Discount' else brc.name end as rev_center_name
 , bol.item_gross_sales
 , bi.price
@@ -281,6 +324,8 @@ case when coalesce(safe_divide(bol.item_gross_sales,bi.price),0) < 1 then 1 else
     when brc.name = 'Kids Meals' and bi.name = 'Kids Combo' then 'Kids Meals'
     when brc.name = 'Kids Meals' and bi.name <> 'Kids Combo' then 'Entree'
     when brc.name in ('Bottled Beverages','Foutain Beverages') then 'Beverage'
+    when bol.line_item_type = 'discount' then 'Discount' -- '2026-07-30'  added discount
+    when bol.line_item_type = 'promotion' then 'Promotion' -- '2026-07-31'  added promotion
     else coalesce(brc.name, bol.description)
   end as item_type
 from brink_order_item_lines bol
@@ -347,12 +392,14 @@ l.brink_order_id
 , l.item_type
 , case
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo'
-	when l.item_type = 'Discount' then 'Discount'   -- 2026-07-30
+	when l.item_type = 'Discount' then 'Discount'    -- '2026-07-30'  added discount
+	when l.item_type = 'Promotion' then 'Promotion'  -- '2026-07-31'  added promotion
 	else coalesce(c.rev_center_name, l.description) end as parent_rev_center_name
 , case
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo ' || ca.attr_list
 	when coalesce(c.rev_center_name, l.description) = 'Foutain Beverages' then 'Fountain Beverage'
-	when l.item_type = 'Discount' then 'Discount'   -- 2026-07-30
+	when l.item_type = 'Discount' then 'Discount'    -- '2026-07-30'  added discount
+	when l.item_type = 'Promotion' then 'Promotion'  -- '2026-07-31'  added promotion
 	else coalesce(c.item_grp_name, l.description) end as parent_item_grp_name
 from order_lines_detail l
 	left join order_lines_detail c
@@ -363,4 +410,6 @@ from order_lines_detail l
 		on ca.combo_order_line_item_id = l.combo_order_line_item_id
 			left join `marketing-data-442316`.sales_ops.store_info si
 			on si.store_id = l.store_id
+where 1=1
+and l.BusinessDate >= start_date
 ;

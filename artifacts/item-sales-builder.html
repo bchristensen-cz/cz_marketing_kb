@@ -138,7 +138,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <div id="combonote"></div>
 
   <div class="lock">
-    Applied for you: test store 1111 and unmapped store 999 excluded &middot; discount lines excluded on all three markers, null-safe &middot; <code>claude.order_lines</code>, history from 2023-01-01 &middot; business week is Mon&ndash;Sat, so a week is labelled by its Saturday &middot; results capped at 10,000 rows and you'll be told if the cap is hit
+    Applied for you: test store 1111 and unmapped store 999 excluded &middot; discount and promotion lines excluded, null-safe &middot; <code>claude.order_lines</code>, history from 2023-01-01 &middot; business week is Mon&ndash;Sat, so a week is labelled by its Saturday &middot; results capped at 10,000 rows and you'll be told if the cap is hit
   </div>
 </div>
 
@@ -189,10 +189,18 @@ const COMBO_RC=['Sandwiches','Soups','Salads'];
 
 // ---------------------------------------------------------------------------
 // Null-safe building blocks.
-//   item_type          1,111 nulls  |  rev_center_name 1,113 nulls
-//   parent_rev_center    497 nulls  (2026-05-03..06-27, verified 2026-07-30)
-// A plain `col <> 'Discount'` evaluates to NULL on those rows and silently drops
-// them. Every string exclusion below goes through ifnull for that reason.
+//   Re-measured 2026-07-31 (2026-05-03..06-27, stores 1111/999 out, 10,018,577 lines):
+//   item_type 0 nulls | parent_rev_center_name 0 | item_name 0 | rev_center_name 1,113.
+//   The old 1,111 / 1,113 / 497 counts were all unnamed promotion lines; the 2026-07-31
+//   build named them. The 1,113 that remain are 1,111 promotions + 2 surcharges, which
+//   have no revenue center by construction. A plain `col <> 'Discount'` evaluates to NULL
+//   on those rows and silently drops them, so every string exclusion still goes through
+//   ifnull — free, and the next upstream gap won't announce itself.
+//
+//   2026-07-31: promotion lines must be excluded too. They now carry the promotion's NAME
+//   in item_name ('Free Try 2 Combo', 'Free Dubai Cup') with qty 1 and $0 gross, so they
+//   look like menu items in search and add phantom units. rev_center_name is NULL on them,
+//   not 'Promotion' — only item_type and line_item_type catch them.
 // ---------------------------------------------------------------------------
 const SHAPE=`case
     when ol.composite_item_id is not null then 'In combo (paid)'
@@ -414,9 +422,9 @@ from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id not in (1111, 999)
-and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') <> 'Discount'
-and ifnull(ol.line_item_type, '') <> 'discount'
+and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ${wants.join('\n')}
 ${grpBy?`group by\n${grpBy}\n`:''}order by
 ${ordBy}
@@ -468,9 +476,9 @@ from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
 and ol.store_id not in (1111, 999)
-and ifnull(ol.item_type, '') <> 'Discount'
+and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') <> 'Discount'
-and ifnull(ol.line_item_type, '') <> 'discount'
+and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 and (${likes})
 group by
   ol.item_name

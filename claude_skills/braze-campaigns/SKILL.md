@@ -236,7 +236,15 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
   Depth `1` gives top-level keys; `2` reaches one level of nesting. Run this **before** writing any
   `json_value` path — it is cheap, and it is the only way to know a documented key still exists.
-  The same pattern works on `braze.users.custom_attributes`.
+
+  > **⚠️ On `braze.users.custom_attributes`, DROP the `parse_json` wrapper** (corrected 2026-08-03).
+  > `customevent.properties` is a JSON **STRING**, but `users.custom_attributes` is a native **JSON**
+  > column (verified via `INFORMATION_SCHEMA.COLUMNS`), so `safe.parse_json(u.custom_attributes)`
+  > errors with `No matching signature` — the previous note here said "the same pattern works," and
+  > it doesn't. Use `unnest(json_keys(u.custom_attributes, 2))` directly. A third invented namespace
+  > (`bigfunctions.us.json_keys`) failed on this table 2026-08-01 for exactly this type mismatch.
+  > `json_value(u.custom_attributes, '$.key')` accepts JSON directly and needs no change. Remember
+  > `braze.users` is unpartitioned — full scan every touch, so key-discover once, not per-CTE.
 - **The DATETIME/TIMESTAMP trap above is still catching people** — an analyst MCP session hit it again on 2026-07-24 (`order_timestamp_utc` vs a Braze event datetime) despite being documented since 2026-07-23. If a session is failing on this, it is probably not reading a fresh clone of `main`.
 
 ## Currents ingestion integrity (steward findings 2026-07-28)

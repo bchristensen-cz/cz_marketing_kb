@@ -186,6 +186,25 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 - **Freshness / event maturation (steward rule 2026-07-23):** event tables (`email_send`, `email_open`, clicks, `app_sessionstart`, etc.) keep backfilling for **~2 days** — same-day reads have run **20–25% low**. Treat the most recent 1–2 event days as partial: label them as immature in any answer, and never compare a just-loaded day against matured days (day-over-day on fresh data will always look like a drop). Check `braze.load_watermark` (`watermark`, `updated_at`) before treating recent events as complete.
 - **`event_timestamp` is DATETIME, not TIMESTAMP** — comparing it directly to a TIMESTAMP column (e.g., order timestamps when joining Braze events to `sales_ops` orders) fails with `No matching signature for operator > for argument types: TIMESTAMP, DATETIME`. Cast the Braze side: `cast(event_timestamp as timestamp)` (it's UTC, so the cast is safe). Observed tripping analyst MCP sessions 2026-07-23.
 - **`braze.users` is not partitioned** — every query against it is a full scan. Touch it once per analysis (or wait for the planned user-dim mart), not inside repeated CTE runs.
+- **`braze.users` join key is `external_id`, NOT `external_user_id`** — the event tables call the customer id `external_user_id`; the user dimension calls the same id `external_id`, and there is no `external_user_id` column on it (an MCP query failed on exactly this 2026-08-03: `Name external_user_id not found inside u`). Join `on u.external_id = es.external_user_id`. Its nested columns (`custom_attributes`, `apps`, `devices`, `user_aliases`, …) are all **native JSON** — no `parse_json`, see the `json_keys` note above. App-adoption pattern (mined from working analyst SQL 2026-08-03): one row per user with platform and first-use time via
+
+  ```sql
+  select
+    u.external_id
+  , max(case
+        when json_value(a, '$.platform') in ('iOS', 'Android')
+         and json_value(a, '$.first_used') is not null
+        then timestamp(json_value(a, '$.first_used'))
+      end) as app_first_used
+  from `marketing-data-442316`.braze.users u
+  	left join unnest(json_query_array(u.apps)) a
+  	on true
+  where 1=1
+  and u.external_id is not null
+  group by 1
+  ```
+- **`time` is INT64 epoch seconds on every event table — `extract(hour from time)` fails** with `No matching signature for EXTRACT … FROM INT64` (hit 2026-08-03 on `subscriptiongroup_statechange`; the retry guessed a column called `occurred_at`, which doesn't exist on any Braze table). For hour-of-day use `extract(hour from event_timestamp)` (DATETIME, UTC) or `local_event_datetime` (user-local) — both already on the table. `timestamp_seconds(time)` also works but is never necessary.
+- **Subscription-state changes live in `subscriptiongroup_statechange`** (verified schema 2026-08-03): `channel` (`'sms'`, …), `subscription_group_id`, `subscription_status` (`'Subscribed'`/`'Unsubscribed'`), `state_change_source`, plus the standard campaign/canvas identity and time columns, partitioned by `event_date`. This is the table for "why did SMS unsubs spike" questions. No recipe in the templates yet — logged as a KB gap 2026-08-03.
 - **`external_user_id` is STRING; `order_customer.mapped_cust_id` is INT64** — joining them raw fails with `No matching signature for operator = for argument types: INT64, STRING` (hit again by an analyst MCP session 2026-07-27). Cast the Braze side.
 - **Use `safe_cast`, not `cast` — this is now mandatory, not conditional (upgraded 2026-07-28).** The workspace *does* contain non-numeric `external_user_id` values: `cast(external_user_id as int64)` failed on 2026-07-27 with `Bad int64 value: 05d0a59b-ab22-46d8-b1fa-1577681b…` — a UUID-shaped id. A plain `cast` aborts the whole query the moment one such row is in scope, and which rows are in scope changes with the date window, so a query that worked yesterday can fail today. Always:
 

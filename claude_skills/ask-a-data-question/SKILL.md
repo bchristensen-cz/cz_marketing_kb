@@ -50,6 +50,7 @@ about bowls (see below) teaches the user that the clarifications are noise.
 | a product name | the `like` discovery query from `sales-ops-orders` (pre-query protocol item 5) |
 | "market", "region", "area" | see the market rule below — it is **`store_state`** |
 | a store by name | `select si.store_id, si.store_name, si.store_city, si.store_state from ... store_info si` |
+| "delivery" | see the delivery rule below — default is `oc.destination = 'CZ Delivery'`; the third-party marketplaces are a different question |
 | a category | `select distinct ol.rev_center_name` / `ol.item_type` on the date range |
 | a campaign | the Braze / SessionM lookup in the relevant skill |
 | a fuzzy date ("last week", "May") | resolve to explicit dates; business week is **Mon–Sat** |
@@ -71,6 +72,30 @@ St George, so a single "Utah" row hides most of the geographic variation. If the
 wants something tighter, `store_city` is available — but note `West Valley` and
 `West Valley City` are separate values for the same metro. A true metro rollup is a
 **KB gap**, not something to invent per-session (Asana backlog).
+
+### "Delivery" means CZ Delivery (steward decision 2026-08-04)
+
+When an employee says "delivery" they mean the company's own delivery channel:
+
+```sql
+and oc.destination = 'CZ Delivery'
+```
+
+(`revenue_category = 'Digital'`.) They do **not** mean the DoorDash / UberEats / GrubHub /
+Postmates marketplaces (`revenue_category = 'Third_Party'`) — even though a third-party
+company physically carries CZ Delivery orders too, which is exactly how a session got this
+wrong on 2026-08-03: the provider's name came up in the conversation, so the filter became
+`lower(destination) like '%delivery%' or like '%doordash%'` and swept the marketplaces in.
+
+Sizes, 2026-05-01 → 2026-07-31, stores 1111/999 excluded: **CZ Delivery 37,396 orders /
+$1.49M net; marketplaces 322,728 / $9.00M** — the wrong read is ~9x the right one. Note
+also that `like '%delivery%'` catches the catering delivery destinations
+(`Catering Online Delivery`, `EZ Cater Delivery`, `Catering Delivery` — 14,689 / $5.13M);
+that scope belongs to the **catering fork**, not this one.
+
+If the question plausibly means third-party or "everything that gets delivered," present
+the fork with these sizes in the option labels. Otherwise default to `'CZ Delivery'` and
+state the resolved meaning in the answer.
 
 ## Step 2 — ask once, with clickable options
 

@@ -24,7 +24,7 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 > - **Promotion lines are named** and stamped `'Promotion'` in `item_type`, `rev_center_name`, `parent_rev_center_name` and `parent_item_grp_name`. This **removes** essentially every NULL on those columns (only 2 surcharge lines keep a NULL `rev_center_name`), and **adds** a new way to get item numbers wrong — promotion names now collide with item names, and promotion lines pass the standalone-sale test. See [the exclusion rule](#discount-and-promotion-lines-masquerade-as-items--exclude-both-from-item-reports-steward-rule-2026-07-30-extended-2026-07-31).
 > - **New: promotion-level reporting** off `line_item_type = 'promotion'` grouped by `description`.
 
-> **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Five scope items — store 1111, date range, catering, Try 2 Combo inclusion, and named-product resolution — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
+> **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Six scope items — store 1111, date range, catering, Try 2 Combo inclusion, named-product resolution, and the meaning of "delivery" — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
 
 Project: `marketing-data-442316`. The four approved tables for order/sales analysis:
 
@@ -218,6 +218,7 @@ order by ca.mapped_cust_id, s.orders desc
 | Guest orders | `is_guest_order = true` (BOOLEAN since 2026-07-27, was 0/1) |
 | Catering | `is_catering = true` for the business line; `revenue_category = 'Catering'` for channel reporting (see gotchas — they differ slightly) |
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
+| Delivery (first-party) | `destination = 'CZ Delivery'` (steward rule 2026-08-04). Marketplace orders (`revenue_category = 'Third_Party'`) are NOT "delivery" unless explicitly requested — see protocol item 6 |
 | Digital source | `order_source` (NULL = in-store POS) |
 | First-time order | `order_sequence.customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 (see gotchas) |
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
@@ -369,6 +370,26 @@ order by 4 desc
 Note `Grilled Cheese Sandwich` is effectively a **combo-only item** — 52 standalone lines against 93K combo appearances. If a user says "grilled cheese" and you silently pick one name, you can be off by an order of magnitude or answer about the wrong sandwich entirely.
 
 **Also: `Ultimate Grilled Cheese Box` carries `is_catering = false`** despite being the catering box product. So `is_catering = false` does **not** reliably strip catering-only SKUs — the catering question (item 3) and the name question (item 5) are independent, and you need both.
+
+### 6. "Delivery" means CZ Delivery — never sweep in the marketplaces (steward rule 2026-08-04)
+
+When an employee says "delivery" they mean the company's own delivery channel:
+
+```sql
+and oc.destination = 'CZ Delivery'
+```
+
+(`revenue_category = 'Digital'`.) They do **not** mean DoorDash / UberEats / GrubHub / Postmates marketplace orders (`revenue_category = 'Third_Party'`) — even though a third-party company physically carries CZ Delivery orders too. That's precisely how this burned a real answer on 2026-08-03: the delivery provider's name in the conversation pulled the marketplaces into the filter (`lower(destination) like '%delivery%' or like '%doordash%'`).
+
+Measured 2026-05-01 → 2026-07-31, stores 1111 and 999 excluded:
+
+| Scope | Orders | Net sales |
+|---|---|---|
+| `destination = 'CZ Delivery'` | 37,396 | $1.49M |
+| Marketplaces (DoorDash, UberEats, GrubHub, Postmates) | 322,728 | $9.00M |
+| Catering delivery destinations (`Catering Online Delivery`, `EZ Cater Delivery`, `Catering Delivery`) | 14,689 | $5.13M |
+
+The naive LIKE read is roughly **9x** the intended number. `like '%delivery%'` also catches the catering delivery destinations — that scope is item 3's question (catering), not this one. If the user plausibly means third-party or "all delivered orders," ask, with these sizes in the option labels; when unstated and unambiguous, default to `'CZ Delivery'` and say so in the assumptions line.
 
 Remaining defaults unless the user says otherwise: include employee-discount orders, all channels. State all assumptions in the answer when they matter.
 

@@ -4,21 +4,24 @@ Shared repository of data dictionaries, skills, and SQL for interfacing with Caf
 
 ## How to use with Claude — session protocol (required)
 
-This KB is **pull-based**: every Claude session works from a fresh clone of `main`, pulled at the start of that session. No installed skill packages, no forks, no saved local copies.
+This KB is **pull-based**: every Claude session works from a fresh copy of `main`, pulled at the start of that session. No installed skill packages, no forks, no saved local copies.
 
-**Requires Cowork mode in the Claude desktop app.** The clone needs a shell, and that's the only surface that has one — regular desktop chat, claude.ai in a browser, and mobile all fail. Verified 2026-07-29: a clean shallow clone succeeds in the stock Cowork sandbox with no extra MCP servers. Outside Cowork, rule 5 below fires and no data question can be answered. That's intended: see `CLIENT_SETUP.md`.
+**Two supported ways to pull, depending on the surface.** Cowork sessions have a shell and clone the repo (verified 2026-07-29: a clean shallow clone succeeds in the stock Cowork sandbox with no extra MCP servers). Regular chat has no shell and fetches the raw files from GitHub instead — same freshness, different pipe (verified 2026-08-04 in desktop regular chat and claude.ai in the browser, including a standard-permission user: full files fetched, hash stated, clarifications asked, SQL shown). Mobile is not yet verified. If neither the clone nor the fetch succeeds, rule 5 below fires and no data question can be answered. That's intended: see `CLIENT_SETUP.md`.
 
-1. **Fresh clone, every session** (the repo is public; a shallow clone takes seconds):
-   ```
-   git clone --depth 1 https://github.com/bchristensen-cz/cz_marketing_kb
-   ```
-   Clone into the session's temporary working area. If an older copy exists, delete it first.
-2. Read this README, then **`claude_skills/ask-a-data-question/SKILL.md`**, then the relevant domain skill in `claude_skills/`, then the data dictionaries it references — from the fresh clone only. `ask-a-data-question` comes first on every question: it resolves fuzzy terms against the data and presents the remaining scope choices as clickable options, so nobody has to word a question well to get a right answer.
-3. **State the KB version** in the first data answer of the session (`git log -1 --format='%h %ad'`), so stale copies are visible.
+1. **Fresh pull, every session** (the repo is public; either path takes seconds):
+   - With a shell (Cowork):
+     ```
+     git clone --depth 1 https://github.com/bchristensen-cz/cz_marketing_kb
+     ```
+     Clone into the session's temporary working area. If an older copy exists, delete it first.
+   - Without a shell (regular chat / browser): fetch the raw files from
+     `https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/`, starting with `README.md`. Fetch each file whole — never work from a summary or a truncated fetch.
+2. Read this README, then **`claude_skills/ask-a-data-question/SKILL.md`**, then the relevant domain skill in `claude_skills/`, then the data dictionaries it references — from the fresh copy only. `ask-a-data-question` comes first on every question: it resolves fuzzy terms against the data and presents the remaining scope choices as clickable options (plain-text questions where clickable options aren't available), so nobody has to word a question well to get a right answer.
+3. **State the KB version** in the first data answer of the session — `git log -1 --format='%h %ad'` with a shell, or fetch `https://api.github.com/repos/bchristensen-cz/cz_marketing_kb/commits/main` and report the short sha and commit date — so stale copies are visible.
 4. Users never push, fork, or edit this repo. Findings go to the steward via Asana (see Ground rules).
-5. **A failed clone is a hard stop.** If the clone doesn't succeed, say the KB is unavailable and stop — do not answer from general knowledge, do not guess table or column names, and do not query BigQuery. There is deliberately no local fallback: the walls in these skills (approved tables only, canonical definitions, partition filters, the pre-query clarification protocol) exist precisely because unguided querying of this warehouse produces confident wrong answers. Answering without the KB is worse than not answering.
+5. **A failed pull is a hard stop.** If neither the clone nor the raw-file fetch succeeds, say the KB is unavailable and stop — do not answer from general knowledge, do not guess table or column names, and do not query BigQuery. There is deliberately no local fallback: the walls in these skills (approved tables only, canonical definitions, partition filters, the pre-query clarification protocol) exist precisely because unguided querying of this warehouse produces confident wrong answers. Answering without the KB is worse than not answering.
 
-The one-time setup each user needs is the project-instructions snippet in `CLIENT_SETUP.md` — it's deliberately tiny and never changes, so it can't go stale.
+The one-time setup each user needs is in `CLIENT_SETUP.md`: join the shared **Analysis** project (its instructions are deployed centrally by the steward) and add the tiny global backstop. The canonical protocol snippet lives at the bottom of `CLIENT_SETUP.md`.
 
 Provisioning a new person (Claude seat, BigQuery access, Asana, verification, question-wording tips) is the steward's runbook in `ADMIN_ONBOARDING.md`.
 

@@ -4,26 +4,24 @@ You do **not** need to know git, SQL, or BigQuery. Claude does all of that. This
 
 Total time: about five minutes.
 
-Do **not** install the skills as `.skill` packages, mount a personal clone of this repo, or fork it. The fresh-clone-per-session protocol is the only supported way to consume this KB — it's what guarantees everyone gets the same answer.
+Do **not** install the skills as `.skill` packages, mount a personal clone of this repo, fork it, or create your own data project with a copy of the instructions. The shared **Analysis** project plus a fresh pull of this KB every session is the only supported way to consume it — it's what guarantees everyone gets the same answer.
 
 ---
 
-## Before you start — you must use Cowork mode on the Claude desktop app
+## Where you can ask data questions
 
-**This is a hard requirement, not a preference.** Data questions only work in **Cowork mode in the Claude desktop app**.
+Every session pulls a fresh copy of the knowledge base. In Cowork mode that happens with `git clone`; everywhere else Claude fetches the raw files straight from GitHub. Both paths are pull-based and always current.
 
-Here's why. Every session pulls a fresh copy of the knowledge base with `git clone`, and that needs a working shell. Cowork mode has one built in. The other places you can use Claude don't:
+| Where you're using Claude | Data questions work? | How the KB arrives |
+|---|---|---|
+| **Cowork mode, desktop app** | ✅ Yes | `git clone` (verified 2026-07-29) |
+| **Regular chat, desktop app** | ✅ Yes | raw-file fetch (verified 2026-08-04) |
+| **claude.ai in a web browser** | ✅ Yes | raw-file fetch (verified 2026-08-04) |
+| Claude on mobile | ❓ Not yet verified | raw-file fetch — don't rely on it until the steward confirms |
 
-| Where you're using Claude | Data questions work? |
-|---|---|
-| **Cowork mode, desktop app** | ✅ Yes — the only supported surface |
-| Regular chat in the desktop app | ❌ No shell, so the clone fails |
-| claude.ai in a web browser | ❌ No shell, so the clone fails |
-| Claude on mobile | ❌ No shell, so the clone fails |
+**What failure looks like:** Claude tells you the knowledge base is unavailable and that it can't answer data questions. That is Claude working *correctly* — it's refusing to guess rather than answer from memory. It usually means GitHub couldn't be reached, or you're on mobile. It is never a reason to ask Claude to answer anyway.
 
-**What failure looks like:** Claude tells you the knowledge base is unavailable and that it can't answer data questions. That is Claude working *correctly* — it's refusing to guess. It is not a bug, and there is no workaround to ask for. Open Cowork mode on the desktop app and ask again.
-
-You can still use Claude anywhere for ordinary work — writing, brainstorming, summarizing. The restriction applies only to Cafe Zupas data questions.
+You can still use Claude anywhere for ordinary work — writing, brainstorming, summarizing. The rules here apply only to Cafe Zupas data questions.
 
 ---
 
@@ -44,55 +42,19 @@ Ask Brent if you don't have BigQuery access yet; it's granted per-person.
 
 ---
 
-## Step 1 — Create a project
+## Step 1 — Join the shared "Analysis" project
 
-In the Claude **desktop app**, go to **Projects → + New Project**. Name it something like `Cafe Zupas Data`.
+Ask the data steward (Brent) for an invite to the company-wide **Analysis** project, and accept it.
 
-Note: Claude cannot see the project's name or description, so don't put instructions there — they go in Step 2.
-
----
-
-## Step 2 — Paste the project instructions
-
-Open your new project, click **Set project instructions**, and paste everything in the box below. Save.
-
-This snippet is deliberately tiny and stable. All the real logic — table definitions, metric rules, gotchas — lives in the repo, so this should never need updating.
-
-```
-# Cafe Zupas data — knowledge base protocol
-
-Before answering ANY question about company data (sales, orders, customers,
-menu, items, stores, campaigns, Braze, BigQuery):
-
-1. Get a fresh copy of the knowledge base — every session, even if a copy
-   already exists (delete any older copy first):
-   git clone --depth 1 https://github.com/bchristensen-cz/cz_marketing_kb
-   Clone into your temporary working area, never into my personal folders.
-2. Read README.md from that fresh clone and follow its session protocol,
-   then read the relevant skill in claude_skills/ and the data dictionaries
-   it references. Follow the skills verbatim (canonical definitions, the
-   pre-query clarification protocol, partition filters).
-3. Never answer from installed skills, saved copies, forks, or memory of a
-   previous session. The fresh clone is the single source of truth.
-4. State the KB version (git log -1 --format='%h %ad') in the first data
-   answer of the session.
-5. Never commit, push, or edit the knowledge base. New findings are logged
-   per the README's ground rules (Asana task on the Claude Data board).
-6. If the clone fails for any reason, STOP. Tell me the knowledge base is
-   unavailable and that you can't answer data questions without it. Do not
-   answer from general knowledge, do not guess table or column names, and
-   do not query BigQuery. A failed clone is a hard stop, not a reason to
-   improvise.
-7. Always show me the SQL.
-```
+That project's instructions carry the full knowledge-base protocol, maintained centrally by the steward. You don't paste anything, and you must not create a personal copy of the project — a personal copy freezes whatever the instructions said the day you made it, and stale instructions are how two people end up with different answers to the same question.
 
 ---
 
-## Step 3 — Paste the global backstop
+## Step 2 — Paste the global backstop
 
-Step 2 only protects chats **inside** that project. This step protects everything else.
+The Analysis project protects chats **inside** it. This step protects everything else.
 
-Go to **Settings → General → "Instructions for Claude"** and add the block below (keep anything already there). Unlike project instructions, this applies to every chat and every Cowork session you ever start — so if you forget to open the project, the guardrails still hold.
+Go to **Settings → General → "Instructions for Claude"** and add the block below (keep anything already there). This applies to every chat you ever start — so if you forget to open the project, the guardrails still hold.
 
 ```
 # Cafe Zupas company data
@@ -102,46 +64,49 @@ menu, items, stores, campaigns, Braze, BigQuery — the only approved source
 of query logic is the knowledge base at:
 https://github.com/bchristensen-cz/cz_marketing_kb
 
-Clone it fresh each session (git clone --depth 1) into temporary working
-space, then follow its README and the relevant skill in claude_skills/
-verbatim. State the commit hash in your first data answer.
+Get a fresh copy each session: git clone --depth 1 if you have a shell,
+otherwise fetch the raw files from
+https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/
+(README.md first). Follow its README and the relevant skill in
+claude_skills/ verbatim. State the KB version in your first data answer.
 
 Never answer these questions from general knowledge, from memory of a past
 session, or from a saved copy. Never guess table or column names. If you
-cannot clone the knowledge base, say so and stop — do not query BigQuery.
+can neither clone nor fetch the knowledge base, say so and stop — do not
+query BigQuery.
 
 This applies only to Cafe Zupas data questions; ignore it otherwise.
 ```
 
-This is intentionally a **backstop, not a duplicate**. It names the repo and enforces the refusal, then hands off to the clone for all real logic. Don't paste the full protocol here — two copies of the same rules will eventually drift and produce inconsistent answers that are very hard to diagnose. Keep the detail in Step 2 and in the repo.
+This is intentionally a **backstop, not a duplicate**. It names the repo and enforces the refusal, then hands off to the fresh pull for all real logic. Don't paste the full protocol here — two copies of the same rules will eventually drift and produce inconsistent answers that are very hard to diagnose. The full protocol lives in the Analysis project and in this repo.
 
-It's also deliberately conditional ("only Cafe Zupas data questions"). Without that line it would fire on unrelated work — drafting an email, brainstorming a campaign name — and Claude would start cloning repositories for no reason.
-
----
-
-## Step 4 — Always start your chats inside the project, in Cowork mode
-
-Even with the Step 3 backstop, the project is where the full protocol lives. Habit still matters: **open Cowork mode, open the project, then ask.**
-
-If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it, then re-ask your question. If you're in the browser or on your phone, there's nothing to move — you'll need the desktop app (see the requirement at the top).
+It's also deliberately conditional ("only Cafe Zupas data questions"). Without that line it would fire on unrelated work — drafting an email, brainstorming a campaign name — and Claude would start pulling repositories for no reason.
 
 ---
 
-## Step 5 — Verify it's working
+## Step 3 — Always ask data questions inside the Analysis project
+
+Even with the Step 2 backstop, the project is where the full protocol lives. Habit: **open the Analysis project, then ask.** Cowork or regular chat both work.
+
+If you catch yourself in a plain chat, use the chat's dropdown → **Add to project** to move it into Analysis, then re-ask your question.
+
+---
+
+## Step 4 — Verify it's working
 
 Run these three checks once, in order. They take a couple of minutes and catch every common setup mistake.
 
 ### Check 1 — the project path
 
-Inside your project, ask:
+Inside the Analysis project, ask:
 
 > sales for ultimate grilled cheese from May 3rd to June 27th
 
-**Pass:** Claude mentions a knowledge-base version (a short commit hash like `4098868`), then **asks you clarifying questions before querying** — the date range, whether to include catering, whether to include items sold inside Try 2 Combos, and which exact product names you mean. SQL is shown when it eventually runs.
+**Pass:** Claude mentions a knowledge-base version (a short commit hash like `4098868`), then **asks you clarifying questions before querying** — the date range, whether to include catering, whether to include items sold inside Try 2 Combos, and which exact product names you mean. (In Cowork the choices arrive as clickable options; in regular chat they're plain-text questions. Both are correct.) SQL is shown when it eventually runs.
 
-**Fail:** an immediate number with no questions, no commit hash, or no SQL. The project instructions didn't load — recheck Step 2.
+**Fail:** an immediate number with no questions, no commit hash, or no SQL. You're probably not inside the Analysis project — move the chat there and re-ask. If it still fails *inside* the project, tell the steward: the project's instructions may have been changed.
 
-**Fail, different cause:** Claude says the knowledge base is unavailable or that the clone failed. You're almost certainly not in Cowork mode — see the requirement at the top of this page.
+**Fail, different cause:** Claude says the knowledge base is unavailable. GitHub may be unreachable, or you're on a surface that isn't supported yet (see the table at the top).
 
 Being asked questions instead of handed a number is the system working as designed. Those questions exist because each one has produced a materially wrong answer before — combos alone can swing an item number by ~3.5x.
 
@@ -151,7 +116,7 @@ Start a **brand-new chat outside any project** and ask the same question.
 
 **Pass:** Claude still pulls the knowledge base and still refuses to answer from general knowledge. It may be a little less thorough than inside the project, but it must not invent table names or produce a bare number.
 
-**Fail:** Claude answers straight away, or names tables without cloning anything. The global instructions didn't take — recheck Step 3.
+**Fail:** Claude answers straight away, or names tables without pulling anything. The global instructions didn't take — recheck Step 2.
 
 ### Check 3 — the backstop stays quiet
 
@@ -161,10 +126,50 @@ In that same non-project chat, ask something unrelated:
 
 **Pass:** you get a thank-you note, with no mention of BigQuery, git, or the knowledge base.
 
-**Fail:** Claude tries to clone the repo or brings up data tooling. The conditional line at the end of the Step 3 block is missing or was edited — re-paste it exactly.
+**Fail:** Claude tries to pull the repo or brings up data tooling. The conditional line at the end of the Step 2 block is missing or was edited — re-paste it exactly.
 
 ---
 
 ## When you find something wrong or missing
 
 Don't edit the repo — only the data steward (Brent) commits to it. Ask Claude to log an Asana task on the **Claude Data** board titled `KB finding: <short title>`, and it'll write up what it observed. Brent reviews and merges it, and everyone's next session picks it up automatically.
+
+---
+
+## For the steward — the canonical project-instructions snippet
+
+Users never paste this. It lives in the shared **Analysis** project's instruction box, deployed by the steward; the canonical copy is kept here so git stays the source of truth. **A repo commit does not update the project's instruction box** — if this block ever changes, re-paste it into the project the same day. It is deliberately tiny and pointing-only (all real logic lives in the repo and arrives via the fresh pull), so it should almost never change.
+
+```
+# Cafe Zupas data — knowledge base protocol
+
+Before answering ANY question about company data (sales, orders, customers,
+menu, items, stores, campaigns, Braze, BigQuery):
+
+1. Get a fresh copy of the knowledge base — every session, even if a copy
+   already exists:
+   - If you have a shell (Cowork): delete any older copy, then
+     git clone --depth 1 https://github.com/bchristensen-cz/cz_marketing_kb
+     into your temporary working area, never into my personal folders.
+   - If you have no shell (regular chat): fetch the raw files from
+     https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/
+     starting with README.md.
+2. Read README.md from that fresh copy and follow its session protocol,
+   then read the relevant skill in claude_skills/ and the data dictionaries
+   it references. Follow the skills verbatim (canonical definitions, the
+   pre-query clarification protocol, partition filters).
+3. Never answer from installed skills, saved copies, forks, or memory of a
+   previous session. The fresh copy is the single source of truth.
+4. State the KB version in the first data answer of the session:
+   git log -1 --format='%h %ad' with a shell, or fetch
+   https://api.github.com/repos/bchristensen-cz/cz_marketing_kb/commits/main
+   and report the short sha and commit date.
+5. Never commit, push, or edit the knowledge base. New findings are logged
+   per the README's ground rules (Asana task on the Claude Data board).
+6. If you can neither clone nor fetch the knowledge base, STOP. Tell me the
+   knowledge base is unavailable and that you can't answer data questions
+   without it. Do not answer from general knowledge, do not guess table or
+   column names, and do not query BigQuery. A failed pull is a hard stop,
+   not a reason to improvise.
+7. Always show me the SQL.
+```

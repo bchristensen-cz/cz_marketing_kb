@@ -24,17 +24,17 @@ If you read nothing else, read this.
 | 2 | Grant **BigQuery Job User** on project `marketing-data-442316` | GCP → IAM | §3.2 |
 | 3 | Grant **MCP User** (`roles/mcp.user`, carries `mcp.tools.call`) on the same project | GCP → IAM | §3.2a |
 | 4 | Grant **BigQuery Data Viewer** on dataset **`claude`** only | BigQuery → `claude` → Sharing → Permissions | §3.3 |
-| 5 | Send them [`CLIENT_SETUP.md`](CLIENT_SETUP.md) | link it, don't retype it | §5 |
+| 5 | Invite them to the shared **Analysis** project, then send [`CLIENT_SETUP.md`](CLIENT_SETUP.md) | Claude → Analysis project → invite; link the doc, don't retype it | §5 |
 
 That's it. Asana is already shared company-wide, the source datasets are already authorized, and
 nobody needs `scratch`.
 
 **Five things that will bite you:**
 
-1. **They must use Cowork mode in the Claude desktop app.** Data questions need `git clone`, which
-   needs a shell, and only Cowork has one. Browser, mobile, and plain desktop chat all fail with
-   "the knowledge base is unavailable." That message is Claude working correctly, not a bug. This is
-   the #1 support call. (§2)
+1. **Supported surfaces: Cowork, regular desktop chat, and claude.ai in the browser. Mobile is not
+   yet verified.** Cowork clones the KB with its shell; the other surfaces fetch the raw GitHub
+   files — both are fresh pulls of `main`. "The knowledge base is unavailable" now means the pull
+   itself failed (GitHub unreachable, edited instructions, or mobile), not "wrong surface." (§2)
 2. **Grant Data Viewer on the `claude` dataset, never at project level.** Every dataset in this
    project carries a `projectReaders` entry, so a project-level Data Viewer grant silently opens
    `brink`, `pulse`, and `sessionM`. (§3.3, §3.6)
@@ -60,7 +60,8 @@ views are coming). Store attributes beyond `store_id` / `store_name` — not yet
 Understanding the shape saves you an hour of confused troubleshooting later.
 
 ```
-Employee's Claude  ──(project instructions)──►  clone the KB fresh, every session
+Employee's Claude  ──(shared Analysis project)──►  pull the KB fresh, every session
+        │                              (git clone in Cowork; raw-file fetch in chat)
         │                                        github.com/bchristensen-cz/cz_marketing_kb
         │                                                    │
         │                                        skills + data dictionaries
@@ -83,9 +84,9 @@ domains are covered today.
 
 Three ideas do all the work:
 
-1. **The knowledge base is pulled, never installed.** Every session clones `main` fresh. Nobody
-   holds a stale copy, so a fix you push is live for everyone on their next question. This is why
-   you never send anyone a `.skill` file.
+1. **The knowledge base is pulled, never installed.** Every session pulls `main` fresh — `git clone`
+   in Cowork, raw-file fetch in regular chat. Nobody holds a stale copy, so a fix you push is live
+   for everyone on their next question. This is why you never send anyone a `.skill` file.
 2. **Permissions are the real wall, instructions are the guardrail.** The prompts tell Claude
    which tables are correct; IAM makes the wrong ones *impossible*. Do both. Instructions alone
    will eventually be talked around; permissions alone produce confident wrong answers from
@@ -112,28 +113,31 @@ reversible, but the cheapest access review is the one you do before granting.
 ## 2. Step 1 — Claude seat
 
 1. Invite them in the Claude admin console using their `@cafezupas.com` address.
-2. **Have them install the Claude desktop app. This is mandatory, not a nicety.** The whole
-   protocol depends on `git clone` running at session start, which needs a shell — and only
-   **Cowork mode on the desktop app** has one. Verified 2026-07-29: a clean
-   `git clone --depth 1` of the KB succeeds in the stock Cowork Linux sandbox (git 2.34.1,
-   github.com reachable) with no extra MCP servers installed. It fails everywhere else:
+2. **Have them install the Claude desktop app** — it's the best-supported surface, and the only one
+   with Cowork mode. Every data question starts with a fresh pull of the KB, and there are two
+   verified ways that happens:
 
-   | Surface | Shell? | Data questions |
+   | Surface | How the KB arrives | Data questions |
    |---|---|---|
-   | **Cowork mode, desktop app** | yes (built in) | ✅ the only supported surface |
-   | Regular chat, desktop app | no | ❌ clone fails → hard stop |
-   | claude.ai in a browser | no | ❌ clone fails → hard stop |
-   | Claude on mobile | no | ❌ clone fails → hard stop |
+   | **Cowork mode, desktop app** | `git clone` (shell) | ✅ verified 2026-07-29 |
+   | **Regular chat, desktop app** | raw-file fetch from GitHub | ✅ verified 2026-08-04 |
+   | **claude.ai in a browser** | raw-file fetch from GitHub | ✅ verified 2026-08-04 |
+   | Claude on mobile | raw-file fetch | ❓ not yet verified — treat as unsupported until tested |
 
-   The failure is *correct* behavior — the hard-stop rule refusing to guess — but to the user it
-   reads as "Claude is broken." Say this to them up front; it's the #1 thing they'll trip over.
-   **Do not** solve it by installing skills as `.skill` packages or by pasting KB content into the
-   project — both break the freshness guarantee, which is the point of the whole design.
+   Clone-path detail (2026-07-29): a clean `git clone --depth 1` succeeds in the stock Cowork Linux
+   sandbox (git 2.34.1, github.com reachable) with no extra MCP servers installed. Fetch-path detail
+   (2026-08-04): verified in desktop regular chat and browser, **including a standard-permission
+   user** (`claude` dataset only) — full skill files fetched, commit hash stated, clarifying
+   questions asked before querying, SQL shown.
+
+   "The knowledge base is unavailable" is still *correct* behavior — the hard-stop rule refusing to
+   guess — but it no longer means "wrong surface" (except on mobile). It means the pull itself
+   failed: GitHub unreachable, or edited instructions. **Do not** solve it by installing skills as
+   `.skill` packages or by pasting KB content into a project — both break the freshness guarantee,
+   which is the point of the whole design.
 
    Note for troubleshooting: don't be misled by the steward's own machine. Brent has Windows-MCP
-   and Desktop Commander installed; **neither is involved** and neither is required. If you're
-   diagnosing over someone's shoulder, the question is "are you in Cowork mode," not "which MCP
-   servers do you have."
+   and Desktop Commander installed; **neither is involved** and neither is required.
 3. Confirm they can sign in and send one ordinary message before you touch GCP. If SSO is broken,
    you want to know now rather than while debugging a BigQuery error.
 
@@ -387,30 +391,35 @@ spreadsheets, which is exactly the fragmentation the whole project exists to pre
 
 ## 5. Step 4 — Hand off `CLIENT_SETUP.md`
 
-Send them the link to [`CLIENT_SETUP.md`](CLIENT_SETUP.md) and let them work through it. It takes
-them about five minutes and covers, in order:
+First **invite them to the shared Analysis project** (that's your action, not theirs), then send
+them the link to [`CLIENT_SETUP.md`](CLIENT_SETUP.md) and let them work through it. It takes them
+about five minutes and covers, in order:
 
-| Their step | What it is | Where the text goes in Claude |
+| Their step | What it is | Where it happens in Claude |
 |---|---|---|
 | 0 | Authorize the **BigQuery** and **Asana** connectors (both required — Asana is how they file findings) | Settings → Connectors |
-| 1 | Create a project, e.g. `Cafe Zupas Data` | Projects → + New Project |
-| 2 | Paste the **KB protocol block** | That project → *Set project instructions* |
-| 3 | Paste the **global backstop block** | Settings → General → *Instructions for Claude* |
-| 4 | Habit: start chats inside the project | — |
-| 5 | Run the three verification checks | — |
+| 1 | Accept the invite to the shared **Analysis** project | Projects |
+| 2 | Paste the **global backstop block** | Settings → General → *Instructions for Claude* |
+| 3 | Habit: ask data questions inside the Analysis project | — |
+| 4 | Run the three verification checks | — |
 
 The exact prompt text lives only in `CLIENT_SETUP.md`. Don't paste it into emails, Slack, or a
 Google Doc — the moment a second copy exists, someone will onboard from the stale one.
 
-### The two paste locations, and why there are two
+### One deployed snippet, one per-user backstop — and why
 
 This is the question people ask most, so answer it pre-emptively:
 
-- **Project instructions (Step 2)** hold the full protocol — clone fresh, read the README and
-  skills, state the commit hash, show the SQL, hard-stop on clone failure. They apply only inside
-  that project.
-- **Global instructions (Step 3)** are a deliberately thinner *backstop* for when someone forgets
-  to open the project. They name the repo and enforce the refusal, then hand off.
+- **The Analysis project's instructions** hold the full protocol — pull fresh, read the README and
+  skills, state the commit hash, show the SQL, hard-stop on a failed pull. They apply to every chat
+  inside the project, and only you maintain them. Users paste nothing there.
+- **Global instructions (their Step 2)** are a deliberately thinner *backstop* for when someone
+  forgets to open the project. They name the repo and enforce the refusal, then hand off.
+
+**The project's instruction box is deployed config.** The canonical copy of the snippet lives at
+the bottom of `CLIENT_SETUP.md`; a repo commit does **not** update the project. If the snippet ever
+changes, re-paste it into the Analysis project the same day. It is deliberately tiny and
+pointing-only, so this should almost never happen.
 
 Resist every request to "just put the whole thing in global instructions so I don't need the
 project." Two full copies of the same rules drift, and the failure mode is silent: two people get
@@ -418,9 +427,11 @@ different answers and neither can tell which is stale.
 
 ### Things they'll get wrong
 
-- **Asking data questions outside Cowork mode** — in the browser, on their phone, or in a plain
-  desktop chat. They'll get "the knowledge base is unavailable" and report it as a bug. See §2
-  step 2; this is the most common onboarding failure.
+- **Asking data questions on mobile** — the one surface not yet verified. They'll get "the
+  knowledge base is unavailable" and report it as a bug. See §2 step 2.
+- **Creating their own data project** instead of using the shared Analysis project. A personal copy
+  freezes the instructions the day it's made — stale instructions are how two people get different
+  answers to the same question.
 - Skipping connector authorization and reporting "Claude is broken." Check §7 first.
 - Editing the prompt blocks to be "cleaner." The conditional last line of the global block
   (*"applies only to Cafe Zupas data questions"*) is load-bearing — without it Claude tries to
@@ -458,7 +469,7 @@ reaching them through a `claude` view — means a grant went to the wrong scope.
 don't just ask them to stop. (Referencing `claude.order_customer` is correct and expected, even
 though it reads `sales_ops` underneath.)
 
-**Check B — ask them to paste you their Check 1 result** from `CLIENT_SETUP.md` §5. You're
+**Check B — ask them to paste you their Check 1 result** from `CLIENT_SETUP.md` Step 4. You're
 looking for two things: a **commit hash** in the answer, and **clarifying questions asked before
 the query ran**. If they got an instant bare number with no hash and no questions, the project
 instructions didn't load.
@@ -486,15 +497,15 @@ keep them distinct from this document's §2–§5 "Step 1–4" headings.
 | A number doesn't match one the steward produced | Often the `revenue_category` override, or the 3-year window | §10 — compare which side of `claude` each query ran on |
 | "Permission denied on dataset `claude`" | Missing dataset-level Data Viewer, or IAM hasn't propagated | §3.3, then wait 5 min |
 | "I can't see the dataset in the Explorer pane" | Expected — a dataset grant doesn't add it to Explorer | They can still query it by full name; not a bug |
-| Answers arrive with no SQL shown | Instructions didn't load, or they're outside the project | Re-check `CLIENT_SETUP.md` Steps 2 and 3; move the chat into the project |
-| No commit hash in the first data answer | Project instructions didn't load, or the clone silently failed | Ask Claude to show the clone output |
-| "It says the knowledge base is unavailable" | **Almost always: they're not in Cowork mode.** No shell → no clone. Otherwise network/GitHub reachability | §2 step 2. This is *correct behavior*. Move them to Cowork mode on desktop; never work around it by pasting KB content in |
-| Claude answers instantly without asking anything | Working from a saved copy or general knowledge | Confirm no `.skill` packages installed; re-paste `CLIENT_SETUP.md` Step 2 |
-| Claude brings up BigQuery on unrelated questions | Conditional line missing from the global block | Re-paste `CLIENT_SETUP.md` Step 3 exactly |
+| Answers arrive with no SQL shown | Instructions didn't load, or they're outside the project | Move the chat into the shared Analysis project; if it persists there, check the project's instruction box (yours) and their `CLIENT_SETUP.md` Step 2 backstop |
+| No commit hash in the first data answer | Instructions didn't load, or the pull silently failed | Ask Claude to show the clone output / the fetched README |
+| "It says the knowledge base is unavailable" | The pull failed: GitHub unreachable, edited instructions — or they're on mobile (not yet verified) | §2 step 2. This is *correct behavior*. Move them to a verified surface and retry; never work around it by pasting KB content in |
+| Claude answers instantly without asking anything | Working from a saved copy or general knowledge | Confirm no `.skill` packages installed and no personal copy of the data project; move the chat into the Analysis project |
+| Claude brings up BigQuery on unrelated questions | Conditional line missing from the global block | Re-paste `CLIENT_SETUP.md` Step 2 exactly |
 | Two people got different numbers for the same question | Almost always different scope assumptions (dates, catering, combos), not a data bug | Compare their assumption lines before suspecting the mart |
 | Query is enormous / times out | Missing partition filter | The skill requires one; check the SQL for `business_date` / `business_date` |
 
-**General rule:** if the symptom is "Claude is broken," it is a Cowork-mode, connector, or permission
+**General rule:** if the symptom is "Claude is broken," it is a surface, connector, or permission
 problem the large majority of the time. Work down the table above before reading any SQL.
 
 ---
@@ -512,7 +523,8 @@ the context that stops people mistrusting a correct answer.
 
 **The path a question takes:**
 
-1. **You ask in plain English**, inside your Claude project, in Cowork mode.
+1. **You ask in plain English**, inside the shared **Analysis** project — Cowork or regular chat
+   both work.
 2. **Claude pulls the knowledge base** — a fresh copy of the shared repo, every session. That repo
    holds the *definitions*: what "net sales" means, which tables are approved, which traps to avoid,
    what to ask you before querying. Nobody's Claude keeps its own copy, which is why two people

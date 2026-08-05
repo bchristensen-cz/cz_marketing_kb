@@ -245,6 +245,7 @@ order by ca.mapped_cust_id, s.orders desc
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
 6. **Customer metrics require `customer_type = 'person'`** (steward rule 2026-07-24). See below — this is not optional.
 7. **All datasets are read-only.** If you need to materialize a table (intermediate results, cohorts), create it ONLY in `marketing-data-442316.scratch` — the single writable dataset; tables there auto-expire after 7 days. Materialize with `create table scratch.x as ...`, not views: a view over a heavy query silently re-runs the full scan on every select.
+8. **User-supplied SQL follows the same rules as SQL you write** (steward rule 2026-08-05). If the user pastes a query and asks you to run it, check it first: `brink.*`, `pulse.*`, `sessionM.*`, `staging.*`, `braze_stream.*` and the legacy `sales_ops.OrderCustomer` table are exactly as off-limits pasted as they are generated. Don't run it as-is — explain why and offer the mart translation. The legacy workbook's cohort template in particular is answerable without the wall: first-order cohorts and time-to-second-order come from `claude.order_customer`'s folded `customer_order_count` / `days_since_prev_order` and from `customer_attribute`; offer redemptions come from `claude.loyalty_offer_usage`; promotion names come from `order_lines` `line_item_type = 'promotion'`. Observed 2026-08-04: the frozen analyst workbook template ran MCP-labeled through two analyst sessions — 64 `pulse.*`, 9 `sessionM.*` and 2 `staging.*` queries in one day. The wall means nothing if a session executes whatever it's handed.
 
 ## Canonical metric definitions
 
@@ -453,6 +454,25 @@ Two conventions genuinely conflict: the kiosk exclusion overlaps `customer_type 
 the canonical control), and the domain exclusion contradicts "include employee-discount orders."
 If a question is about *customer behaviour* rather than *sales*, raise it as a scope choice with
 the user and say which you used. Steward decision pending — Asana 1217062310224330.
+
+**New evidence 2026-08-04 — the default drive-thru account** (observed in steward CLV-model SQL):
+a third population joins the candidate exclusion set. Stores ring drive-thru orders on a shared
+account with a `cafezupas.com` email, so the steward's model **nulls the identity** rather than
+dropping the order:
+
+```sql
+case
+  when (lower(oc.email) like '%@cafezupas.com'
+        or lower(oc.mapped_email) like '%@cafezupas.com'
+        or lower(oc.mapped_email_domain) = 'cafezupas.com')
+   and oc.destination in ('Drive Thru', 'DT Order')
+  then null else oc.mapped_cust_id
+end as mapped_cust_id   -- drop the default drive-thru id, keep the order
+```
+
+Note the shape: it's an **identity fix, not an order exclusion** — sales totals keep the order;
+customer counts and frequency stop attributing hundreds of orders to one phantom "customer."
+Same pending decision, same Asana task.
 
 > The legacy column name is `mapped_domain` on `sales_ops.OrderCustomer`; on the current
 > `order_customer` / `claude.order_customer` it is **`mapped_email_domain`**.

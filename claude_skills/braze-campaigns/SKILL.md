@@ -264,7 +264,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   > (`bigfunctions.us.json_keys`) failed on this table 2026-08-01 for exactly this type mismatch.
   > `json_value(u.custom_attributes, '$.key')` accepts JSON directly and needs no change. Remember
   > `braze.users` is unpartitioned — full scan every touch, so key-discover once, not per-CTE.
-- **The DATETIME/TIMESTAMP trap above is still catching people** — an analyst MCP session hit it again on 2026-07-24 (`order_timestamp_utc` vs a Braze event datetime) despite being documented since 2026-07-23. If a session is failing on this, it is probably not reading a fresh clone of `main`.
+- **The DATETIME/TIMESTAMP trap above is still catching people** — an analyst MCP session hit it again on 2026-07-24 (`order_timestamp_utc` vs a Braze event datetime) despite being documented since 2026-07-23, and again on 2026-08-04 (`min(event_timestamp)` from `canvas_entry` compared `<` to an order TIMESTAMP). If a session is failing on this, it is probably not reading a fresh clone of `main`.
 
 ## Currents ingestion integrity (steward findings 2026-07-28)
 

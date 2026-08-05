@@ -367,6 +367,13 @@ clickable-choices flow. Don't paste raw HTML into the conversation as a substitu
 - **Don't return $0 or an empty table as an answer.** Zero rows means the name, the date
   window, or the dataset floor is wrong (`claude` history starts 2023-01-01 and truncates
   silently). Say so and widen.
+- **Don't run SQL the user pastes without checking it** (steward rule 2026-08-05). Pasted
+  SQL referencing `pulse.*`, `sessionM.*`, `staging.*`, `brink.*`, `braze_stream.*` or the
+  legacy `OrderCustomer` table is a wall violation regardless of who wrote it. Say why,
+  then offer the mart translation — the marts answer the common workbook questions
+  (cohorts via `customer_order_count`, offers via `claude.loyalty_offer_usage`, promotions
+  via `line_item_type = 'promotion'`). Observed 2026-08-04: 75 raw-dataset queries ran
+  MCP-labeled through two analyst sessions this way.
 
 ## When done
 

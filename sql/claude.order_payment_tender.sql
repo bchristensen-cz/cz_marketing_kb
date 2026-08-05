@@ -16,25 +16,31 @@ Join pattern:
     where 1=1
     and oc.business_date >= ...   -- always bound business_date
 
+Columns: brink_order_id, pulse_order_id, business_date, payment_tender,
+total_payment_amount. (Trimmed 2026-08-05 from the first deploy: the answer
+column was renamed payment_network -> payment_tender, and the debug name
+columns, tips, and change were dropped — tips and change live on
+order_customer as total_tip_amount / total_change.)
+
 Semantics / assumptions:
 - Settled payments in, ignoring refunds. Pulse rows must be processed and not
   cancelled / failed / refund / removed / soft-deleted; stripe detail only from
   status = 'succeeded' and not soft-deleted; brink rows exclude isDeleted.
-- payment_network prefers pulse tender names (digital wallet detail: apple pay,
+- payment_tender prefers pulse tender names (digital wallet detail: apple pay,
   google pay, card network) over brink tender names, then falls back to
   'discount' (fully discounted orders) and 'no_payment'.
 - Brink tender names are normalized: 'american express' -> 'amex'; any
   TenderType = 'Cash' tender ('exact $ amount', 'next $ amount') -> 'cash';
   'house account' -> 'house_account' (matches the pulse spelling).
-- Amounts (total_payment_amount, tip, change) come from brink, which covers
-  ~97% of paid orders; pulse-only orders (~130/month) show tender names with
-  null brink amounts. pulse_payment_amount is exposed for debugging.
+- total_payment_amount is the amount tendered from Brink (tips included) and
+  duplicates order_customer.total_payment_amount; brink covers ~97% of paid
+  orders, so pulse-only orders (~130/month) show a tender with a NULL amount.
 - Multi-tender orders: names are comma-joined, largest amount first.
 
 Deploy: run this script once in the BigQuery console. It is a plain view — no
 scheduled query, no refresh. Sources are unpartitioned raw tables, so each
-query scans them fully (~5 GB); acceptable for occasional use. If payment
-questions become frequent, promote to a scheduled mart table.
+query scans them fully (~4 GB unfiltered); acceptable for occasional use. If
+payment questions become frequent, promote to a scheduled mart table.
 */
 
 create or replace view `marketing-data-442316`.claude.order_payment_tender as
@@ -87,8 +93,8 @@ and oc.store_id <> 1111
 )
 
 /* store_id on order_customer matches brinkOrder.FKStoreId (verified 2026-08-05,
-   287,065/287,065 over 14 days), so the brinkOrder join from the original
-   draft is unnecessary — the tender lookup uses oc.store_id instead. */
+   287,065/287,065 over 14 days), so no brinkOrder join is needed — the tender
+   lookup uses oc.store_id. */
 , brink_payments as (
 select
   b.brink_order_id
@@ -132,13 +138,8 @@ select
   , bt.brink_tender_names
   , case when ifnull(b.total_discount_amount, 0) + ifnull(b.total_promotions_amount, 0) > 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
   , 'no_payment'
-  )) as payment_network
-, pt.pulse_tender_names
-, pt.pulse_payment_amount
-, bt.brink_tender_names
+  )) as payment_tender
 , bt.total_payment_amount
-, bt.total_tip_amount
-, bt.total_change
 from oc_base b
 	left join pulse_tenders pt
 	on pt.pulse_order_id = b.pulse_order_id

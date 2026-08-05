@@ -105,14 +105,14 @@ Everything else in this skill — canonical metric definitions, the `customer_ty
 
 Payment questions ("how do people pay?", "cash vs card", "apple pay share") finally have a
 home: **`claude.order_payment_tender`**, one row per `brink_order_id` on the same
-population as `claude.order_customer`. The answer column is **`payment_network`**
+population as `claude.order_customer`. The answer column is **`payment_tender`**
 (lowercase; pulse digital-wallet names preferred over Brink tender names; `'discount'` and
 `'no_payment'` fallbacks; split tenders comma-joined largest-first). It is a view over the
 raw payment tables — **which remain off-limits directly**.
 
 ```sql
 select
-  opt.payment_network
+  opt.payment_tender
 , count(*) as order_qty
 , round(sum(oc.net_sales), 2) as net_sales
 from `marketing-data-442316`.claude.order_customer oc
@@ -138,7 +138,7 @@ Before using it, scan the gotchas in
    *paid*, not the `Third_Party` channel; that axis is `revenue_category`.
 3. **`total_payment_amount` is gross tendered (includes tips), not sales** — quote
    `net_sales` from `order_customer` for sales, always.
-4. **Split tenders make `payment_network` a non-enum** — `'cash, visa'` ≠ `'visa, cash'`;
+4. **Split tenders make `payment_tender` a non-enum** — `'cash, visa'` ≠ `'visa, cash'`;
    bucket comma values as `'split'` for clean breakdowns (~0.3% of orders).
 
 ## `sales_ops.customer_attribute` — the customer-grain table (new 2026-07-29)
@@ -869,7 +869,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 
 - **Payment method / tender questions run on `claude.order_payment_tender`** (view, new
   2026-08-05) — one row per order, join on `brink_order_id`, answer column
-  `payment_network`. Never reach into `pulse.order_payments` / `brink.brinkOrderPayment`
+  `payment_tender`. Never reach into `pulse.order_payments` / `brink.brinkOrderPayment`
   directly (they hold cancelled/failed/refunded/deleted rows the view filters). Freshest
   loaded day shows `'stripe'` placeholders; amounts are gross tendered, not sales; split
   tenders are comma-joined. Full gotchas: `data_dictionaries/claude.order_payment_tender.md`.

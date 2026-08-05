@@ -97,6 +97,27 @@ If the question plausibly means third-party or "everything that gets delivered,"
 the fork with these sizes in the option labels. Otherwise default to `'CZ Delivery'` and
 state the resolved meaning in the answer.
 
+### "Payment method" / "tender" means `claude.order_payment_tender.payment_network` (steward decision 2026-08-05)
+
+How-do-people-pay questions are answerable since 2026-08-05: join
+`claude.order_payment_tender` to `claude.order_customer` on `brink_order_id` and group by
+`payment_network` (lowercase: `visa`, `mastercard`, `amex`, `discover`, `apple pay`,
+`google pay`, `cash`, `gift card`, `givex`, `doordash`, `ubereats`, `grubhub`,
+`postmates`, `house_account`, `discount`, `no_payment`, plus comma-joined split tenders).
+
+Three scope points to resolve or state, beyond the standard forks:
+
+- **Tender ≠ channel.** `doordash` as a tender is how a third-party order *pays*; if the
+  user actually wants a channel split, the axis is `revenue_category`.
+- **Exclude or annotate the latest loaded `business_date`** — it shows `'stripe'` as a
+  placeholder network for ~10% of orders until the stripe detail loads (self-heals next
+  day).
+- **Amounts from this view are gross tendered (tips included), not sales.** If the user
+  wants dollars by payment method, sum `oc.net_sales` grouped by `payment_network`, and
+  say so.
+
+Full gotchas: [`data_dictionaries/claude.order_payment_tender.md`](../../data_dictionaries/claude.order_payment_tender.md).
+
 ## Step 2 — ask once, with clickable options
 
 Use `AskUserQuestion`. **Every option label must carry its consequence**, drawn from the

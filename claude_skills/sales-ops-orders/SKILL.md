@@ -37,7 +37,7 @@ Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_
 
 ## 🛑 First: which dataset should you query? (updated 2026-08-04 — routed by ROLE, not by access)
 
-**Business questions run on the `claude` dataset — for everyone except the steward.** The `claude` views (`claude.order_customer`, `claude.order_lines`, `claude.loyalty_*`, `claude.store_info`) are the curated interface layer, and they are the only place a business answer should come from.
+**Business questions run on the `claude` dataset — for everyone except the steward.** The `claude` views (`claude.order_customer`, `claude.order_lines`, `claude.loyalty_*`, `claude.store_info`, `claude.order_payment_tender`) are the curated interface layer, and they are the only place a business answer should come from.
 
 | Your role | Query | Notes |
 |---|---|---|
@@ -100,6 +100,46 @@ Folded in: `customer_order_count`, `days_since_prev_order` (from `order_sequence
 Full column docs: [`data_dictionaries/claude.order_customer.md`](../../data_dictionaries/claude.order_customer.md).
 
 Everything else in this skill — canonical metric definitions, the `customer_type` rule, the pre-query clarification protocol, store 1111, the combo taxonomy — **applies unchanged to the `claude` views.** They pass those columns through untouched.
+
+## Payment method / tender — `claude.order_payment_tender` (new 2026-08-05)
+
+Payment questions ("how do people pay?", "cash vs card", "apple pay share") finally have a
+home: **`claude.order_payment_tender`**, one row per `brink_order_id` on the same
+population as `claude.order_customer`. The answer column is **`payment_network`**
+(lowercase; pulse digital-wallet names preferred over Brink tender names; `'discount'` and
+`'no_payment'` fallbacks; split tenders comma-joined largest-first). It is a view over the
+raw payment tables — **which remain off-limits directly**.
+
+```sql
+select
+  opt.payment_network
+, count(*) as order_qty
+, round(sum(oc.net_sales), 2) as net_sales
+from `marketing-data-442316`.claude.order_customer oc
+	left join `marketing-data-442316`.claude.order_payment_tender opt
+	on opt.brink_order_id = oc.brink_order_id
+where 1=1
+and oc.business_date between @start and @end
+and opt.business_date between @start and @end
+and oc.store_id <> 1111
+group by 1
+order by 2 desc
+```
+
+Before using it, scan the gotchas in
+[`data_dictionaries/claude.order_payment_tender.md`](../../data_dictionaries/claude.order_payment_tender.md)
+— the four that produce wrong answers fastest:
+
+1. **The latest loaded `business_date` shows `'stripe'` as a placeholder** for online card
+   orders until `pulse.stripe_order_payments` catches up (10.2% of the freshest day,
+   verified 2026-08-05; zero on all earlier days). Exclude or annotate the latest day in
+   any tender-mix report.
+2. **A tender breakdown is not a channel breakdown** — `doordash` here is how an order
+   *paid*, not the `Third_Party` channel; that axis is `revenue_category`.
+3. **`total_payment_amount` is gross tendered (includes tips), not sales** — quote
+   `net_sales` from `order_customer` for sales, always.
+4. **Split tenders make `payment_network` a non-enum** — `'cash, visa'` ≠ `'visa, cash'`;
+   bucket comma values as `'split'` for clean breakdowns (~0.3% of orders).
 
 ## `sales_ops.customer_attribute` — the customer-grain table (new 2026-07-29)
 
@@ -826,6 +866,13 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - `sales_ops.order_discount` exists (order-level discount lines: `order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, …) but is **not yet documented** — join keys unverified. If a question needs it, treat answers as provisional until its dictionary lands.
 - **Employee/test exclusion:** internal accounts are identifiable via `customer_type = 'internal'` (`@cafezupas.com`, `@tkxel.com`, `@tkxel.io`) — 119 ids / 736 orders in June 2026. The new `mapped_email_domain` column closes the old `mapped_domain` mart gap on this table. Unidentified internal orders still can't be flagged.
 - The old `cowork_interim` and `nces_staging` scratch datasets were dropped 2026-07-22. Any saved query referencing them must be rebuilt against the marts (materialize intermediates in `scratch` if needed).
+
+- **Payment method / tender questions run on `claude.order_payment_tender`** (view, new
+  2026-08-05) — one row per order, join on `brink_order_id`, answer column
+  `payment_network`. Never reach into `pulse.order_payments` / `brink.brinkOrderPayment`
+  directly (they hold cancelled/failed/refunded/deleted rows the view filters). Freshest
+  loaded day shows `'stripe'` placeholders; amounts are gross tendered, not sales; split
+  tenders are comma-joined. Full gotchas: `data_dictionaries/claude.order_payment_tender.md`.
 
 ## When done
 

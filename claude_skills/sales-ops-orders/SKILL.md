@@ -35,18 +35,18 @@ Project: `marketing-data-442316`. The four approved tables for order/sales analy
 
 Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_ops.order_lines.md`, `sales_ops.order_sequence.md`, `sales_ops.customer_attribute.md`. Read them before writing non-trivial queries.
 
-## 🛑 First: which dataset can you actually read? (new 2026-07-29)
+## 🛑 First: which dataset should you query? (updated 2026-08-04 — routed by ROLE, not by access)
 
-**Most users cannot read `sales_ops` at all.** Standard access is `roles/bigquery.dataViewer` on the **`claude` dataset only** — the curated interface layer of read-only views. The steward has direct `sales_ops` access; nobody else does.
+**Business questions run on the `claude` dataset — for everyone except the steward.** The `claude` views (`claude.order_customer`, `claude.order_lines`, `claude.loyalty_*`, `claude.store_info`) are the curated interface layer, and they are the only place a business answer should come from.
 
-So before writing a query, know which side you're on:
-
-| If your access is | Query | Notes |
+| Your role | Query | Notes |
 |---|---|---|
-| `claude` dataset only (**standard user**) | `claude.order_customer`, `claude.order_lines`, `claude.loyalty_*` | Views over `sales_ops` / `sessionM`. Read the differences below |
-| `sales_ops` direct (**steward only**) | `sales_ops.*` as documented throughout this skill | Full history, unmodified columns |
+| Anyone answering a business question (**all users — including accounts whose IAM happens to reach further**) | `claude.order_customer`, `claude.order_lines`, `claude.loyalty_*` | Views over `sales_ops` / `sessionM`. Read the differences below |
+| The steward, building or validating marts (**that work only**) | `sales_ops.*` as documented throughout this skill | Full history, unmodified columns |
 
-**How to tell:** if `select 1 from marketing-data-442316.sales_ops.order_customer limit 1` returns `Access Denied`, you're a standard user — use the `claude` views. Don't treat that error as a broken setup; it's the intended wall.
+**Being able to read `sales_ops` is not a routing signal.** This section used to say "probe `sales_ops`; if it succeeds, use it." That broke on 2026-08-04, when a non-steward account with broader-than-standard IAM ran business queries against `sales_ops.order_customer` — the probe succeeded, so the old rule routed them to the tables. A successful `select` proves permission, not correctness: the two sides legitimately disagree (the `revenue_category` override, the 2023-01-01 history floor), so routing by access breaks the same-question-same-answer guarantee this KB exists for.
+
+If `sales_ops` returns `Access Denied`, that's the wall working as designed — not a broken setup. If the `claude` views can't answer the question (pre-2023 history, a column they don't expose), say so and log it as a KB finding on the Claude Data Asana board — don't fall through to `sales_ops` or the raw datasets.
 
 ### The `claude` views are not byte-identical to their `sales_ops` parents
 
@@ -772,7 +772,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 
 ## Gotchas checklist (scan before answering)
 
-- **Know which dataset you can read before you write SQL.** Standard users have the **`claude` dataset only**; `sales_ops` returns `Access Denied` for them and that is intended, not a broken setup. See the `claude` interface-views section near the top.
+- **Business questions run on the `claude` views for everyone except the steward — even for accounts whose IAM can read `sales_ops`.** A successful select from `sales_ops` is permission, not a routing signal (rule changed 2026-08-04). `Access Denied` on `sales_ops` is intended, not a broken setup. See the dataset-routing section near the top.
 - **`claude` history starts 2023-01-01 and truncates silently.** The order views filter `business_date >= date_trunc(date_sub(current_date, interval 3 year), year)`. An older range returns **zero rows, not an error** — which reads as "no sales." Check the window before reporting an empty result.
 - **`revenue_category` means something different in `claude` than in `sales_ops`.** The `claude` view forces it to `'Catering'` whenever `is_catering = true`, making the two equivalent; in `sales_ops`, `is_catering` is a superset (48 extra orders in June 2026). Channel breakdowns from the two datasets will legitimately disagree — state which you queried instead of reconciling them.
 - **In `claude.order_customer`, `0` in a folded count column means "no upstream row," not zero orders.** `customer_order_count = 0` ⟺ unidentified (46.4% of June 2026 orders); `lifetime_order_count = 0` is broader at 51.5% — it also catches all kiosk, most internal, and most store-1111 orders, so 36,261 orders have a real sequence number but zero lifetime. Never `avg()` a lifetime column unfiltered; never present `lifetime_order_count = 0` as a cohort. The FLOAT/DATE lifetime columns are *not* coalesced and stay NULL, so the same absent customer reads `0` in one column and `NULL` in the next. Details in `data_dictionaries/claude.order_customer.md`.

@@ -48,7 +48,7 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 
 ## Approved tables
 
-> **Which dataset can you read?** Standard access is `dataViewer` on the **`claude` dataset only** — `sales_ops` returns `Access Denied` for everyone but the steward. If that's you, use `claude.order_customer` and `claude.order_lines` (views over the `sales_ops` tables below) and read `data_dictionaries/claude.order_customer.md` first: the views restrict history to a rolling 3 years, redefine `revenue_category`, and fold in the `order_sequence` / `customer_attribute` columns with `coalesce(…, 0)` traps. The `sales_ops` rows below document the canonical definitions that both sides share.
+> **Which dataset do you query?** Business questions run on the **`claude` dataset for everyone except the steward** — use `claude.order_customer` and `claude.order_lines` (views over the `sales_ops` tables below) and read `data_dictionaries/claude.order_customer.md` first: the views restrict history to a rolling 3 years, redefine `revenue_category`, and fold in the `order_sequence` / `customer_attribute` columns with `coalesce(…, 0)` traps. This is a **role** rule, not an access rule: even if your IAM happens to let a `sales_ops` query succeed, business answers still come from `claude` (routing by access broke same-question-same-answer on 2026-08-04). The `sales_ops` rows below document the canonical definitions that both sides share.
 
 | Table | Grain | Use for |
 |---|---|---|

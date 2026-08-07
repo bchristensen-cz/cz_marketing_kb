@@ -54,6 +54,7 @@ about bowls (see below) teaches the user that the clarifications are noise.
 | a category | `select distinct ol.rev_center_name` / `ol.item_type` on the date range |
 | a campaign | the Braze / SessionM lookup in the relevant skill |
 | a fuzzy date ("last week", "May") | resolve to explicit dates; business week is **Mon–Sat** |
+| "period", "P8", "fiscal year/quarter", a holiday | `claude.date_dim` via the **`date-dimensions`** skill — resolve the fiscal window to explicit dates first. "Quarter"/"year" alone is a fork: calendar vs fiscal disagree near year-end |
 
 ### "Market" means `store_state` (steward decision 2026-07-30)
 

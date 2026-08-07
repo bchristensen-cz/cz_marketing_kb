@@ -33,6 +33,7 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   sales-ops-orders/   Order & sales data (order_customer, order_lines, order_sequence)
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
   sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
+  date-dimensions/    Fiscal calendar (4-4-5 periods), week endings, holidays (claude.date_dim)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
 artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
@@ -55,6 +56,7 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | `marketing-data-442316.claude.order_customer` | 1 row per order | **Standard users' order table.** Everything below plus sequencing, lifetime metrics, `account_type` |
 | `marketing-data-442316.claude.order_lines` | 1 row per line element | **Standard users' line table.** Carries `business_date` and `store_state` |
 | `marketing-data-442316.claude.store_info` | 1 row per store | Store dimension for standard users — city, zip, open date, comp status, lat/long. Carries `market` as an alias of `store_state` |
+| `marketing-data-442316.claude.date_dim` | 1 row per calendar date | Date dimension — fiscal calendar (4-4-5 periods), week beginning/ending, holidays, continuous period/week counters. Use the `date-dimensions` skill; its `week_ending` is the **Sunday**, not the CZ Saturday label |
 | `marketing-data-442316.sales_ops.order_customer` | 1 row per order | Sales, orders, channels, customers, loyalty |
 | `marketing-data-442316.sales_ops.order_lines` | 1 row per line element | Menu mix, items, modifiers, combos |
 | `marketing-data-442316.sales_ops.order_sequence` | 1 row per identified-person order | Order sequencing, first-time vs repeat, recency, lifetime counts |

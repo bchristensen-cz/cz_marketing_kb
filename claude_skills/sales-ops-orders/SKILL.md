@@ -24,7 +24,9 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 > - **Promotion lines are named** and stamped `'Promotion'` in `item_type`, `rev_center_name`, `parent_rev_center_name` and `parent_item_grp_name`. This **removes** essentially every NULL on those columns (only 2 surcharge lines keep a NULL `rev_center_name`), and **adds** a new way to get item numbers wrong — promotion names now collide with item names, and promotion lines pass the standalone-sale test. See [the exclusion rule](#discount-and-promotion-lines-masquerade-as-items--exclude-both-from-item-reports-steward-rule-2026-07-30-extended-2026-07-31).
 > - **New: promotion-level reporting** off `line_item_type = 'promotion'` grouped by `description`.
 
-> **🛑 Read the [pre-query clarification protocol](#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Six scope items — store 1111, date range, catering, Try 2 Combo inclusion, named-product resolution, and the meaning of "delivery" — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
+> **⚠️ Changed 2026-08-12 — `order_lines` rebuilt across full history again. Discount lines renamed; `item_type` is now a closed 7-value domain (the latter deployed in a 2026-07-31 second pass but documented only now).**
+> - **Discount lines no longer masquerade in `item_name`.** `item_name` is now the discount **program** name from the `brink.brinkDiscounts` master (`SessionM Loyalty`, `Online Discount`, `Team Member 100% Discount`, …), not the redeemed item's name. The redeemed-item text stays in `description` (which can also carry a team-member's personal name on employee discounts). Name-discovery no longer surfaces phantom *discount* rows; **promotion lines still do**. New capability: **discount-program reporting** — `group by item_name` on `line_item_type = 'discount'`, value = `sum(amount)` (negative), mirroring the promotion recipe.
+> - **`item_type` is a closed 7-value domain across full history**: `Entree`, `Kids Meals`, `Beverage`, `Discount`, `Promotion`, `Surcharge`, `Other`. Rev-center names (`Desserts`, `Modifiers`, `Gift Cards`, …) **no longer appear in it** — a filter like `item_type = 'Desserts'` returns zero rows; menu categories live only in `rev_center_name`. Surcharge lines are stamped `'Surcharge'` on both columns, and `rev_center_name` / `item_type` have **zero NULLs** since 2026-05-01 (measured 2026-08-12).(#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Six scope items — store 1111, date range, catering, Try 2 Combo inclusion, named-product resolution, and the meaning of "delivery" — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
 
 Project: `marketing-data-442316`. The four approved tables for order/sales analysis:
 
@@ -267,7 +269,7 @@ order by ca.mapped_cust_id, s.orders desc
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)`. **This is the default measure for item questions** — see the units-vs-dollars rule below |
 | Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it (see below) |
 | Item net sales | `sum(item_net_sales)` from `order_lines` — live, fully populated, safe to report **when asked**. Runs 2.3–3.8% under gross depending on sale shape, and does **not** reconcile to order-level `net_sales`; say so in the same breath. See the gotcha below |
-| Menu mix name | `item_name` (size-normalized) + `item_size`; category via `item_type` or `rev_center_name` |
+| Menu mix name | `item_name` (size-normalized) + `item_size`; menu category via `rev_center_name` (`item_type` is only the closed 7-value rollup Entree / Kids Meals / Beverage / Discount / Promotion / Surcharge / Other as of 2026-08-12 — category values like `Desserts` return zero rows there) |
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
 
@@ -326,15 +328,17 @@ This is not a rounding difference. For Ultimate Grilled Cheese, 2026-05-03 → 2
 
 ### Discount AND promotion lines masquerade as items — exclude both from item reports (steward rule 2026-07-30, extended 2026-07-31)
 
-A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `line_item_type = 'discount'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**.
+A discount applied to an item produces a line carrying **the item's own name** in `item_name`, with `line_item_type = 'discount'`. Over 2026-05-03 → 2026-06-27 the four-item test set had 319 such lines: $0 gross but **319 units**. *(Historical behavior — the discount half of the name collision was fixed upstream 2026-08-12; see the box below. The unit-count inflation still applies to both line types.)*
 
-Two consequences. They inflate any unit count not filtered to `line_item_type in ('item','modifier')`. And, more insidiously, they surface as a **separate candidate row in the name-discovery query** (protocol item 5) — so a user resolving "Hot Honey Cottage Cheese Bowl" sees two entries for one product with no way to tell which is real.
+Two consequences. They inflate any unit count not filtered to `line_item_type in ('item','modifier')`. And, more insidiously, they surfaced as a **separate candidate row in the name-discovery query** (protocol item 5) — so a user resolving "Hot Honey Cottage Cheese Bowl" saw two entries for one product with no way to tell which is real.
 
 > **✅ Partly fixed upstream 2026-07-30.** The build script now stamps discount lines consistently: `rev_center_name`, `item_type`, `parent_rev_center_name` and `parent_item_grp_name` are **all `'Discount'`**. Verified live — all 113,136 discount lines in that window carry the identical set. Previously `item_type` held the *item's name*, which is why it couldn't be filtered on. It can now. `item_name` still carries the item's name by design, so the discovery-query collision remains and the filters below are still required.
 
 > **🆕 2026-07-31 — promotion lines joined the problem.** The build now resolves promotion names from `brink.brinkPromotions`, so a promotion line carries `item_name = 'Free Try 2 Combo'` / `'Free Mini Strawberry Cup'` / `'Grand Opening 100%'` where it used to carry NULL. It also carries `qty = 1` and `item_gross_sales = 0`, and it **passes the standalone-sale test** — `parent_rev_center_name` and `rev_center_name` are both `'Promotion'`, so a sale-shape breakdown files promotions under "sold alone" exactly as discount lines already did. Volume over 2026-05-03 → 2026-06-27: 1,111 lines / 1,111 phantom units.
 >
 > A **second pass the same day** added `rev_center_name = 'Promotion'`, so all three markers now agree and any of them excludes promotions. Earlier on 2026-07-31 `rev_center_name` was NULL on these rows and only `item_type` / `line_item_type` worked — if you are reading a result set or a saved query from that window, that's why.
+
+> **✅ 2026-08-12 — the discount half of the name collision is fixed upstream (full history restated).** Discount lines now carry the discount **program** name in `item_name` (`SessionM Loyalty`, `Online Discount`, …), resolved from `brink.brinkDiscounts` per (id, store); the redeemed item's name lives only in `description`. The name-discovery query no longer surfaces phantom *discount* rows for a product. Verified live 2026-08-12: 0 blank `item_name`; ~3–7% of a day's discount lines fall back to the order-level name and then the generic `'Discount'` (missing/blank master rows). **Promotion lines still collide** — everything in the 2026-07-31 box above still applies to them — and both line types still inflate unfiltered unit counts, so the three-marker exclusion below is still required verbatim. Side effect worth knowing: `description` on team-member discount lines can carry an **employee's personal name** — don't surface it in shared reports without checking.
 
 Filter them in **both** the discovery query and the metric query:
 
@@ -346,7 +350,7 @@ and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 
 Since the 2026-07-30/31 fixes, `item_type not in ('Discount','Promotion')` is a reliable test on its own — but keep all three conditions: they're free, and they still hold for any pre-fix data you compare against.
 
-> **⚠️ Wrap every string exclusion in `ifnull` — the bare form silently drops rows** (steward rule 2026-07-30). `col <> 'Discount'` evaluates to NULL, not TRUE, on a NULL `col`, and BigQuery's `WHERE` treats NULL as false. Those rows vanish with no warning. Re-measured 2026-07-31 over 2026-05-03 → 2026-06-27 (stores 1111 and 999 excluded, 10,018,577 lines): **`item_type` 0 nulls, `parent_rev_center_name` 0, `item_name` 0, `rev_center_name` 2** (both surcharge lines). The earlier counts (1,111 / 1,113 / 497) were *all* unnamed promotion lines; the 2026-07-31 build named them and then stamped their revenue center, which removed the cause on every column. **Keep the `ifnull` habit anyway** — it costs nothing, and the next upstream gap will arrive unannounced. Note also how fast these numbers moved: the same column went 1,113 nulls → 1,113 → 2 inside one day, which is why a skill should date every measured claim rather than state it as a property of the table. The same trap sits inside combo-shape logic: `parent_rev_center_name = rev_center_name` is NULL-unsafe, so use `ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '')` when testing for a standalone line.
+> **⚠️ Wrap every string exclusion in `ifnull` — the bare form silently drops rows** (steward rule 2026-07-30). `col <> 'Discount'` evaluates to NULL, not TRUE, on a NULL `col`, and BigQuery's `WHERE` treats NULL as false. Those rows vanish with no warning. Re-measured 2026-07-31 over 2026-05-03 → 2026-06-27 (stores 1111 and 999 excluded, 10,018,577 lines): **`item_type` 0 nulls, `parent_rev_center_name` 0, `item_name` 0, `rev_center_name` 2** (both surcharge lines — stamped `'Surcharge'` by the second pass, so **0** as of 2026-08-12). The earlier counts (1,111 / 1,113 / 497) were *all* unnamed promotion lines; the 2026-07-31 build named them and then stamped their revenue center, which removed the cause on every column. **Keep the `ifnull` habit anyway** — it costs nothing, and the next upstream gap will arrive unannounced. Note also how fast these numbers moved: the same column went 1,113 nulls → 1,113 → 2 inside one day, which is why a skill should date every measured claim rather than state it as a property of the table. The same trap sits inside combo-shape logic: `parent_rev_center_name = rev_center_name` is NULL-unsafe, so use `ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '')` when testing for a standalone line.
 
 ### Promotion reporting is now answerable (new 2026-07-31)
 
@@ -365,6 +369,26 @@ and ol.store_id not in (1111, 999)
 group by 1
 order by promotion_amount
 ```
+
+### Discount-program reporting is now answerable (new 2026-08-12)
+
+Same shape as promotion reporting, but group by **`item_name`** — on discount lines it now carries the program name from the `brink.brinkDiscounts` master. Do **not** group by `description` for program-level questions: it holds the free-text POS name (often the redeemed item, sometimes an employee's personal name — don't surface it unchecked).
+
+```sql
+select
+  ol.item_name as discount_program
+, count(*) as lines
+, round(sum(ol.amount), 2) as discount_amount
+from `marketing-data-442316`.claude.order_lines ol
+where 1=1
+and ol.business_date between @start_date and @end_date
+and ol.line_item_type = 'discount'
+and ol.store_id not in (1111, 999)
+group by 1
+order by discount_amount
+```
+
+Full history restated, so this works back to 2018. ~3–7% of a day's lines land in the generic `'Discount'` bucket (missing or blank master rows) — say so when a user needs exact program totals.
 
 ### Store 999 joins 1111 in the exclusion list (steward rule 2026-07-30)
 

@@ -162,7 +162,7 @@ bod.OrderId
 , null
 , 'discount' as item_type
 , bod.DiscountId
-, coalesce(bod.Name, 'Discount') as name
+, coalesce(nullif(trim(bod.Name),''), 'Discount') as name  -- '2026-08-12' added nullif for cleaner descriptions down stream (bare coalesce missed empty strings)
 , bod.Amount * -1  as amount
 , 0 as gross
 , 0  as net
@@ -242,6 +242,29 @@ from `marketing-data-442316`.brink.brinkOrderSurcharge s
     , regexp_extract(bi.name, r'^(REG|Mini|LG|PRTY|HALF|Kids|LARGE|Medium|Tray|QUART) ') as size_prefix
     , bi.price
   from `marketing-data-442316`.brink.brinkItems bi
+
+union all -- '2026-08-12' added discounts to items so we wouldn't have blank descriptions and have better item names.
+-- Discount lines now resolve item_name from the brink.brinkDiscounts master (program-level names
+-- like 'SessionM Loyalty', 'Online Discount') instead of echoing the order-level bod.Name.
+-- Safety verified 2026-08-12: (Id, StoreID) is UNIQUE in brinkDiscounts (no fan-out); discount ids
+-- collide with zero brinkItems / promotion / surcharge / gift-card ids; no discount names are blank
+-- or hit the '.'-prefix / size-prefix / combo cleaning branches below.
+-- ⚠️ revenuecenterid 1000000000001 is a SENTINEL that must never exist in brinkRevenueCenter
+-- (verified absent 2026-08-12). If Brink ever issues that id as a real revenue center, discount
+-- lines would pick up its name and could misroute in item_type (the brc.name branches evaluate
+-- before the line_item_type branches). A plain `null as revenuecenterid` would be immune.
+
+select
+d.Id
+, d.Name
+, 1000000000001 as revenuecenterid
+, d.StoreID
+, trim(d.Name) as name_trimmed
+, null as size
+, d.Amount
+from `marketing-data-442316`.brink.brinkDiscounts d
+
+
 )
 select
   i.id
@@ -309,12 +332,13 @@ bol.order_id as brink_order_id
 , coalesce(bi.item_grp_name, bol.description) as item_grp_name
 , bi.item_size
 , bol.item_modifier
--- '2026-07-31' (second pass) promotion added here too, so all three line-type markers agree
--- and promotions are excludable on any of them. Only surcharge lines are left with a NULL
--- rev_center_name (2 lines over 2026-05-03..06-27) — they have no item-master row.
+-- '2026-07-31' (second pass) surcharge stamped too, so every line type has a non-NULL
+-- rev_center_name — the last 2 NULL surcharge lines are gone (verified 2026-08-12: zero NULLs
+-- since 2026-05-01).
 , case
   when bol.line_item_type = 'discount' then 'Discount'
-  when bol.line_item_type = 'promotion' then 'Promotion'
+  when bol.line_item_type = 'promotion' then 'Promotion'  -- '2026-07-31'  added promotion
+  when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge
   else brc.name end as rev_center_name
 , bol.item_gross_sales
 , bi.price
@@ -323,6 +347,10 @@ case when coalesce(safe_divide(bol.item_gross_sales,bi.price),0) < 1 then 1 else
 ,0) as qty
 , bol.amount
 , bol.item_net_sales
+-- '2026-07-31' (second pass) `else 'Other'` replaced the old `else coalesce(brc.name,
+-- bol.description)` fallback. item_type is now a CLOSED 7-value domain: Entree, Kids Meals,
+-- Beverage, Discount, Promotion, Surcharge, Other. Rev-center names (Modifiers, Desserts,
+-- Gift Cards, ...) no longer appear in item_type — use rev_center_name for menu categories.
 , case
     when brc.name in ('Bowls','Salads','Sandwiches','Soups') then 'Entree'
     when brc.name = 'Kids Meals' and bi.name = 'Kids Combo' then 'Kids Meals'
@@ -330,7 +358,8 @@ case when coalesce(safe_divide(bol.item_gross_sales,bi.price),0) < 1 then 1 else
     when brc.name in ('Bottled Beverages','Foutain Beverages') then 'Beverage'
     when bol.line_item_type = 'discount' then 'Discount' -- '2026-07-30'  added discount
     when bol.line_item_type = 'promotion' then 'Promotion' -- '2026-07-31'  added promotion
-    else coalesce(brc.name, bol.description)
+    when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge
+    else 'Other' -- '2026-07-31'  added other
   end as item_type
 from brink_order_item_lines bol
 	left join `marketing-data-442316`.brink.brinkOrder bo
@@ -394,16 +423,20 @@ l.brink_order_id
 , l.qty
 , l.item_net_sales
 , l.item_type
+-- Discount/Promotion now evaluate BEFORE the 'Combos' rename, fixing the case-order defect
+-- where a discount line whose combo_order_line_item_id collided with a real combo parent got
+-- 'Try 2 Combo' (verified 2026-08-12: 0 leaks since 2026-05-01). parent_item_grp_name below
+-- still evaluates 'Combos' first — the 1 known colliding line still leaks there.
 , case
-	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo'
-	when l.item_type = 'Discount' then 'Discount'    -- '2026-07-30'  added discount
-	when l.item_type = 'Promotion' then 'Promotion'  -- '2026-07-31'  added promotion
+  when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount
+  when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion
+  when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo'
 	else coalesce(c.rev_center_name, l.description) end as parent_rev_center_name
 , case
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo ' || ca.attr_list
 	when coalesce(c.rev_center_name, l.description) = 'Foutain Beverages' then 'Fountain Beverage'
-	when l.item_type = 'Discount' then 'Discount'    -- '2026-07-30'  added discount
-	when l.item_type = 'Promotion' then 'Promotion'  -- '2026-07-31'  added promotion
+  when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount
+when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion
 	else coalesce(c.item_grp_name, l.description) end as parent_item_grp_name
 from order_lines_detail l
 	left join order_lines_detail c
@@ -412,8 +445,8 @@ from order_lines_detail l
 	and c.line_item_type = 'item'
 		left join combo_attrs ca
 		on ca.combo_order_line_item_id = l.combo_order_line_item_id
-			left join `marketing-data-442316`.sales_ops.store_info si
-			on si.store_id = l.store_id
+      left join `marketing-data-442316.sales_ops.store_info` si
+      on si.store_id = l.store_id
 where 1=1
 and l.BusinessDate >= start_date
 ;

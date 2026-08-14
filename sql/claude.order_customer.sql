@@ -13,6 +13,17 @@
 --   * store_state       — the canonical "market" dimension (new 2026-07-30)
 --
 -- Created 2026-07-29. store_state added 2026-07-30.
+--
+-- 2026-08-13 repo sync: the DEPLOYED view carries `and oc.store_id <> 1111` — the test store
+-- is excluded at the view level, not left to each query. Found undocumented during the
+-- order_customer script sync; now committed here. Standard users can no longer see 1111 at
+-- all; the steward's sales_ops tables still contain it. Keep writing `store_id <> 1111` in
+-- queries anyway — it is free here and load-bearing everywhere else.
+--
+-- Redeployed 2026-08-13 (identical logic) to refresh INFORMATION_SCHEMA metadata: the base
+-- table gained destination_id and has_order_items, and column ADDS freeze out of `oc.*` view
+-- metadata exactly like the 2026-07-30 rename did — the columns RESOLVED at query time but
+-- were absent from INFORMATION_SCHEMA.COLUMNS until the redeploy.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -97,6 +108,7 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 			on lu.sm_external_user_id = oc.mapped_cust_id
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
+and oc.store_id <> 1111  -- 2026-08-13 sync: deployed view excludes the test store entirely
 ;
 
 

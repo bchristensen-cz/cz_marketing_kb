@@ -1,6 +1,6 @@
 # Data Dictionary: `marketing-data-442316.claude.order_customer`
 
-**One row per order.** The standard user's order table — a view over `sales_ops.order_customer` that adds order sequencing, lifetime customer metrics, and loyalty account type, and restricts history to a rolling 3 years.
+**One row per order.** The standard user's order table — a view over `sales_ops.order_customer` that adds order sequencing, lifetime customer metrics, and loyalty account type, restricts history to a rolling 3 years, and **excludes test store 1111 entirely**.
 
 | | |
 |---|---|
@@ -16,9 +16,9 @@
 
 ---
 
-## The three ways this view differs from its parent
+## The four ways this view differs from its parent
 
-Anyone comparing a number from here against a number from `sales_ops` needs all three. **State which dataset you queried whenever a figure will be compared to someone else's.**
+Anyone comparing a number from here against a number from `sales_ops` needs all four. **State which dataset you queried whenever a figure will be compared to someone else's.**
 
 ### 1. History is a rolling 3 years, and truncation is silent
 
@@ -46,19 +46,29 @@ This is a deliberate simplification: it removes the superset/subset trap for use
 
 There is **no `claude.order_sequence` and no `claude.customer_attribute`.** They are not missing — this view left-joins both onto the order grain, so a standard user gets first-time-vs-repeat, recency, and LTV from one table. See the added-columns section below.
 
+### 4. Test store 1111 is excluded at the view level (documented 2026-08-13)
+
+```sql
+and oc.store_id <> 1111
+```
+
+The deployed view filters the test store out entirely — a standard user **cannot see store 1111 at all**, while the steward's `sales_ops` tables still contain it. Keep writing `store_id <> 1111` in queries anyway (it's free here and load-bearing on every `sales_ops` table), but know that a `claude`-vs-`sales_ops` total that differs by a few hundred orders/month is probably this filter, not a defect. Two side effects: the measured zero-trap numbers below predate the filter (the "person, store 1111" rows no longer appear here), and `customer_order_count` is computed upstream *including* 1111 orders, so a customer who ever ordered at the test store can show a gap in their visible sequence numbers.
+
 ---
 
 ## Columns
 
-### Passthrough columns (43)
+### Passthrough columns (44)
 
 Identical to `sales_ops.order_customer` — **see [`sales_ops.order_customer.md`](sales_ops.order_customer.md) for full descriptions**, deliberately not duplicated here so the two can't drift:
 
-`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime`, `order_timestamp_utc`, `store_id`, `store_name`, `state`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `total_discount_amount`, `total_promotions_amount`, `is_employee_discount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `brink_net_sales`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `total_discount_amount`, `total_promotions_amount`, `is_employee_discount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `brink_net_sales`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+
+(Updated 2026-08-13: `state` renamed to `store_state` 2026-07-30; `destination_id` and `has_order_items` added to the base table and now advertised here after a metadata-refresh redeploy — new base columns flow through `oc.*` at query time but stay invisible in `INFORMATION_SCHEMA.COLUMNS` until the view is redeployed, same trap as the rename.)
 
 Plus `revenue_category`, which is present but **redefined** — see difference #2 above.
 
-All the usual rules still apply to these: `net_sales` is the canonical calculated net (`brink_net_sales` is validation only), `is_catering` and `is_guest_order` are BOOLEAN, customer metrics require `customer_type = 'person'`, store 1111 must be excluded, and emails need `lower()` before matching or counting.
+All the usual rules still apply to these: `net_sales` is the canonical calculated net (`brink_net_sales` is validation only), `is_catering` and `is_guest_order` are BOOLEAN, and customer metrics require `customer_type = 'person'`. Emails are lowercased at build since 2026-07-29, so `lower()` is defensive rather than required; store 1111 is already excluded by the view itself (difference #4).
 
 ### Added columns (13)
 
@@ -130,7 +140,7 @@ Two rules fall out of this:
 - **`lifetime_guest_order_count` inherits a known upstream defect.** `is_guest_order` was historically an alias for `pulse_order_id is null`, carrying no loyalty information, so guest counts computed before the fix are wrong. The mart fix is written; a full-history rebuild is pending. Treat guest lifetime counts as provisional.
 - **First-time orders only go back to 2023-03-06** in the underlying `order_sequence`, so `customer_order_count = 1` means "first order since March 2023," not first-ever. `first_order_date` (from `customer_attribute`) is not bounded that way — prefer it for true first-ever questions.
 - **Sequence numbers are computed across all of a customer's orders, then filtered.** Mixed-type ids (30 in June 2026) show million-scale `customer_order_count` on their person rows — `mapped_cust_id` 19192 sits around 2.48M. Treat those as unreliable.
-- **Store 1111 is a test store — always exclude it** (`store_id <> 1111`). Note the sequence numbers upstream are built *without* that exclusion.
+- **Store 1111 is excluded by the view itself** (difference #4, documented 2026-08-13) — writing `store_id <> 1111` here is a harmless no-op; keep the habit for `sales_ops` tables where it's load-bearing. Sequence numbers upstream are still built *including* 1111 orders, so visible sequences can have gaps for customers who ever ordered there.
 - **It's a view, not a table.** A heavy query re-runs the full join every time. For repeated multi-step work, materialize into `scratch` — though standard users have no write access, so in practice: keep the partition filter tight.
 - **Grain:** verified 713,575 rows = 713,575 distinct `brink_order_id` for June 2026, 0 duplicates. The historical `pulse.orders` fan-out defect was resolved by the 2026-07-29 full-history rebuild. Use `count(distinct brink_order_id)` if exact uniqueness matters on older data.
 

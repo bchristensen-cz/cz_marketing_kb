@@ -14,6 +14,12 @@
 > - `is_guest_order` is now **BOOLEAN**, not INTEGER — `is_guest_order = 1` fails, use `= true`
 > - **new `mapped_email_domain`**; `mapped_email` gained a SessionM loyalty-email fallback
 > - `customer_type` aggregator matching widened to ezcater / doordash / itsacheckmate, and is explicitly **order-level** — see the note below the values table
+>
+> **Further changes synced 2026-08-13** (found deployed in the console script; full history rebuilt — `has_order_items` is populated back to 2018):
+> - **new `destination_id`** (INT64) — raw Brink destination id, alongside `destination`
+> - **new `has_order_items`** (BOOL, added 2026-08-04) — audit flag; FALSE = order kept by the build but carrying no qualifying item rows (~2.4% of recent rows)
+> - `phone` is now **STRING** (cast at build)
+> - `email` and `mapped_email` are **lowercased at build**, and the SessionM fallback email is trimmed and stripped of its leading `cater_` prefix — the email-casing gotchas below are ✅ resolved
 
 ## Table facts
 
@@ -37,9 +43,9 @@
 | `pulse_customer_id` | INTEGER | Customer id from the digital ordering platform (Pulse). May be an **orphan** — present on the order but absent from `pulse.customers` (see `customer_type = 'aggregator'`). |
 | `sm_external_user_id` | INTEGER | Loyalty (SessionM) user mapped to a cafezupas external id. Captures in-store loyalty scans. |
 | `mapped_cust_id` | INTEGER | **Canonical customer key** = `coalesce(pulse_customer_id, sm_external_user_id)`. ~53% of orders in the last year have one. Use this for customer counts, frequency, retention — **always together with `customer_type = 'person'`**. |
-| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **⚠️ NOT lowercased — always wrap in `lower()` before matching or grouping.** See the email-casing gotcha. |
+| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **Lowercased at build** since the 2026-07-29 fix (verified 2026-08-13: 0 non-lowercase values in 365 days). The SessionM fallback also strips the leading `cater_` prefix, so a catering login resolves to the same address as the individual account — compare against `loyalty_user.email_normalized`, not `email`. |
 | `mapped_email_domain` | STRING | **New 2026-07-27.** Domain portion of `mapped_email`. Closes the old `mapped_domain` gap that only existed on the legacy table — internal-order exclusion can now be done on this mart. |
-| `email`, `phone` | STRING | Raw contact info captured on the order (pulse order_customers). |
+| `email`, `phone` | STRING | Raw contact info captured on the order (pulse order_customers). `email` is lowercased at build (since 2026-07-29); `phone` is cast to STRING (2026-08-13 sync). |
 
 ### Dates & times
 | Column | Type | Description |
@@ -56,6 +62,7 @@
 | `store_id` | INTEGER | FK to `sales_ops.store_info`. **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales/order metrics. No exceptions (steward rule 2026-07-23). |
 | `store_name` | STRING | Store name (denormalized). |
 | `store_state` | STRING | Store state — **this is "market"**; there is no market/region/DMA/metro column anywhere. Full state name (`Utah`, not `UT`). Stores with orders in the window: Utah (30), Arizona (14), Minnesota (12), Nevada (9), Wisconsin (8), Idaho (7), Illinois (6), Ohio (3), Texas (1). **⚠️ Renamed from `state` on 2026-07-30** for consistency with `order_lines` and `store_info` — `oc.state` now fails with `Name state not found inside oc`. **NULL for stores absent from `store_info`** (1111, 999), so `store_id <> 1111` is load-bearing for geography. |
+| `destination_id` | INTEGER | **New (synced 2026-08-13).** Raw Brink destination id (`brinkOrder.DestinationId`). `destination` is its name via `brinkDestinations` (id + store). Prefer `destination` / `revenue_category` for reporting; the id is for tracing back to Brink. |
 | `destination` | STRING | Raw Brink destination. Common values: To Stay, Takeout, DoorDash, Online Takeout, Drive Thru, Good Life Lane, UberEats, CZ Delivery, GrubHub, Catering Online Delivery/Takeout, Postmates, Fundraiser, EZ Cater Delivery/Takeout. |
 | `source` | STRING | Raw pulse order source. NULL for in-store orders. |
 | `revenue_category` | STRING | **Canonical channel rollup**: `In-Store`, `Digital`, `Third_Party`, `Catering`, `Fundraiser`, `Other`. Derived from `destination`. |
@@ -68,6 +75,7 @@
 | `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater` **or** the pulse order is flagged catering. **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. |
 | `customer_type` | STRING | **New 2026-07-24.** Classifies the customer **on this order**. NULL when the order has no identified customer. Order-level, not customer-level — see the table below. |
 | `is_guest_order` | BOOLEAN | **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = false`. FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
+| `has_order_items` | BOOLEAN | **New 2026-08-04 (synced 2026-08-13), for auditing.** FALSE = the order row exists but no `brinkOrderItem` rows survived the item filters (not cleared/voided/deleted, sales > 0) — `item_gross_sales`, `mods_gross_sales`, tip-item and fee columns are NULL on these rows. ~2.4% of rows in the trailing 8 days. Not a quality filter for reporting — order-level financials (gross, net, payments) are still real on these orders. |
 | `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
 
 #### `customer_type` values
@@ -224,9 +232,12 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   per-customer figures shift between builds. Fix proposed (deterministic tiebreak) in
   `design/sessionm_identity_pipeline_audit.md`.
 
-- **⚠️ `mapped_email` and `email` are NOT lowercased — never match or group on them raw**
-  (audited 2026-07-29). `mapped_email_domain` **is** lowercased (the build lowers before
-  splitting), so only the full-address columns are affected.
+- **✅ RESOLVED — `mapped_email` and `email` are now lowercased at build** (fix deployed
+  2026-07-29 with the full-history rebuild; verified 2026-08-13: **0 non-lowercase values in
+  365 days** on both columns). `lower(mapped_email)` in queries is now a harmless no-op — fine
+  to keep writing defensively, no longer load-bearing.
+
+  <details><summary>What it looked like before the fix (audited 2026-07-29)</summary>
 
   | Column (365d) | Non-null | NOT lowercase | Distinct raw | Distinct lowered | Casing dupes |
   |---|---|---|---|---|---|
@@ -234,33 +245,27 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   | `email` | 3,392,624 | 183,466 (5.41%) | 884,293 | 883,175 | 1,118 |
   | `mapped_email_domain` | 4,462,505 | **0** | 22,342 | 22,342 | 0 ✅ |
 
-  **`count(distinct mapped_email)` overstates by ~17,900** because the same address in different
-  case counts twice. Always `lower(mapped_email)`.
-
-  **Root cause is Pulse, and only Pulse.** `braze.users.email` and `sessionM.users.email` are
-  **100% lowercase with zero casing duplicates**; `pulse.customers.email` is 8.7% non-lowercase
-  with 3,983 casing duplicates. The build lowers the SessionM email (which was already clean)
-  but not the Pulse chain (which isn't) — backwards. Fix is `lower()` on the `mapped_email`
-  coalesce.
-
-  Impact on customer identity: **5,604 emails have one person split across multiple
-  `mapped_cust_id`s by letter case alone** — 7.6% of all 73,429 duplicate-email clusters. See
+  `count(distinct mapped_email)` overstated by ~17,900; 5,604 emails had one person split
+  across multiple `mapped_cust_id`s by letter case alone. Root cause was Pulse (8.7%
+  non-lowercase) — Braze and SessionM emails were already 100% clean. See
   `design/crm_identity_hygiene_plan.md` §3.
 
-- **`customer_type` aggregator matching is case-SENSITIVE while kiosk and internal are not**
-  (audited 2026-07-29). The `kiosk` and `internal` branches use `regexp_contains(..., r'(?i)...')`,
-  but the three aggregator branches use bare `like '%ezcater%'`, `like '%doordash.com'`,
-  `like '%itsacheckmate.com'`. **Currently harmless** — case-insensitive and case-sensitive
-  counts match exactly (ezcater 15,823 = 15,823; doordash 924,760 = 924,760; checkmate
-  367,693 = 367,693), so today's aggregator emails are all lowercase. But if a partner ever
-  sends `EZCater@…`, those orders silently classify as **`person`** and pollute every customer
-  metric with aggregator volume. Worth making `(?i)` defensively to match the other branches.
+  </details>
 
-- **SessionM `user_id` casing is only normalised on one of three branches** (audited
-  2026-07-29). `all_trans_users` applies `lower()` to `transaction_discounts` (necessary — 78%
-  of that table is uppercase) but **not** to `user_point_transactions` or
-  `transaction_payments`, while `external_user_mappings.user_id` is 100% lowercase. Costs ~155
-  loyalty links/month. Minor, but the same silent-identity-loss class as the fixed defect.
+  Related normalization: the SessionM fallback email also strips the leading **`cater_`**
+  prefix (and trims), so catering logins resolve to the individual account's address in
+  `mapped_email`. `claude.loyalty_user.email` keeps the prefix — compare against its
+  `email_normalized`.
+
+- **✅ RESOLVED 2026-07-29 — `customer_type` matching is now case-insensitive on all five
+  branches** (all compare against `lower(...)`; verified no reclassification — case-sensitive
+  and case-insensitive counts matched exactly, so the fix was purely defensive). The risk was
+  a partner sending `EZCater@…` silently classifying as `person`.
+
+- **✅ RESOLVED 2026-07-29 — SessionM `user_id` is now lowercased on all three
+  `all_trans_users` branches** (`user_point_transactions`, `transaction_discounts`,
+  `transaction_payments`) and in `sm_external_user_map`. Before the fix only the discounts
+  branch was normalised, costing ~155 loyalty links/month.
 
 - **✅ `is_guest_order` FIXED 2026-07-29 — it previously meant "POS order", not "guest".**
 
@@ -380,7 +385,11 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 - **Customer metrics require `customer_type = 'person'`.** 38% of identified orders belong to kiosk terminals, internal accounts, or the orphan third-party aggregator id. Sales metrics should keep them.
 - **✅ Grain defect RESOLVED 2026-07-29 by the full-history rebuild.** `brink_order_id` 2279778269187 (2024-09-17, store 154) previously had **two** rows: two pulse orders (4545135, 4608051) pointing at the same Brink order, double-counting $263.99 across two customers. The `pulse_orders` CTE dedupes on `brink_order_id`; the earlier `partition by po.id` was a no-op because `po.id` was already unique. **Verified 2026-07-29 across the whole table: 50,315,908 rows, 50,315,908 distinct `brink_order_id`, 0 duplicates.** The grain is now exactly one row per Brink order and `count(*)` is safe.
   - **Tiebreak direction is HIGHEST pulse id** — `qualify row_number() over(partition by po.brink_order_id order by po.id desc) = 1`. **Steward-confirmed 2026-07-29:** an earlier statement that "lowest pulse id wins" was incorrect and is retracted; highest is the rule. A brink↔pulse order map table to replace the arbitrary tiebreak is still open (Asana 1216938720407007).
-- Orders with zero item sales are excluded (build keeps orders with item gross or net > 0).
+- **Orders with no qualifying item rows are NOT excluded** — the item aggregation is a LEFT
+  join, so an order whose items were all voided/cleared/zero still gets a row with NULL
+  `item_gross_sales` / `mods_gross_sales` / tip-item / fee columns. `has_order_items = false`
+  finds them (~2.4% of recent rows; that's what the column was added for on 2026-08-04). An
+  earlier revision of this line claimed such orders were excluded — wrong.
 - Tips: `total_tip_amount` (payment tips) and delivery/other tip items are **separate mechanisms** — don't add them blindly.
 - `is_guest_order` is loyalty-based; a guest can still have `mapped_cust_id` NULL and an email present.
 - `is_catering` is now a **superset** of `revenue_category = 'Catering'` — all catering-destination orders are TRUE, plus 48 June orders that pulse flagged as catering on In-Store/Digital destinations. Use `revenue_category` for channel reporting, `is_catering` to include or exclude catering as a business line.

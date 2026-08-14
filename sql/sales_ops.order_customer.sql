@@ -42,6 +42,20 @@
 --   * order_sequence: dropped lifetime_customer_order_count (now customer_attribute only)
 --   * VERIFIED after rebuild: 50,321,698 rows = 50,321,698 distinct brink_order_id, 0 duplicates
 --     - the long-standing pulse fan-out grain defect is resolved
+--
+-- 2026-08-13 repo sync — changes found ALREADY DEPLOYED in the console script (full history
+-- was rebuilt: has_order_items is populated back to 2018-08-07). Brent's inline dates kept
+-- where his console copy had them:
+--   * destination_id added (bo.DestinationId) — raw Brink destination id alongside the name
+--   * has_order_items added '2026-08-04' (BOOL, for auditing) — false = the order carries no
+--     qualifying brinkOrderItem rows (5,116 of 212,358 rows in the trailing 8 days, ~2.4%)
+--   * phone now cast to STRING
+--   * sm_external_user_map email: trim() + strip leading 'cater_' so catering loyalty logins
+--     resolve to the same address as the individual account. Verified 2026-08-13: 0 rows in
+--     full history with mapped_email like 'cater\_%'
+--   * NOTE: claude.order_customer is `oc.* except(...)` — column ADDS freeze out of its
+--     INFORMATION_SCHEMA metadata just like renames do; redeploy the view after this script
+--     changes the base schema (see sql/claude.order_customer.sql)
 
 declare run_dt datetime default current_datetime('America/Denver');
 declare run_hour int64 default extract(hour from run_dt);
@@ -276,7 +290,14 @@ and tp.last_updated_at >= timestamp(start_date)
 -- 1,782,178 'cafezupas' mapping rows lack a users row, so the inner join drops nothing
 -- (re-verified 2026-07-29, also 0 null emails).
 , sm_external_user_map as (
-select lower(u.user_id) as user_id, u.external_user_id, lower(uu.email) as email  -- '2026-07-29' added lower() for consistency
+select lower(u.user_id) as user_id  -- '2026-07-29' added lower() for consistency
+, u.external_user_id
+-- '2026-07-29' lower() for consistency; trim + leading-'cater_' strip added so catering loyalty
+-- logins (cater_name@x.com) resolve to the same address as the individual account. This email
+-- feeds cust_trans and is mapped_email's LAST fallback (pulse emails are untouched — verified
+-- 2026-08-13: 0 'cater\_%' mapped_emails in full history, so the prefix only ever arrived via
+-- this path). loyalty_user.email KEEPS the prefix; compare against its email_normalized.
+, regexp_replace(lower(trim(uu.email)), r'^cater_', '') as email
 from `marketing-data-442316`.sessionM.external_user_mappings u
 	join `marketing-data-442316`.`sessionM.users` uu
 	on uu.user_id = u.user_id
@@ -423,6 +444,7 @@ bo.Id as brink_order_id
 , bo.FKStoreId as store_id
 , s.store_name
 , s.store_state   -- '2026-07-30' renamed from `state` for consistency with order_lines and store_info
+, bo.DestinationId as destination_id  -- 2026-08-13 sync: raw Brink destination id (join key to brinkDestinations alongside store)
 , bd.name as destination
 , po.`source`
 , case
@@ -468,8 +490,9 @@ bo.Id as brink_order_id
 , coalesce(boi.total_fees_amount,0) as total_fees_amount
 , coalesce(p.total_payment_amount,0) as total_payment_amount
 , coalesce(p.total_change, 0) as total_change
+, case when boi.orderid is null then false else true end as has_order_items  -- '2026-08-04' added for auditing; false = no qualifying item rows survived the brink_order_item filters
 , lower(ocs.email) as email  -- '2026-07-29' added lower() for consistency
-, ocs.phone
+, cast(ocs.phone as string) as phone  -- 2026-08-13 sync: cast to STRING
 -- '2026-07-29' added lower(). pulse.customers.email was 8.7% non-lowercase (Braze and SessionM
 -- are already 100% clean), which created 17,943 phantom duplicate identities in mapped_email and
 -- split 5,604 real people across multiple mapped_cust_ids by letter case alone.

@@ -145,6 +145,77 @@ Before using it, scan the gotchas in
 4. **Split tenders make `payment_tender` a non-enum** — `'cash, visa'` ≠ `'visa, cash'`;
    bucket comma values as `'split'` for clean breakdowns (~0.3% of orders).
 
+## Repeat-rate and time-to-second-order cohorts (rules added 2026-08-13)
+
+These are the most-requested customer questions in the query log and the easiest to get
+quietly wrong. Three rules, all observed being broken in a live analyst template on
+2026-08-13.
+
+### 1. A fixed-window repeat rate is only quotable for cohorts that have finished the window
+
+**Right-censoring is the single largest error source in this metric class.** A 90-day repeat
+rate for a cohort whose first order was three weeks ago is not a low repeat rate — it is an
+unfinished measurement. Pooling matured and unmatured cohorts into one number understates it
+badly, and the result looks completely plausible.
+
+Measured 2026-08-13 on `claude.order_customer` (person only, stores 1111/999 excluded),
+90-day second-order rate by first-order cohort month:
+
+| Cohort month | Days elapsed for the newest member | Cohort n | 90-day repeat | 30-day repeat |
+|---|---|---|---|---|
+| 2026-04 | 105 | 28,826 | **33.6%** | 23.1% |
+| 2026-05 | 75 | 27,422 | 33.2% | 23.1% |
+| 2026-06 | 44 | 25,887 | 28.2% | 22.0% |
+| 2026-07 | 13 | 32,806 | 16.2% | 15.7% |
+| 2026-08 | 0 | 15,007 | **7.7%** | 7.7% |
+
+The matured cohorts sit at ~33%. The newest reads 7.7% — a 4x understatement caused entirely
+by elapsed time. **The tell is the 90-day and 30-day columns converging** (7.7 = 7.7): when a
+longer window stops exceeding a shorter one, the window hasn't elapsed and neither number is
+real.
+
+Rules:
+
+- **Only include cohorts where `date_diff(current_date, cohort_end, day) >= window_days`.** For a
+  90-day metric as of 2026-08-13, the newest quotable cohort is first orders on or before
+  **2026-05-15**. Truncate the cohort list — don't caveat it and ship it anyway.
+- **Never let a cohort window end in the future.** Observed 2026-08-13: an analyst template
+  hard-coded `between date('2026-06-15') and date('2026-09-13')` — a month past today — so the
+  cohort was inherently a third unmeasurable, and the single pooled rate it returned blended
+  28% cohorts with 8% cohorts.
+- If someone wants recent-cohort signal, give them a **shorter window that has elapsed** (7- or
+  14-day repeat) rather than a censored 90-day figure. Say which window you used.
+
+### 2. Key cohorts on `mapped_cust_id`, and don't rebuild "first order" by hand
+
+`customer_order_count = 1` on `claude.order_customer` already marks a customer's first order,
+and `days_since_prev_order` on the `= 2` row already gives days-to-second — both folded in
+from `order_sequence`, both person-filterable via `customer_type`. Use them.
+
+The anti-pattern (live 2026-08-13, ~8 queries): a `min(order_datetime) group by email` CTE over
+`sales_ops.order_customer` **with no `business_date` filter at all** — an unbounded scan of a
+13.21 GB table, repeated per query, to re-derive a column that already exists. Deriving
+"first ever order" *feels* like it needs full history, which is exactly why this template never
+got a partition filter. It doesn't: `customer_attribute.first_order_datetime` is precomputed per
+customer with no partition column to filter, and the sequencing columns are on the order grain.
+
+> ⚠️ The folded sequencing columns (`customer_order_count`, `days_since_prev_order`) live on
+> **`claude.order_customer`**, not on `sales_ops.order_customer` — selecting them there fails with
+> `Name customer_order_count not found inside oc`. On the `sales_ops` side they're in
+> `sales_ops.order_sequence`.
+
+Also: cohorts keyed on `lower(coalesce(mapped_email, email))` instead of `mapped_cust_id` are a
+recurring defect (2026-08-11, -12, -13). Email is not the canonical identity key —
+`mapped_cust_id` is — and an email-keyed cohort silently merges the duplicate-identity clusters
+the CRM hygiene project exists to resolve. Emails are now lowercased at build, so the old
+`lower()` justification for keying on email no longer applies either.
+
+### 3. Customer cohorts require `customer_type = 'person'`
+
+Every metric in this section is customer-level, so hard rule 6 applies without exception. A
+cohort built without it pulls the aggregator id (~108K orders/month) and shared kiosk terminals
+into "new customers." Observed missing from all 12 cohort queries on 2026-08-13.
+
 ## `sales_ops.customer_attribute` — the customer-grain table (new 2026-07-29)
 
 **Reach for this before writing your own `group by mapped_cust_id`.** If a question is about
@@ -249,7 +320,7 @@ order by ca.mapped_cust_id, s.orders desc
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
 6. **Customer metrics require `customer_type = 'person'`** (steward rule 2026-07-24). See below — this is not optional.
 7. **All datasets are read-only.** If you need to materialize a table (intermediate results, cohorts), create it ONLY in `marketing-data-442316.scratch` — the single writable dataset; tables there auto-expire after 7 days. Materialize with `create table scratch.x as ...`, not views: a view over a heavy query silently re-runs the full scan on every select.
-8. **User-supplied SQL follows the same rules as SQL you write** (steward rule 2026-08-05). If the user pastes a query and asks you to run it, check it first: `brink.*`, `pulse.*`, `sessionM.*`, `staging.*`, `braze_stream.*` and the legacy `sales_ops.OrderCustomer` table are exactly as off-limits pasted as they are generated. Don't run it as-is — explain why and offer the mart translation. The legacy workbook's cohort template in particular is answerable without the wall: first-order cohorts and time-to-second-order come from `claude.order_customer`'s folded `customer_order_count` / `days_since_prev_order` and from `customer_attribute`; offer redemptions come from `claude.loyalty_offer_usage`; promotion names come from `order_lines` `line_item_type = 'promotion'`. Observed 2026-08-04: the frozen analyst workbook template ran MCP-labeled through two analyst sessions — 64 `pulse.*`, 9 `sessionM.*` and 2 `staging.*` queries in one day. Recurred 2026-08-11: a 21-query MCP burst (37.8 GB billed, all timestamps within one minute) hit `pulse.order_customers`, `pulse.customers` and legacy `OrderCustomer` again — the burst shape is the tell that a session is executing a saved template rather than answering typed questions. Recurred a third consecutive day 2026-08-12: an 11-query burst (~17 GB, all timestamps within one second) mixing `sales_ops.order_customer`, `braze.*` full scans and `pulse.customers`, plus separate morning queries on legacy `OrderCustomer` — cohorts keyed on `lower(coalesce(mapped_email, email))` instead of `mapped_cust_id`, no `customer_type = 'person'` anywhere. The wall means nothing if a session executes whatever it's handed.
+8. **User-supplied SQL follows the same rules as SQL you write** (steward rule 2026-08-05). If the user pastes a query and asks you to run it, check it first: `brink.*`, `pulse.*`, `sessionM.*`, `staging.*`, `braze_stream.*` and the legacy `sales_ops.OrderCustomer` table are exactly as off-limits pasted as they are generated. Don't run it as-is — explain why and offer the mart translation. The legacy workbook's cohort template in particular is answerable without the wall: first-order cohorts and time-to-second-order come from `claude.order_customer`'s folded `customer_order_count` / `days_since_prev_order` and from `customer_attribute`; offer redemptions come from `claude.loyalty_offer_usage`; promotion names come from `order_lines` `line_item_type = 'promotion'`. Observed 2026-08-04: the frozen analyst workbook template ran MCP-labeled through two analyst sessions — 64 `pulse.*`, 9 `sessionM.*` and 2 `staging.*` queries in one day. Recurred 2026-08-11: a 21-query MCP burst (37.8 GB billed, all timestamps within one minute) hit `pulse.order_customers`, `pulse.customers` and legacy `OrderCustomer` again — the burst shape is the tell that a session is executing a saved template rather than answering typed questions. Recurred a third consecutive day 2026-08-12: an 11-query burst (~17 GB, all timestamps within one second) mixing `sales_ops.order_customer`, `braze.*` full scans and `pulse.customers`, plus separate morning queries on legacy `OrderCustomer` — cohorts keyed on `lower(coalesce(mapped_email, email))` instead of `mapped_cust_id`, no `customer_type = 'person'` anywhere. Recurred a **fourth** consecutive day 2026-08-13: 12 MCP-labeled queries / 18.45 GB from one analyst — 2 morning queries on legacy `OrderCustomer` (`businessdate`, `iscatering=0`, `storeid<>1111`), then a **10-query burst all stamped 11:11:52** hitting `pulse.customers` and `sales_ops.order_customer` directly, still email-keyed, still no `customer_type`, and now with **no partition filter on `order_customer` at all** in the shared cohort CTE. Four days, same template, escalating cost. The wall means nothing if a session executes whatever it's handed — and a burst of identical-timestamp queries is the signature to look for.
 
 ## Canonical metric definitions
 
@@ -260,7 +331,7 @@ order by ca.mapped_cust_id, s.orders desc
 | Order count | `count(*)` from `order_customer` (or `count(distinct brink_order_id)` — see the grain defect note) |
 | Average check | `sum(net_sales) / count(*)` from `order_customer` |
 | Identified customers | `count(distinct mapped_cust_id)` where `mapped_cust_id is not null` **and `customer_type = 'person'`** |
-| Guest orders | `is_guest_order = true` (BOOLEAN since 2026-07-27, was 0/1) |
+| Guest orders | `is_guest_order = true` (BOOLEAN since 2026-07-27, was 0/1). **Digital-only and effectively zero before 2026-07-01** — `false` is the default, not "logged in". Always state the denominator; see the gotcha |
 | Catering | `is_catering = true` for the business line; `revenue_category = 'Catering'` for channel reporting (see gotchas — they differ slightly) |
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Delivery (first-party) | `destination = 'CZ Delivery'` (steward rule 2026-08-04). Marketplace orders (`revenue_category = 'Third_Party'`) are NOT "delivery" unless explicitly requested — see protocol item 6 |
@@ -868,7 +939,9 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **The partition column is `business_date` on every table** as of 2026-07-30. `order_lines` was rebuilt across full history that day and its `BusinessDate` column is **gone** — the long-standing two-spellings trap is closed. ⚠️ **Any saved query, template or workbook still writing `ol.BusinessDate` now fails outright** with `Unrecognized name: BusinessDate`. That is the good failure mode (loud, not silent), but it will hit the shared analyst workbook — read the error literally and swap in `business_date`.
 - **`order_lines` has no `order_id`** — this now leads the gotcha list because it is the single most-repeated error in the query log: `Name order_id not found inside ol`, hit three more times on 2026-07-27/28 and **again on 2026-07-28 at 09:12** by the same analyst. The order key is `brink_order_id` on every one of these tables. The 2026-07-28 instance selected `ol.order_id` in a CTE and then joined `oc.brink_order_id = ol.order_id` — i.e. the correct column name was already in the query, on the other side of the join. Read your own join predicate before selecting.
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
-- **Always `lower()` an email before matching, grouping, or counting it** (audited 2026-07-29). `order_customer.mapped_email` and `email` are **not** normalised — 4% of `mapped_email` values are not lowercase, and `count(distinct mapped_email)` **overstates by ~17,900** because the same address in different case counts twice. `mapped_email_domain` *is* already lowercase and is safe as-is. Root cause is Pulse (8.7% non-lowercase); Braze and SessionM emails are 100% clean. Also relevant to identity: 5,604 emails have one person split across several `mapped_cust_id`s by case alone.
+- **`order_customer` emails are now lowercased at build** (fix deployed 2026-07-29 with the full-history rebuild; verified 2026-08-13: 0 non-lowercase `mapped_email` / `email` values in 365 days). `lower()` on them is a harmless no-op — keep it defensively, but the old "~17,900 overstated distinct emails" caveat no longer applies to current data. The SessionM fallback email also strips the leading `cater_` prefix, so catering logins resolve to the individual's address in `mapped_email` — when comparing to `claude.loyalty_user`, compare against `email_normalized`, not `email` (which keeps the prefix). Raw `pulse.*` / `braze.*` emails outside the marts still need `lower()`.
+- **`order_customer` gained two columns, synced 2026-08-13**: `destination_id` (INT64, raw Brink destination id alongside `destination`) and `has_order_items` (BOOL, added 2026-08-04 — FALSE means no qualifying item rows survived the build's item filters, so `item_gross_sales` and friends are NULL on ~2.4% of rows; an audit flag, not a reporting filter). `phone` is now STRING. Both new columns flow through to `claude.order_customer`.
+- **`claude.order_customer` excludes store 1111 at the view level** (deployed filter `and oc.store_id <> 1111`, documented 2026-08-13). Standard users cannot see the test store at all; `sales_ops` tables still contain it, so the exclusion remains load-bearing there. Writing `store_id <> 1111` against the `claude` view stays correct — just expect `claude`-vs-`sales_ops` totals to differ by the test store even when neither query filters it.
 - **Per-customer questions should use `sales_ops.customer_attribute`, not a hand-rolled `group by mapped_cust_id`** (new 2026-07-29). Lifetime orders, spend, AOV, recency, tenure, store affinity and trailing 30/90/365-day activity are all precomputed there — that's the whole point, so two sessions can't produce two different LTV numbers. It is already person-only (adding `customer_type = 'person'` errors), it has **no partition column**, and you must check `attribute_asof_date = yesterday` before trusting the window columns. See its section above.
 - **`order_lines.item_net_sales` is usable, with a named limit** (steward ruling 2026-07-30, superseding the earlier "not computable" wording). The column is live on **both** `sales_ops.order_lines` and `claude.order_lines`, fully populated, **zero nulls**. Report it when asked; do **not** treat it as reconcilable to order-level net. Measured on Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27, non-catering, stores 1111/999 excluded:
 
@@ -896,7 +969,17 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - `qty` is derived from price and approximate; fine for mix, not for inventory-grade counts.
 - Line-level sums won't exactly reconcile to `order_customer` order-level sales (order-level discounts, rounding). Order-level `net_sales` from `order_customer` is the truth for sales. Quantified 2026-07-23 (post modifier-gross fix): ~1.3% of orders have no `order_lines` rows (all $0-net fully-voided orders — benign); on the rest, line reconstruction matches 99.99% of orders (aggregate within ~$1.5K on $55M/90d). Still: report sales totals from `order_customer`, not `order_lines`.
 - `rev_center_name = 'Foutain Beverages'` is misspelled in source — match it as-is.
-- `is_guest_order` is loyalty-based (91% of all-time orders are guest); `mapped_cust_id` coverage is ~53% over the last year, and only ~62% of *that* is a real person.
+- **`is_guest_order` no longer means what this file used to say — the fix is DEPLOYED and the old "91% of all-time orders are guest" figure is dead** (re-measured 2026-08-13). That 91% was the pre-fix column, which was just an alias for `pulse_order_id is null` and carried no loyalty information at all. The deployed logic is now an explicit digital allowlist:
+  ```sql
+  case when ocs.is_loyalty_user = false
+        and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
+       then true else false end as is_guest_order
+  ```
+  Measured July 2026 (683,228 orders, stores 1111/999 excluded): **19,273 guest orders = 2.8% of all orders**, zero NULLs, and **zero POS orders flagged**. Sampled single days show `= true` is effectively **zero before 2026-07-01** — guest checkout launched then, so this column has no meaningful history before it. Any trend line crossing that date is a product launch, not a behaviour change.
+  > **⚠️ `is_guest_order = false` is NOT "logged-in order" — it is the default value.** The deployed `else false` puts three unlike populations in one bucket: 406,796 in-store POS orders (guest-ness is *undefined* there, not false), 103,337 `Checkmate` aggregator orders, and genuinely-authenticated digital orders. Reading `false` as "identified" overstates that population by roughly 10x. **Pick the denominator explicitly and state it** — July 2026: 2.8% of all orders, **14.7%** of the five guest-eligible digital sources (131,060), **39.6%** of web orders (48,725). The last is the one operators usually mean.
+  >
+  > Guest checkout is **web-only in practice**: `Mobile Web` 15,804 / 31,827 (49.7%), `Web` 3,468 / 16,898 (20.5%), `Android` **1** of 13,758, `iOS` **0** of 68,577. The apps are in the allowlist but keep users signed in, so they never produce guests. `coalesce(is_guest_order, false)` (seen in analyst SQL 2026-08-13) is now a no-op, but it encodes the same false-means-not-guest assumption — drop it rather than carry it.
+- `mapped_cust_id` coverage is ~53% over the last year, and only ~62% of *that* is a real person.
 - **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales, order, and item metrics on all tables. No exceptions (steward rule 2026-07-23). Note `order_sequence` sequence numbers are built without that exclusion.
 - Store footprint: ~90 stores in UT, AZ, MN, NV, WI, ID, IL, OH, TX. Store attributes come from `sales_ops.store_info`.
 - **Business week is Monday–Saturday** — all stores are closed Sunday. "Last week" means the most recent Mon–Sat; weekly averages divide by 6 days, not 7. Don't use Sun-anchored `date_trunc(..., week)` for CZ weeks (observed in analyst SQL 2026-07-22; steward-confirmed pending). Use `date_trunc(d, week(monday))` to bucket weeks.

@@ -169,10 +169,45 @@ Measured 2026-08-13 on `claude.order_customer` (person only, stores 1111/999 exc
 | 2026-07 | 13 | 32,806 | 16.2% | 15.7% |
 | 2026-08 | 0 | 15,007 | **7.7%** | 7.7% |
 
-The matured cohorts sit at ~33%. The newest reads 7.7% — a 4x understatement caused entirely
-by elapsed time. **The tell is the 90-day and 30-day columns converging** (7.7 = 7.7): when a
-longer window stops exceeding a shorter one, the window hasn't elapsed and neither number is
-real.
+**The tell that a window is unfinished is the 90-day and 30-day columns converging** (7.7 = 7.7):
+when a longer window stops exceeding a shorter one, the window hasn't elapsed and neither
+number is real.
+
+> **⚠️ But do NOT read this table as "the decline is just elapsed time" — that was the first
+> conclusion drawn here on 2026-08-13 and it was wrong.** Holding exposure constant at 7 days
+> (first orders on or before 2026-08-06) and splitting on whether the first order was a guest
+> order, the identified-customer rate **rises**: 2026-04 **11.0%** (n=28,822) → 07 **12.4%**
+> (n=14,921) → 08 **14.0%** (n=3,208). Guest first orders repeat at roughly a third of that —
+> **4.0%** in July (n=17,885) and **4.5%** in August (n=3,234).
+>
+> The headline decline is therefore a **composition change, not a behaviour change and not only
+> censoring**: guest first orders are **54.5%** of the July cohort and **50.2%** of August's,
+> and they barely repeat. See the structural cause in the next box. Censoring is real and still
+> disqualifies immature cohorts — it just isn't what drives this particular table.
+>
+> Generalisable lesson: **when a rate falls, test composition before attributing it to the
+> measurement.** Two plausible mechanisms were available here (unfinished window, changed mix)
+> and the obvious one was not the operative one. An equal-exposure split settles it cheaply.
+
+> **🚨 Guest checkout manufactures first-time customers — this distorts every cohort and
+> new-customer count** (measured 2026-08-13). **17,887 of July's 19,273 guest orders (92.8%)
+> carry `customer_order_count = 1`.** A guest order generally creates a fresh `mapped_cust_id`,
+> so nearly every one presents as a brand-new customer, and a customer id that exists for a
+> single order is *structurally incapable* of recording a second one. Consequences:
+>
+> - **"New customers" is inflated.** The July first-order cohort grew **27%** (25,887 → 32,806)
+>   while total July orders **fell** (713,137 → 683,228) — more new customers on fewer orders is
+>   the signature of identity fragmentation, not acquisition.
+> - **Repeat and retention rates are mechanically depressed** from 2026-07-01 onward, by an
+>   amount that tracks guest-checkout share rather than anything customers did.
+> - **Never present a first-time-vs-repeat or cohort trend spanning 2026-07-01 without splitting
+>   on `is_guest_order`** (or excluding guest first orders and saying so). A blended series across
+>   that date is not comparable to itself.
+>
+> Root cause is the CRM identity-hygiene problem already scoped in the backlog: guest checkout
+> took duplicate-id creation from ~28 to ~280 per business day (21.9% of new ids). Until
+> `customer_id_map` / `canonical_cust_id` lands, `mapped_cust_id` is not a stable person key for
+> post-2026-07 cohorts.
 
 Rules:
 
@@ -194,7 +229,8 @@ from `order_sequence`, both person-filterable via `customer_type`. Use them.
 
 The anti-pattern (live 2026-08-13, ~8 queries): a `min(order_datetime) group by email` CTE over
 `sales_ops.order_customer` **with no `business_date` filter at all** — an unbounded scan of a
-13.21 GB table, repeated per query, to re-derive a column that already exists. Deriving
+**13.2 GiB / 50.7M-row** table (logical size, measured 2026-08-13; it is rebuilt hourly, so
+re-measure before quoting), repeated per query, to re-derive a column that already exists. Deriving
 "first ever order" *feels* like it needs full history, which is exactly why this template never
 got a partition filter. It doesn't: `customer_attribute.first_order_datetime` is precomputed per
 customer with no partition column to filter, and the sequencing columns are on the order grain.
@@ -975,10 +1011,14 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
         and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
        then true else false end as is_guest_order
   ```
-  Measured July 2026 (683,228 orders, stores 1111/999 excluded): **19,273 guest orders = 2.8% of all orders**, zero NULLs, and **zero POS orders flagged**. Sampled single days show `= true` is effectively **zero before 2026-07-01** — guest checkout launched then, so this column has no meaningful history before it. Any trend line crossing that date is a product launch, not a behaviour change.
-  > **⚠️ `is_guest_order = false` is NOT "logged-in order" — it is the default value.** The deployed `else false` puts three unlike populations in one bucket: 406,796 in-store POS orders (guest-ness is *undefined* there, not false), 103,337 `Checkmate` aggregator orders, and genuinely-authenticated digital orders. Reading `false` as "identified" overstates that population by roughly 10x. **Pick the denominator explicitly and state it** — July 2026: 2.8% of all orders, **14.7%** of the five guest-eligible digital sources (131,060), **39.6%** of web orders (48,725). The last is the one operators usually mean.
+  Measured July 2026 (683,228 orders, stores 1111/999 excluded): **19,273 guest orders = 2.8% of all orders**, zero NULLs, and **zero POS orders flagged**.
+  > **⚠️ `is_guest_order = false` is NOT "logged-in order" — it is the default value.** The deployed `else false` puts three unlike populations in one bucket: 406,796 in-store POS orders (guest-ness is *undefined* there, not false), 103,337 `Checkmate` aggregator orders, and genuinely-authenticated digital orders. Reading `false` as "identified" overstates that population by roughly 10x. **Pick the denominator explicitly and state it** — July 2026: 2.8% of all orders, **14.7%** of the four digital `order_source` values that can produce a guest (131,060 = Mobile Web + Web + Android + iOS), **39.6%** of web orders (19,272 / 48,725). The last is the one operators usually mean.
+  >
+  > **The build script and the deployed code disagree, and the data follows the code.** The script's own comment (lines 391-392) and the design in the backlog both say POS should be **NULL** (`case when ocs.order_id is null then null else not ocs.is_loyalty_user end`) because an in-store order has no guest/member distinction to make. The committed expression has no NULL branch. So "zero NULLs" is evidence of an unimplemented spec, not of a clean column — steward decision open (Asana 1217004980903117).
   >
   > Guest checkout is **web-only in practice**: `Mobile Web` 15,804 / 31,827 (49.7%), `Web` 3,468 / 16,898 (20.5%), `Android` **1** of 13,758, `iOS` **0** of 68,577. The apps are in the allowlist but keep users signed in, so they never produce guests. `coalesce(is_guest_order, false)` (seen in analyst SQL 2026-08-13) is now a no-op, but it encodes the same false-means-not-guest assumption — drop it rather than carry it.
+  >
+  > **⚠️ There IS a pre-launch guest population, and day-sampling will not find it.** ~**314,900** orders are flagged guest before 2026-07-01, essentially all in **Mar–Oct 2023** (peak 2026-08 ⇒ 2023-08 at 78,468; 2023-05 32,007, -06 51,631, -07 63,237, -09 57,951). The column then goes dark from Nov 2023 (23 orders) and stays in single or double digits per month through Jun 2026 (27). So the honest statement is **"no meaningful history between Nov 2023 and Jun 2026,"** not "none before the launch" — and the 2023 population needs an explanation before any pre/post comparison leans on this column. *(Method note: this was first reported as "effectively zero before 2026-07-01" from seven sampled single days, all of which fell in 2024–2026. A monthly `having guest_true > 0` aggregate over full history found the 2023 block immediately. **Sampling days cannot support a claim about a column's whole history** — aggregate the history.)*
 - `mapped_cust_id` coverage is ~53% over the last year, and only ~62% of *that* is a real person.
 - **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales, order, and item metrics on all tables. No exceptions (steward rule 2026-07-23). Note `order_sequence` sequence numbers are built without that exclusion.
 - Store footprint: ~90 stores in UT, AZ, MN, NV, WI, ID, IL, OH, TX. Store attributes come from `sales_ops.store_info`.

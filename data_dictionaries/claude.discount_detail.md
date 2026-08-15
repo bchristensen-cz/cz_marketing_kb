@@ -1,0 +1,288 @@
+# Data Dictionary: `marketing-data-442316.claude.discount_detail`
+
+**One row per discount COMPONENT** — *not* one row per discount line, and not one row per
+order. Read the grain section before writing anything against this table; it is the single
+easiest thing to get wrong here.
+
+View over `sales_ops.discount_detail` (rolling 3-year window, matching `claude.order_lines`
+and `claude.order_customer`). Base table build script:
+[`sql/sales_ops.discount_detail.sql`](../sql/sales_ops.discount_detail.sql). View:
+[`sql/claude.discount_detail.sql`](../sql/claude.discount_detail.sql). Deployed 2026-08-15.
+
+This is the sanctioned answer to **"what did we give away, and through what?"** It is the
+wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts` and
+`sessionM.user_offers` — **never query those directly.**
+
+## Grain — read this first
+
+Brink emits **exactly one** `item_id = 643536109` ("Online Discount") line per order —
+verified across Jul 2026, no order had more. Where Pulse holds several discount *components*
+under that one Brink line (points + reward + offer on the same order), this table **splits
+the single Brink amount across them** in proportion to each component's Pulse amount.
+
+So one Brink discount line can produce several rows, each with its own `discount_type`. In
+July 2026, 204 orders genuinely carried two different component types on one Brink line.
+Consequence: **row count runs ~1.5% above the source line count** (3,440,131 vs 3,388,269
+over full history, measured 2026-08-14). That surplus is the feature, not a defect.
+
+> **⚠️ `discount_amount` is the ONLY summable money column.** It is the prorated value and
+> it reconciles to `order_lines` **exactly**: full history on identical filters,
+> **−$25,967,881.35 on both sides** (verified 2026-08-14).
+>
+> The un-prorated Brink line amount is deliberately **not exposed**. An earlier draft carried
+> it beside `discount_amount` under the more natural name `amount`; summing it returned
+> **−$504,903.90 against a true −$471,017.34 in July 2026 (+7.2%)**, because it repeats in
+> full on every split row. If you ever need the Brink line total, aggregate
+> `discount_amount` up to `brink_order_id` + `item_id` — don't reintroduce the raw column.
+
+`count(*)` is a count of **components**, not discounts and not orders. For discount counts
+use `count(distinct concat(brink_order_id, '-', item_id))`; for orders,
+`count(distinct brink_order_id)`.
+
+## Columns
+
+| Column | Type | Notes |
+|---|---|---|
+| `brink_order_id` | INTEGER | Join key to `claude.order_customer`. Not unique here |
+| `pulse_order_id` | INTEGER | NULL for POS-only orders |
+| `business_date` | DATE | Partition column. **Always filter it** |
+| `is_catering` | BOOLEAN | From `order_lines`, matches `order_customer` since 2026-07-31 |
+| `store_id` | INTEGER | 1111 and 999 already excluded upstream |
+| `store_name` / `store_state` | STRING | Native, no `store_info` join needed |
+| `revenue_category` | STRING | **Catering-overridden in this view**, same as `claude.order_customer` — so `revenue_category = 'Catering'` ⟺ `is_catering = true` here. The base `sales_ops` table is *not* overridden |
+| `line_item_type` | STRING | `'discount'` or `'promotion'` only |
+| **`discount_amount`** | FLOAT | **The answer column.** Negative. Prorated. The only summable money column |
+| `points` | INTEGER | Loyalty points spent on this component. NULL off the integrated path. Already at component grain — safe to sum |
+| `item_id` | INTEGER | Brink discount/promotion id |
+| `discount_origin` | STRING | Where the discount came from — **not a channel**, see below |
+| `discount_type` | STRING | What kind of discount — **open domain**, see below |
+| `item_name` | STRING | Brink `brinkDiscounts` program name (since the 2026-08-12 `order_lines` rebuild) |
+| `discount_name` | STRING | Best available name: sessionM → Pulse item → `item_name` |
+| `root_offer_id` | STRING | sessionM root offer id. NULL for non-offer discounts |
+| `offer_name` | STRING | sessionM offer name. NULL for non-offer discounts |
+
+**`description` is deliberately not exposed.** On team-member discount lines it can carry an
+employee's personal name (see the `order_lines` dictionary). It stays in the build CTE only.
+
+## `discount_type` — an open domain, by design
+
+Curated labels for the programs that matter, then **`else item_name`** as a fallback:
+
+| `discount_type` | Lines (30d to 2026-08-14) | Amount |
+|---|---|---|
+| Reward Redemption | 22,390 | −$158,189.53 |
+| Employee Meal Discount | 11,994 | −$144,335.95 |
+| In-cart Points Redemption | 10,841 | −$89,080.04 |
+| Third Party Discount | 6,738 | −$38,528.50 |
+| Offer | 2,420 | −$36,753.09 |
+| Promotion | 2,111 | −$26,093.71 |
+| Manager Discount | 609 | −$3,921.31 |
+| **Error** | **536** | **−$4,822.09** |
+| Guest Relations | 502 | −$4,070.92 |
+| Face To Face | 338 | −$4,024.12 |
+| New Team Member Family Meal | 192 | −$3,126.40 |
+| Offline Cafe Zupas Rewards | 22 | $0.00 |
+
+**There is no `'Other'` bucket.** A Brink discount program that isn't explicitly mapped
+surfaces under its own `item_name` on day one rather than vanishing into an unnamed group.
+28 distinct values exist across full history; **zero NULLs** in 3.44M rows (verified
+2026-08-14) — most of the long tail is the pre-2023 Punchh/OLO era (`OlO Discounts`,
+`Employee 25%`, `Punchh Loyalty`).
+
+Two seams in that tail worth knowing: the Brink id space changed at the 2023 cutover, so
+`NewTeamMemb Family Meal` (pre-2023) and `New Team Member Family Meal` (curated) are the same
+program under two labels; and the master itself carries both `Punchh Loyalty` and
+`Punch Loyalty`. Don't present a full-history `discount_type` breakdown without collapsing
+those by hand.
+
+### `Error` is a health signal, not a category
+
+`Error` = an integrated (`item_id = 643536109`) line with neither a Pulse component type nor
+a `Third_Party` category. **On any closed business day it runs at 0–1 lines.** It fires for
+two distinct reasons, and both are worth catching:
+
+1. **Today, always.** Pulse hasn't caught up on the current business date, so the integrated
+   lines find no component to classify against. Measured 2026-08-14: **531 of 694 of today's
+   integrated lines (76.5%) read `Error`**, against 0 on every closed day in the prior six
+   weeks. It self-heals at the next 4am pass.
+2. **A closed day above ~1 line means the build's source lookback got too short** — see the
+   lookback bet in Gotchas.
+
+```sql
+select
+  dd.business_date
+, countif(dd.discount_type = 'Error') as error_lines
+, round(safe_divide(countif(dd.discount_type = 'Error'), countif(dd.item_id = 643536109)) * 100, 2) as pct_of_online_bucket
+from `marketing-data-442316`.claude.discount_detail dd
+where 1=1
+and dd.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
+group by
+  dd.business_date
+order by
+  dd.business_date desc
+```
+
+## `discount_origin` — where it came from, NOT the channel
+
+| Value | Lines (30d) | Amount | Distinct `discount_type` |
+|---|---|---|---|
+| In-Store | 29,123 | −$278,899.14 | 8 |
+| Online | 22,032 | −$189,223.87 | 4 |
+| Third Party | 6,739 | −$38,531.78 | 2 |
+| Outdoor Kiosk | 799 | −$6,290.87 | **9** |
+
+> **⚠️ This column mixes two axes and that is deliberate.** `Outdoor Kiosk` and `Third Party`
+> key on the **order**; `Online` and `In-Store` key on the **discount mechanism**. That's why
+> Kiosk carries more distinct discount types than any other origin off the smallest volume —
+> it sweeps up manager discounts, guest relations and reward scans placed at a kiosk terminal
+> alongside integrated ones.
+>
+> **For channel questions the axis is `revenue_category`, always.** `Online` here means the
+> discount came through the POS's integrated bucket, which includes phone-entered catering
+> (83 lines / −$9,957 in July 2026 with `order_source = 'Operator'`).
+
+Every `Third_Party` discount line in July 2026 was `item_id = 643536109` (6,773 of 6,773), so
+`Third Party` is a clean subset of what would otherwise read `Online` — no information is lost
+by the arm ordering.
+
+## Recipes
+
+**What did each discount program cost us?**
+
+```sql
+select
+  dd.discount_type
+, count(distinct dd.brink_order_id) as orders
+, round(sum(dd.discount_amount), 2) as discount_amount
+from `marketing-data-442316`.claude.discount_detail dd
+where 1=1
+and dd.business_date between @start_date and @end_date
+group by
+  dd.discount_type
+order by
+  discount_amount
+```
+
+**Loyalty giveaway split, integrated vs in-store:**
+
+```sql
+select
+  dd.discount_origin
+, dd.discount_type
+, round(sum(dd.discount_amount), 2) as discount_amount
+, sum(dd.points) as points_spent
+from `marketing-data-442316`.claude.discount_detail dd
+where 1=1
+and dd.business_date between @start_date and @end_date
+and dd.discount_type in ('Reward Redemption', 'In-cart Points Redemption', 'Offer')
+group by
+  dd.discount_origin
+, dd.discount_type
+order by
+  discount_amount
+```
+
+**Discount rate against sales** — join to `order_customer` at order grain, aggregate this
+table first so the component split doesn't multiply the sales side:
+
+```sql
+with disc as (
+select
+  dd.brink_order_id
+, dd.business_date
+, round(sum(dd.discount_amount), 2) as discount_amount
+from `marketing-data-442316`.claude.discount_detail dd
+where 1=1
+and dd.business_date between @start_date and @end_date
+group by
+  dd.brink_order_id
+, dd.business_date
+)
+select
+  oc.revenue_category
+, round(sum(oc.net_sales), 2) as net_sales
+, round(sum(ifnull(disc.discount_amount, 0)), 2) as discount_amount
+from `marketing-data-442316`.claude.order_customer oc
+	left join disc
+	on disc.brink_order_id = oc.brink_order_id
+	and disc.business_date = oc.business_date
+where 1=1
+and oc.business_date between @start_date and @end_date
+and oc.store_id <> 1111
+group by
+  oc.revenue_category
+order by
+  net_sales desc
+```
+
+## Gotchas
+
+- **Never sum `count(*)` as a discount count.** It counts components. See the grain section.
+- **Today is loaded intraday and is not reportable.** The table follows `order_customer`'s
+  schedule (4am daily reload, hourly 8am–11pm for today only). On the current business date
+  ~76% of integrated discounts classify as `Error` until the next 4am pass. Exclude or
+  annotate today in any discount-mix report.
+- **The build bets on a 60-day source lookback.** The source CTEs read `start_date - 60`,
+  where `start_date` is the reload window (120d daily / 380d Monday / 730d on the 1st). This
+  covers everything measured — over a 5-week window, **2 of 27,772 redemptions** referenced an
+  offer issued before the floor, and those two only lose `offer_name` / `root_offer_id`,
+  never money. But it is a bet on lead times: `pulse.order_discounts.created_at` is when an
+  order was **placed**, `business_date` is when it was **fulfilled**, and catering is booked
+  in advance (33 days observed max). A campaign booking further out than the window would show
+  up as `Error` on closed days — which is exactly what the check above catches.
+- **The offer tail is long, not fat.** The oldest offer behind a redemption was issued
+  **2024-10-28 and redeemed in July 2026** — a ~20-month gap. Widening the lookback from 60 to
+  90 or 120 days catches essentially nothing extra; only the 730-day monthly reload reaches
+  that far back.
+- **`offer_detail` requires `redeem_date is not null`.** Good for cost and semantically right,
+  but it creates a silent dependency: if sessionM ever lags on stamping `redeem_date`, offer
+  attribution degrades with no alarm. Currently 4 of 27,772 (measured 2026-08-14), evenly
+  spread rather than clustered on recent days.
+- **🧊 65% of the table is never refreshed by any scheduled run.** The widest reload is 730
+  days; **2,239,212 of 3,440,131 rows (65.1%, −$15.6M) sit before that floor** and are frozen
+  at whatever the last full-history build produced. `sales_ops.order_lines` was restated across
+  full history **three times in the month to 2026-08-14** (07-30, 07-31, 08-12) — each one
+  silently changes the parent beneath that frozen block. **Re-running the full-history build
+  of this table is a required step in the `order_lines` rebuild checklist**, not a
+  nice-to-have.
+- **13 sessionM discount rows are dropped by design.** 2,535 `pos_transaction_key`s carry more
+  than one `transaction_headers` row; the build keeps the latest, which drops 13 `USEROFFERID`
+  discounts across full history. Immaterial, but documented so it isn't rediscovered.
+- **`sm_discount_rel` is pinned to 1 row per order but nothing upstream enforces it.**
+  539,153 / 539,153 with zero surplus across full history. The build adds a `qualify` guard
+  because that join carries **no proration** — a second `USEROFFERID` discount on one order
+  would silently double `discount_amount` without it.
+- **Access:** the view reads `sales_ops`, which already carries
+  `{dataset: claude, targetTypes: [VIEWS]}` in its access list, so **no new authorized-dataset
+  grant is needed** (unlike `claude.order_payment_tender`, which reads `pulse`/`brink`).
+- **`select *` freezes at view-creation time.** If a column is added to or renamed on
+  `sales_ops.discount_detail`, redeploy this view with an identical `create or replace` — the
+  `INFORMATION_SCHEMA` metadata and the actual behaviour will disagree until you do.
+
+## Refresh & cost
+
+Same schedule as `order_customer`, widened windows (steward 2026-08-15):
+
+| Run | Reload window | Scan |
+|---|---|---|
+| Intraday, hourly 8am–11pm MT | today only | ~0.9 GB |
+| Daily 4am | 120 days | 3.12 GB |
+| Monday 4am | 380 days | ~8 GB |
+| 1st of month 4am | 730 days | 14.36 GB |
+| Hours 0–3, 5–7 | skipped | — |
+
+~525 GB/month total, ≈$2.60. The 16 intraday runs are ~80% of that and are unaffected by the
+reload-window width. The `delete`/`insert` is wrapped in an explicit transaction — without it,
+a failed insert after a committed delete would leave a 120-day (730-day on the 1st) hole
+returning zeros rather than an error, and the intraday runs only cover today so nothing would
+heal it until the next 4am pass.
+
+## Version note
+
+**2026-08-15 — initial deploy.** Reviewed before ship; the review found and fixed a
+double-count on the un-prorated amount column (+7.2% in July 2026), an unbounded
+`order_customer` join, a missing store 999 exclusion, an unmapped live `item_id`, and a
+fact-vs-dimension windowing bug in the incremental that made `offer_name` **non-deterministic
+by day of week** (Monday's wider reload resolved offers that Tuesday's narrower one wiped —
+275 rows over an 8-day window). See
+[the windowing gotcha](../claude_skills/sales-ops-orders/SKILL.md) for the general rule.

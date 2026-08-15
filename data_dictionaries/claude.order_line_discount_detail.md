@@ -13,16 +13,22 @@ This is the sanctioned answer to **"what did we give away, and through what?"** 
 wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts` and
 `sessionM.user_offers` — **never query those directly.**
 
-> **🛑 Deployment status 2026-08-15 — the base table is live, the view is NOT.**
+> **✅ Deployment status 2026-08-15 — base table and view are both live.**
 > `sales_ops.order_line_discount_detail` is deployed and fully loaded (3,441,279 rows,
-> 2018-08-13 → 2026-08-14, reconciled exactly). **`claude.order_line_discount_detail` does not
-> yet exist** — verified absent from `INFORMATION_SCHEMA`. Until the view in
-> [`sql/claude.order_line_discount_detail.sql`](../sql/claude.order_line_discount_detail.sql)
-> is deployed, no standard user can reach this data at all, and a query against the view name
-> fails with a not-found error. Remove this box once deployed.
+> 2018-08-13 → 2026-08-14). `claude.order_line_discount_detail` was deployed later the same day
+> and smoke-tested: 57,739 rows / 12 discount types / **zero NULL `discount_type`** over the
+> trailing 30 days. The rename had dropped the view — for a window that day the `claude` dataset
+> carried **no discount object at all** and standard users could not reach discounts. Redeploy
+> the view after any rename; `create or replace view` on a renamed base does not carry over.
 >
 > The table was created as `sales_ops.discount_detail` and renamed the same day, before any
-> user query — the old name never reached anyone.
+> user query — the old name never reached anyone. **There is no alias for the old name**, so
+> anything still saying `discount_detail` fails loudly rather than returning stale numbers.
+>
+> ⚠️ **PENDING:** the `order_lines` sellable-order guard (see the tie-out section) is committed
+> to the repo but must still be deployed to the scheduled query, followed by a **full-history
+> rebuild of `order_lines` and then of this table**. Until both land, the numbers below that
+> reference −$25,693,161.50 describe the intended state, not the deployed one.
 
 ## Grain — read this first
 
@@ -38,7 +44,7 @@ over full history, measured 2026-08-14). That surplus is the feature, not a defe
 
 > **⚠️ `discount_amount` is the ONLY summable money column.** It is the prorated value and
 > it reconciles to `order_lines` **exactly**: full history on identical filters,
-> **−$25,977,208.08 on both sides** (verified 2026-08-15 against the deployed table; the same check on the 2026-08-14 pre-deploy build read −$25,967,881.35 — the delta is today's partition still filling, not drift).
+> **−$25,977,208.08 on both sides** (verified 2026-08-15 against the deployed table; the same check on the 2026-08-14 pre-deploy build read −$25,967,881.35 — the delta is today's partition still filling, not drift). **Once the `order_lines` sellable-order guard is deployed this becomes −$25,693,161.50**; the −$284,046.58 difference is the fix described below, not drift.
 >
 > The un-prorated Brink line amount is deliberately **not exposed**. An earlier draft carried
 > it beside `discount_amount` under the more natural name `amount`; summing it returned
@@ -49,6 +55,65 @@ over full history, measured 2026-08-14). That surplus is the feature, not a defe
 `count(*)` is a count of **components**, not discounts and not orders. For discount counts
 use `count(distinct concat(brink_order_id, '-', item_id))`; for orders,
 `count(distinct brink_order_id)`.
+
+## Tying this table to `order_customer`
+
+`sum(discount_amount)` here should equal `sum(total_discount_amount + total_promotions_amount)`
+on `claude.order_customer`, **to the cent, at order grain, on closed days** — once the
+`order_lines` sellable-order guard is deployed. Three things are load-bearing in that comparison
+and all three were learned the hard way on 2026-08-15:
+
+```sql
+and oc.store_id not in (1111, 999)   -- this table drops 999 upstream; claude.order_customer drops only 1111
+and dd.business_date <= date_sub(current_date('America/Denver'), interval 1 day)
+-- ...and join on brink_order_id, not just business_date
+```
+
+- **Store 999.** The build excludes `store_id not in (1111, 999)`; `claude.order_customer`
+  excludes only 1111. Leaving 999 in produced one order / **$13.49** over 90 days — small, but a
+  permanent floor on any comparison that omits it.
+- **Today.** `order_customer` is a snapshot from its last load while raw Brink moves all day, so
+  the current business date drifts ~47 orders / ~$438. Not a defect. Compare closed days only.
+- **Order grain, not date grain.** At date grain a compensating pair on the same day cancels out
+  and reads as a match.
+
+### Why they disagreed before 2026-08-15 — a join-key bug worth remembering
+
+The two tables differed by **$753.68 over 90 days across 80 orders**, always in the same
+direction (this table high). `sales_ops.order_customer` joins its discount and promotion CTEs on
+**`boi.orderid`** — the output of its own `brink_order_item` CTE — rather than on `bo.id`:
+
+```sql
+left join instore_emp_discounts d
+on d.order_id = boi.orderid      -- <- boi, not bo
+```
+
+`brink_order_item` filters `IsCleared/IsVoided/IsDeleted = false` and then applies
+`having sum(ItemGrossSales) > 0 or sum(ItemNetSales) > 0`. Any order it drops has
+`boi.orderid = NULL`, so the discount joins collapse and the order reports **zero** discount even
+though the `brinkOrderDiscount` rows are live with `isDeleted = false`. `order_lines` keyed on
+`bo.id` and kept the money, so this table ran high. Every affected order carries
+`has_order_items = false`.
+
+**The zeros in `order_customer` are the correct answer.** These are voided/comped shells: Brink
+zeroes the header (`GrossSales` / `NetSales` / `Subtotal` / `Total` all 0) and voids the items but
+leaves the discount row standing. 78 of the 80 had every item row cleared/voided/deleted; the
+other 2 carried a single `Online Details Memo` line at $0.00. Nothing was sold, so nothing was
+given away — patching `order_customer` to join on `bo.id` would have booked $767 of giveaway
+against $0 of sales and driven `net_sales` negative.
+
+So the fix went into **`order_lines`**, which now carries a `sellable_orders` guard suppressing
+discount and promotion lines on those orders. The guard reproduces
+`order_customer.has_order_items` **exactly** — 2,050,577 orders over 90 days, zero disagreements
+in either direction. That equivalence is the invariant to re-check if either build changes.
+
+Scope of the guard, full history: **42,092 lines / −$238,698.36** on orders with no surviving item
+rows, plus **2,701 lines / −$45,348.22** on orders whose surviving items all sum to $0. The second
+bucket is concentrated in 2019–2022 — it is only −$58.17 in 2026 and −$396.97 in 2025.
+
+**Gift-card orders are the one legitimate item-less shape** and they need no carve-out: 2,027 of
+them over 90 days carry $82,441.99 of gift cards and **$0.00 of discount**. The pre-2023 tail is
+−$3,327.16, and `order_customer` reports $0 on it too, so suppressing it improves agreement.
 
 ## Columns
 
@@ -289,6 +354,19 @@ returning zeros rather than an error, and the intraday runs only cover today so 
 heal it until the next 4am pass.
 
 ## Version note
+
+**2026-08-15 (later same day) — renamed, view deployed, reconciled to `order_customer`.**
+`sales_ops.discount_detail` → `sales_ops.order_line_discount_detail`, and the `claude` view with
+it. The rename dropped the view; it was redeployed under the new name the same day. **No alias
+exists for the old name** — stale references fail loudly, which is the behaviour we want.
+
+Shipped alongside it (repo-committed, deploy pending): the `sellable_orders` guard in
+`sales_ops.order_lines`, which suppresses discount and promotion lines on orders with no sellable
+`brinkOrderItem` row. This closes the $753.68 / 80-order gap against `order_customer` and moves
+the full-history discount total from **−$25,977,208.08** to **−$25,693,161.50**.
+
+⚠️ **This table must be rebuilt from full history after that `order_lines` change lands**, per the
+frozen-block rule in Gotchas. Until it is, the pre-2023 block still carries the removed lines.
 
 **2026-08-15 — initial deploy.** Reviewed before ship; the review found and fixed a
 double-count on the un-prorated amount column (+7.2% in July 2026), an unbounded

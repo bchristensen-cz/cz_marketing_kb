@@ -577,6 +577,89 @@ hand before presenting a full-history breakdown.
 2. **A closed day above ~1 line means the build's 60-day source lookback got too short.** That
    is a real defect — raise it, don't explain it away.
 
+## Discounts must tie to `order_customer` — and how to run that check (2026-08-15)
+
+`sum(discount_amount)` on `claude.order_line_discount_detail` equals
+`sum(total_discount_amount + total_promotions_amount)` on `claude.order_customer`, to the cent.
+If a user reports these disagreeing, **check the comparison before you check the data** — three
+things break it and all three look like a data defect:
+
+1. **Compare at ORDER grain, not date grain.** At date grain a compensating pair on the same day
+   cancels out and reads as a match. Join on `brink_order_id` **and** `business_date`.
+2. **Exclude store 999 on the `order_customer` side.** `order_line_discount_detail` drops
+   `store_id not in (1111, 999)` upstream; `claude.order_customer` drops only 1111. One order /
+   **$13.49** over 90 days lives in that gap.
+3. **Closed days only.** `order_customer` is a snapshot from its last load while raw Brink moves
+   all day, so the current business date drifts ~47 orders / ~$438. Same rule as the discount-mix
+   one above: answer through yesterday and say why.
+
+```sql
+with dd as (
+select
+  dd.business_date
+, dd.brink_order_id
+, abs(round(sum(dd.discount_amount), 2)) as amount
+from `marketing-data-442316`.claude.order_line_discount_detail dd
+where 1=1
+and dd.business_date between @start_date and @end_date
+group by
+  dd.business_date
+, dd.brink_order_id
+)
+
+, oc as (
+select
+  oc.business_date
+, oc.brink_order_id
+, round(oc.total_discount_amount + oc.total_promotions_amount, 2) as order_discount
+from `marketing-data-442316`.claude.order_customer oc
+where 1=1
+and oc.business_date between @start_date and @end_date
+and oc.store_id not in (1111, 999)
+)
+
+select
+  dd.business_date
+, dd.brink_order_id
+, dd.amount
+, oc.order_discount
+from dd
+	full outer join oc
+	on oc.business_date = dd.business_date
+	and oc.brink_order_id = dd.brink_order_id
+where 1=1
+and ifnull(dd.amount, 0) <> ifnull(oc.order_discount, 0)
+```
+
+### Why they used to disagree — and why `order_customer`'s zeros were RIGHT
+
+Worth carrying as a pattern, because the instinct it corrects is a common one.
+
+`sales_ops.order_customer` joins its discount and promotion CTEs on **`boi.orderid`** — the output
+of its own `brink_order_item` CTE — not on `bo.id`. That CTE filters
+`IsCleared/IsVoided/IsDeleted = false` and then applies
+`having sum(ItemGrossSales) > 0 or sum(ItemNetSales) > 0`. Any order it drops has
+`boi.orderid = NULL`, so the discount joins collapse and the order reports **zero** discount even
+though `brinkOrderDiscount` holds live rows with `isDeleted = false`. `order_lines` keyed on
+`bo.id`, kept the money, and ran **$753.68 high over 90 days across 80 orders**. Every affected
+order carries `has_order_items = false`.
+
+It reads like a bug in `order_customer`, and the obvious fix — repoint the join at `bo.id` — is
+**wrong**. Those orders are voided/comped shells: Brink zeroes the header (`GrossSales` /
+`NetSales` / `Subtotal` / `Total` all 0) and voids the items but leaves the discount row standing.
+78 of the 80 had every item row cleared/voided/deleted; the other 2 carried a single
+`Online Details Memo` line at $0.00. Nothing was sold, so nothing was given away — joining on
+`bo.id` would book $767 of giveaway against $0 of sales and drive `net_sales` negative.
+
+**The rule: when two marts disagree, work out which one is describing reality before you make the
+other one match it.** Here the fix went into `order_lines` (a `sellable_orders` guard suppressing
+discount and promotion lines on those orders), not into the mart that looked broken.
+
+⚠️ `has_order_items = false` orders also have **wrong `net_sales`**, since it is derived as
+`gross − discount − promotion`. `gross_sales` and payments on those rows are real. An earlier
+revision of the `order_customer` dictionary claimed all order-level financials were real on these
+rows — corrected 2026-08-15.
+
 ## ⚠️ In an incremental build, never window a DIMENSION by the fact window (general rule, 2026-08-15)
 
 This one generalises to **every** scheduled script in `sql/`, and it produced the nastiest bug

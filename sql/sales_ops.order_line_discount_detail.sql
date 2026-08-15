@@ -8,9 +8,25 @@
 -- above the source line count (3,440,131 vs 3,388,269 full history, measured 2026-08-14).
 --
 -- discount_amount is the ONLY summable money column, and it reconciles to order_lines
--- exactly: -$25,977,208.08 on both sides, full history, identical filters (deployed table, 2026-08-15).
+-- exactly: -$25,693,161.50 on both sides, full history, identical filters (2026-08-15, after
+-- the order_lines sellable-order guard). It read -$25,977,208.08 on the deployed table before
+-- that guard; the -$284,046.58 difference is the fix, not a regression.
 -- The un-prorated Brink amount is deliberately NOT emitted — it repeats on every split row
 -- and summing it overstated July 2026 by 7.2% (-$504,903.90 vs a true -$471,017.34).
+--
+-- ⚠️ IT NOW RECONCILES TO order_customer TOO — a NEW property, 2026-08-15. order_lines gained
+-- a `sellable_orders` guard that suppresses discount and promotion lines on orders whose
+-- brinkOrderItem rows carry no sellable value. Before it, this table ran $753.68 ABOVE
+-- order_customer's total_discount_amount + total_promotions_amount over 90 days across 80
+-- orders. Cause: order_customer joins its discount and promotion CTEs on `boi.orderid`, so any
+-- order its item CTE drops silently reports zero discount, while order_lines keyed on bo.id and
+-- kept the money. Those orders are voided/comped shells — Brink zeroes the header (GrossSales /
+-- NetSales / Subtotal / Total all 0) and voids the items but leaves the brinkOrderDiscount row
+-- standing with isDeleted = false. Nothing was sold, so nothing was given away.
+--
+-- ⚠️ RUN THAT TIE-OUT ON CLOSED DAYS ONLY, AT ORDER GRAIN. The current business date drifts
+-- ~47 orders / ~$438 against live brink because order_customer is a snapshot from its last
+-- load. Date grain lets a compensating pair cancel out and read as a match. Assertion D below.
 --
 -- Full docs: data_dictionaries/claude.order_line_discount_detail.md
 -- User-facing view: sql/claude.order_line_discount_detail.sql
@@ -256,7 +272,8 @@ commit transaction;
 -- =====================================================================================
 
 -- A. discount_amount must reconcile to order_lines exactly.
---    Full history 2026-08-15: -$25,977,208.08 both sides, 0 NULL discount_type.
+--    Full history 2026-08-15: -$25,693,161.50 both sides (was -$25,977,208.08 on the deployed
+--    table before the order_lines sellable-order guard).
 -- select
 --   round(sum(dd.discount_amount), 2) as mart_total
 -- , (
@@ -299,4 +316,48 @@ commit transaction;
 --   dd.business_date
 -- order by
 --   dd.business_date desc
+-- ;
+
+-- D. '2026-08-15' NEW. Must tie to sales_ops/claude.order_customer at ORDER grain.
+--    Expect zero rows.
+--    ⚠️ CLOSED DAYS ONLY — the current business date drifts ~47 orders / ~$438 against live
+--    brink because order_customer is a snapshot from its last load. Not a defect.
+--    ⚠️ Store 999 must be excluded on the order_customer side: this table drops it upstream,
+--    claude.order_customer drops only 1111. Leaving it in costs $13.49 / 90 days.
+--    ⚠️ ORDER grain, not date grain — date grain lets a compensating pair cancel out.
+-- with dd as (
+-- select
+--   dd.business_date
+-- , dd.brink_order_id
+-- , abs(round(sum(dd.discount_amount), 2)) as amount
+-- from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
+-- where 1=1
+-- and dd.business_date between date_sub(current_date('America/Denver'), interval 90 day)
+--                          and date_sub(current_date('America/Denver'), interval 2 day)
+-- group by
+--   dd.business_date
+-- , dd.brink_order_id
+-- )
+-- , oc as (
+-- select
+--   oc.business_date
+-- , oc.brink_order_id
+-- , round(oc.total_discount_amount + oc.total_promotions_amount, 2) as order_discount
+-- from `marketing-data-442316`.claude.order_customer oc
+-- where 1=1
+-- and oc.business_date between date_sub(current_date('America/Denver'), interval 90 day)
+--                          and date_sub(current_date('America/Denver'), interval 2 day)
+-- and oc.store_id not in (1111, 999)
+-- )
+-- select
+--   dd.business_date
+-- , dd.brink_order_id
+-- , dd.amount
+-- , oc.order_discount
+-- from dd
+-- 	full outer join oc
+-- 	on oc.business_date = dd.business_date
+-- 	and oc.brink_order_id = dd.brink_order_id
+-- where 1=1
+-- and ifnull(dd.amount, 0) <> ifnull(oc.order_discount, 0)
 -- ;

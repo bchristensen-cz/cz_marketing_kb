@@ -75,7 +75,7 @@
 | `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater` **or** the pulse order is flagged catering. **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. |
 | `customer_type` | STRING | **New 2026-07-24.** Classifies the customer **on this order**. NULL when the order has no identified customer. Order-level, not customer-level — see the table below. |
 | `is_guest_order` | BOOLEAN | **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = false`. FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
-| `has_order_items` | BOOLEAN | **New 2026-08-04 (synced 2026-08-13), for auditing.** FALSE = the order row exists but no `brinkOrderItem` rows survived the item filters (not cleared/voided/deleted, sales > 0) — `item_gross_sales`, `mods_gross_sales`, tip-item and fee columns are NULL on these rows. ~2.4% of rows in the trailing 8 days. Not a quality filter for reporting — order-level financials (gross, net, payments) are still real on these orders. |
+| `has_order_items` | BOOLEAN | **New 2026-08-04 (synced 2026-08-13), for auditing.** FALSE = the order row exists but no `brinkOrderItem` rows survived the item filters (not cleared/voided/deleted, sales > 0) — `item_gross_sales`, `mods_gross_sales`, tip-item and fee columns are NULL on these rows. ~2.4% of rows in the trailing 8 days. **⚠️ Corrected 2026-08-15 — an earlier revision of this line said "order-level financials (gross, net, payments) are still real on these orders." That is wrong for discounts.** `total_discount_amount` and `total_promotions_amount` are **silently zeroed** whenever this is FALSE, because both CTEs join on `boi.orderid` rather than `bo.id` (see the gotcha below), and `net_sales` is derived as `gross − discount − promotion` so it inherits the error. Payments and `gross_sales` are still real. |
 | `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
 
 #### `customer_type` values
@@ -390,6 +390,53 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   `item_gross_sales` / `mods_gross_sales` / tip-item / fee columns. `has_order_items = false`
   finds them (~2.4% of recent rows; that's what the column was added for on 2026-08-04). An
   earlier revision of this line claimed such orders were excluded — wrong.
+- **⚠️ `total_discount_amount` and `total_promotions_amount` are ZERO on every
+  `has_order_items = false` order, and that is a join-key bug — not a data absence.** Found
+  2026-08-15. Both CTEs are joined on **`boi.orderid`**, the output of the `brink_order_item`
+  CTE, instead of on `bo.id`:
+
+  ```sql
+  left join instore_emp_discounts d
+  on d.order_id = boi.orderid      -- <- boi, not bo
+  ...
+  left join brink_promotions bp
+  on bp.orderid = boi.orderid      -- <- boi, not bo
+  ```
+
+  `brink_order_item` filters `IsCleared/IsVoided/IsDeleted = false` and then applies
+  `having sum(ItemGrossSales) > 0 or sum(ItemNetSales) > 0`. Any order it drops has
+  `boi.orderid = NULL`, so the discount and promotion joins collapse with it and the order
+  reports $0 even though the `brinkOrderDiscount` rows exist with `isDeleted = false`.
+  Measured: **80 orders / $767.17 over 90 days** to 2026-08-15. `net_sales` inherits the error
+  because it is computed as `gross − discount − promotion`.
+
+  **Do not "fix" this by switching to `bo.id`.** The affected orders are voided/comped shells —
+  Brink zeroes the header (`GrossSales` / `NetSales` / `Subtotal` / `Total` all 0) and voids the
+  items but leaves the discount row standing. Nothing was sold, so nothing was given away, and
+  joining on `bo.id` would book $767 of giveaway against $0 of sales and drive `net_sales`
+  negative. The **zeros here are the correct answer**; the fix went into `sales_ops.order_lines`
+  instead, which now suppresses the matching discount lines. See
+  [`claude.order_line_discount_detail.md`](claude.order_line_discount_detail.md).
+
+  The `has_order_items` column can be reproduced exactly from `order_lines` — verified across
+  2,050,577 orders / 90 days with zero disagreements:
+
+  ```sql
+  select
+    ol.brink_order_id
+  , ol.business_date
+  , case when sum(ol.amount) > 0 or sum(ol.item_net_sales) > 0 then true else false end as has_order_items
+  from `marketing-data-442316`.sales_ops.order_lines ol
+  where 1=1
+  and ol.business_date between @start_date and @end_date
+  and ol.line_item_type in ('item','fee','tip')
+  group by
+    ol.brink_order_id
+  , ol.business_date
+  ```
+
+  An order absent from that result entirely (no `item` / `fee` / `tip` lines at all) is also
+  `has_order_items = false`.
 - Tips: `total_tip_amount` (payment tips) and delivery/other tip items are **separate mechanisms** — don't add them blindly.
 - `is_guest_order` is loyalty-based; a guest can still have `mapped_cust_id` NULL and an email present.
 - `is_catering` is now a **superset** of `revenue_category = 'Catering'` — all catering-destination orders are TRUE, plus 48 June orders that pulse flagged as catering on In-Store/Digital destinations. Use `revenue_category` for channel reporting, `is_catering` to include or exclude catering as a business line.

@@ -125,6 +125,46 @@ and boi.IsVoided = false
 and boi.IsDeleted = false
 )
 
+-- '2026-08-15' SELLABLE-ORDER GUARD. Orders whose brinkOrderItem rows carry no sellable
+-- value. Discount and promotion lines are suppressed for these orders (see the two
+-- `join sellable_orders` below); item / modifier / gift_card / surcharge lines are NOT
+-- touched — a gift-card-only order is legitimately item-less and its gift card is a real sale.
+--
+-- WHY: sales_ops.order_customer joins its discount and promotion CTEs on `boi.orderid`, where
+-- boi is a CTE carrying this exact `having` guard. An order the guard drops therefore reports
+-- total_discount_amount = 0 and total_promotions_amount = 0 over there even though the
+-- brinkOrderDiscount rows exist with isDeleted = false. Emitting the discount line here for
+-- such an order is what made order_line_discount_detail run $753.68 ABOVE order_customer over
+-- the trailing 90 days (80 orders, measured 2026-08-15). The orders are voided/comped shells:
+-- Brink zeroes the header (GrossSales / NetSales / Subtotal / Total all 0) and voids the items
+-- but leaves the discount row standing, so nothing was sold and nothing was given away.
+--
+-- WHY THE AMOUNT TEST AND NOT JUST ROW PRESENCE: 78 of the 80 had every item row
+-- IsCleared/IsVoided/IsDeleted, so row presence alone would catch them. The other 2 carried a
+-- single surviving 'Online Details Memo' line at $0.00 gross — a placeholder, not a sale.
+-- Row presence alone leaves those 2 ($15.84 / 90 days) unreconciled; the amount test ties to $0.
+--
+-- VERIFIED 2026-08-15: this guard reproduces order_customer.has_order_items EXACTLY —
+-- 2,050,577 orders over 90 days, zero disagreements in either direction.
+--
+-- SCOPE: removes 42,092 discount/promotion lines / -$238,698.36 over full history (orders with
+-- no surviving item rows) plus 2,701 lines / -$45,348.22 (orders whose surviving items are all
+-- $0). The second bucket is concentrated in 2019-2022; it is -$58.17 in 2026 and -$396.97 in
+-- 2025. Post-change full-history discount total: -$25,693,161.50 (was -$25,967,881.35).
+--
+-- ⚠️ `ol.amount` on item/fee/tip lines IS the raw boi.ItemGrossSales, so the gross arm mirrors
+-- order_customer exactly. `ol.item_net_sales` is zeroed for tip items where order_customer uses
+-- raw ItemNetSales — the arms only diverge on a tip-only order with non-positive gross, which
+-- the gross arm already excludes. Confirmed immaterial by the zero-disagreement check above.
+, sellable_orders as (
+select
+  ol.order_id
+from order_lines ol
+group by
+  ol.order_id
+having sum(ol.amount) > 0 or sum(ol.item_net_sales) > 0
+)
+
 , brink_order_item_lines as (
 select *
 from order_lines
@@ -170,6 +210,8 @@ bod.OrderId
 from `marketing-data-442316`.brink.brinkOrderDiscount bod
 	join brink_order bo
 	on bo.id = bod.orderid
+		join sellable_orders so   -- '2026-08-15' see the guard above; ties this table to order_customer
+		on so.order_id = bod.orderid
 where 1=1
 and bod.isDeleted = false
 
@@ -208,6 +250,8 @@ p.orderId
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
 	on bo.id = p.orderid
+		join sellable_orders so   -- '2026-08-15' see the guard above; ties this table to order_customer
+		on so.order_id = p.orderid
     left join promotions pn  -- '2026-07-31' name master, joined per store
     on pn.id = p.promotionid
     and pn.storeid = bo.storeid

@@ -560,6 +560,25 @@ from brink_order bo
 									left join `marketing-data-442316`.brink.brinkDestinations bd
 									on bd.Id = bo.DestinationId
 									and bd.StoreID = bo.FKStoreId
+-- WARNING '2026-08-15' THE JOIN KEY HERE (AND ON brink_promotions BELOW) IS `boi.orderid`,
+-- NOT `bo.id`. Read this before "fixing" it. brink_order_item drops any order whose items are
+-- all cleared/voided/deleted or sum to $0 (its `having` clause). Those orders get
+-- boi.orderid = NULL, so these joins collapse and the order reports total_discount_amount = 0
+-- and total_promotions_amount = 0 even though brinkOrderDiscount holds live rows with
+-- isDeleted = false. 80 orders / $767.17 over the 90 days to 2026-08-15. net_sales inherits it
+-- (gross - discount - promotion). has_order_items = false marks every affected row.
+--
+-- Switching to bo.id would be WRONG. These are voided/comped shells: Brink zeroes the header
+-- (GrossSales / NetSales / Subtotal / Total all 0) and voids the items but leaves the discount
+-- row standing. Nothing was sold, so nothing was given away -- bo.id would book $767 of
+-- giveaway against $0 of sales and drive net_sales negative. The zeros are correct.
+--
+-- The gap was closed on the OTHER side: sales_ops.order_lines now carries a `sellable_orders`
+-- guard that suppresses discount and promotion lines on exactly these orders, so
+-- order_line_discount_detail and this table agree to the cent at order grain on closed days.
+-- That guard reproduces has_order_items exactly (2,050,577 orders / 90 days, zero
+-- disagreements). If you change either side, change the other and re-run assertion D in
+-- sql/sales_ops.order_line_discount_detail.sql.
 										left join instore_emp_discounts d
 										on d.order_id = boi.orderid
 											left join employee_discount_offer do

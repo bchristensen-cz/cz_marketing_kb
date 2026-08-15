@@ -30,7 +30,7 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 > - **Discount lines no longer masquerade in `item_name`.** `item_name` is now the discount **program** name from the `brink.brinkDiscounts` master (`SessionM Loyalty`, `Online Discount`, `Team Member 100% Discount`, …), not the redeemed item's name. The redeemed-item text stays in `description` (which can also carry a team-member's personal name on employee discounts). Name-discovery no longer surfaces phantom *discount* rows; **promotion lines still do**. New capability: **discount-program reporting** — `group by item_name` on `line_item_type = 'discount'`, value = `sum(amount)` (negative), mirroring the promotion recipe.
 > - **`item_type` is a closed 7-value domain across full history**: `Entree`, `Kids Meals`, `Beverage`, `Discount`, `Promotion`, `Surcharge`, `Other`. Rev-center names (`Desserts`, `Modifiers`, `Gift Cards`, …) **no longer appear in it** — a filter like `item_type = 'Desserts'` returns zero rows; menu categories live only in `rev_center_name`. Surcharge lines are stamped `'Surcharge'` on both columns, and `rev_center_name` / `item_type` have **zero NULLs** since 2026-05-01 (measured 2026-08-12).(#pre-query-clarification-protocol-steward-rule-2026-07-28--mandatory) before running any query.** Six scope items — store 1111, date range, catering, Try 2 Combo inclusion, named-product resolution, and the meaning of "delivery" — must be settled first. Items 4 and 5 were added 2026-07-28 after a session reported an item breakdown that was wrong by ~3x because it treated every `line_item_type = 'item'` row as a standalone sale and guessed at the product name.
 
-> **🛠️ Steward checklist — any full-history rebuild of `order_lines` must be followed by a full-history rebuild of `sales_ops.discount_detail`** (added 2026-08-15). `discount_detail` is derived from `order_lines`, and its widest scheduled reload is 730 days — **65.1% of its rows (2,239,212 / −$15.6M) sit before that floor and are never refreshed by any scheduled run.** `order_lines` was restated across full history three times in the month to 2026-08-14 (07-30, 07-31, 08-12); each one silently changes the parent beneath that frozen block. The full-history build is the commented header in [`sql/sales_ops.discount_detail.sql`](../../sql/sales_ops.discount_detail.sql).
+> **🛠️ Steward checklist — any full-history rebuild of `order_lines` must be followed by a full-history rebuild of `sales_ops.order_line_discount_detail`** (added 2026-08-15). `order_line_discount_detail` is derived from `order_lines`, and its widest scheduled reload is 730 days — **65.1% of its rows (2,239,212 / −$15.6M) sit before that floor and are never refreshed by any scheduled run.** `order_lines` was restated across full history three times in the month to 2026-08-14 (07-30, 07-31, 08-12); each one silently changes the parent beneath that frozen block. The full-history build is the commented header in [`sql/sales_ops.order_line_discount_detail.sql`](../../sql/sales_ops.order_line_discount_detail.sql).
 
 Project: `marketing-data-442316`. The five approved tables for order/sales analysis:
 
@@ -38,13 +38,13 @@ Project: `marketing-data-442316`. The five approved tables for order/sales analy
 - **`sales_ops.order_lines`** — one row per line element. Menu mix, items, modifiers, combos.
 - **`sales_ops.order_sequence`** — one row per order that has a `mapped_cust_id` (all customer types). Order sequencing, recency, lifetime counts.
 - **`sales_ops.customer_attribute`** — **one row per customer** (person only). Lifetime and trailing-window aggregates. **New 2026-07-29.** Use it for any "per customer" question — LTV, frequency, lapsed cohorts, store affinity — instead of re-aggregating `order_customer` by hand.
-- **`sales_ops.discount_detail`** — **one row per discount COMPONENT** (not per line, not per order). Discounts and promotions with loyalty / offer attribution. **New 2026-08-15.** Use it for any "what did we give away, and through what?" question. Users query **`claude.discount_detail`**.
+- **`sales_ops.order_line_discount_detail`** — **one row per discount COMPONENT** (not per line, not per order). Discounts and promotions with loyalty / offer attribution. **New 2026-08-15.** Use it for any "what did we give away, and through what?" question. Users query **`claude.order_line_discount_detail`**.
 
-Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_ops.order_lines.md`, `sales_ops.order_sequence.md`, `sales_ops.customer_attribute.md`, `claude.discount_detail.md`. Read them before writing non-trivial queries.
+Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_ops.order_lines.md`, `sales_ops.order_sequence.md`, `sales_ops.customer_attribute.md`, `claude.order_line_discount_detail.md`. Read them before writing non-trivial queries.
 
 ## 🛑 First: which dataset should you query? (updated 2026-08-04 — routed by ROLE, not by access)
 
-**Business questions run on the `claude` dataset — for everyone except the steward.** The `claude` views (`claude.order_customer`, `claude.order_lines`, `claude.loyalty_*`, `claude.store_info`, `claude.order_payment_tender`, `claude.discount_detail`) are the curated interface layer, and they are the only place a business answer should come from.
+**Business questions run on the `claude` dataset — for everyone except the steward.** The `claude` views (`claude.order_customer`, `claude.order_lines`, `claude.loyalty_*`, `claude.store_info`, `claude.order_payment_tender`, `claude.order_line_discount_detail`) are the curated interface layer, and they are the only place a business answer should come from.
 
 | Your role | Query | Notes |
 |---|---|---|
@@ -353,7 +353,7 @@ order by ca.mapped_cust_id, s.orders desc
 ## Hard rules (consistency guarantees)
 
 1. **Never query upstream/raw datasets** (`brink.*`, `pulse.*`, `sessionM.*`) to answer business questions. They contain voided rows, duplicates, and unfiltered records that these marts already handle. If the marts can't answer the question, say so — don't improvise from raw tables.
-2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — e.g. `sales_ops.order_discount` still spells it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.)
+2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. `sales_ops.order_line_discount_detail` uses `business_date` too. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — the since-removed `sales_ops.order_discount` still spelled it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.)
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only; hours 0–3 and 5–7 skip). Yesterday and older is stable after the 4am run.
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
@@ -502,17 +502,17 @@ order by discount_amount
 
 Full history restated, so this works back to 2018. ~3–7% of a day's lines land in the generic `'Discount'` bucket (missing or blank master rows) — say so when a user needs exact program totals.
 
-> **🆕 Superseded for most questions by `claude.discount_detail` (2026-08-15).** The recipe
+> **🆕 Superseded for most questions by `claude.order_line_discount_detail` (2026-08-15).** The recipe
 > above still works and is the cheapest way to get a raw program total, but it can't tell you
 > *how* a discount was redeemed — points vs reward vs offer, which offer, in-store vs
-> integrated. Use `claude.discount_detail` for anything past a flat program total. See the
+> integrated. Use `claude.order_line_discount_detail` for anything past a flat program total. See the
 > section below.
 
-## Discount and loyalty-giveaway questions — `claude.discount_detail` (new 2026-08-15)
+## Discount and loyalty-giveaway questions — `claude.order_line_discount_detail` (new 2026-08-15)
 
 "What did we give away, and through what?" now has a home. One row per **discount
 component**, with loyalty and offer attribution joined on. Full docs:
-[`data_dictionaries/claude.discount_detail.md`](../../data_dictionaries/claude.discount_detail.md).
+[`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
 It is the sanctioned wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts`
 and `sessionM.user_offers` — **never query those directly.**
 
@@ -525,7 +525,7 @@ own `discount_type`. Row count runs **~1.5% above the source line count** (3,440
 3,388,269 full history, 2026-08-14). That surplus is the design.
 
 - **`discount_amount` is the only summable money column.** It reconciles to `order_lines`
-  exactly — **−$25,967,881.35 on both sides**, full history, identical filters.
+  exactly — **−$25,977,208.08 on both sides**, full history, identical filters (deployed table, 2026-08-15).
 - **`count(*)` counts components**, not discounts and not orders. For discounts use
   `count(distinct concat(brink_order_id, '-', item_id))`; for orders,
   `count(distinct brink_order_id)`.
@@ -537,7 +537,7 @@ select
   dd.discount_type
 , count(distinct dd.brink_order_id) as orders
 , round(sum(dd.discount_amount), 2) as discount_amount
-from `marketing-data-442316`.claude.discount_detail dd
+from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 group by
@@ -580,7 +580,7 @@ hand before presenting a full-history breakdown.
 ## ⚠️ In an incremental build, never window a DIMENSION by the fact window (general rule, 2026-08-15)
 
 This one generalises to **every** scheduled script in `sql/`, and it produced the nastiest bug
-found in the `discount_detail` review — worth stating as a rule rather than a war story.
+found in the `order_line_discount_detail` review — worth stating as a rule rather than a war story.
 
 An incremental script reloads a window of the **fact** (here `business_date >= start_date`,
 matching the `delete`). The temptation is to put the same `start_date` on every source CTE for
@@ -607,7 +607,7 @@ Two valid fixes, both verified set-identical to a full-history build:
 1. **Filter the lookups by the order KEYS in the window**, not by their own timestamps
    (`od.order_id in (select pulse_order_id from window_orders)`). Exact, no lead-time
    assumption, ~5× the scan.
-2. **Widen the reload windows so the lookback covers the tail** — what `discount_detail`
+2. **Widen the reload windows so the lookback covers the tail** — what `order_line_discount_detail`
    ships with (120d daily / 380d Monday / 730d monthly, each with a further `- 60` on the
    sources). Cheaper, but it is a *bet* on lead times and needs an alarm. Here that alarm is
    the `Error` bucket.
@@ -619,14 +619,14 @@ Related traps in the same family:
   of the reload window — returning **zeros, not an error** — and intraday runs that only cover
   today won't heal it until the next 4am pass.
 - **A wide reload window is not a full rebuild.** Whatever sits before the widest window is
-  frozen forever. On `discount_detail` that is **65.1% of rows (2,239,212 / −$15.6M)**. Since
+  frozen forever. On `order_line_discount_detail` that is **65.1% of rows (2,239,212 / −$15.6M)**. Since
   `order_lines` was restated across full history **three times in the month to 2026-08-14**,
   re-running the full-history build of any derived table is a **required step in the
   `order_lines` rebuild checklist**, not a nice-to-have.
 - **`current_date` is UTC.** Intraday runs firing 8pm–11pm Denver are 2am–5am the *next* UTC
   day, so a bare `current_date` silently means "tomorrow" for a third of the schedule. Pin
   `current_date('America/Denver')` in every scheduled script and every assertion. This cost
-  real time during the `discount_detail` review: three test builds either side of the rollover
+  real time during the `order_line_discount_detail` review: three test builds either side of the rollover
   picked different windows and the diff read as a logic regression when it was a clock
   difference.
 
@@ -1165,7 +1165,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   - `iscatering` on the legacy table is **INT64** (`iscatering = 0`); `is_catering` on the canonical mart is **BOOL** (`is_catering = false`). Writing `is_catering = 0` fails with `No matching signature for operator = for argument types: BOOL, INT64` (observed 2026-07-24) — a reliable sign a query was written against the legacy schema.
 - **`sales_ops.store_info` column names are not the obvious ones** — it's `store_state`, not `state`; `store_city`, `store_zip`, `store_address`, `store_short_name`. Full column list: `store_id`, `store_name`, `store_address`, `store_city`, `store_state`, `store_zip`, `store_phone`, `store_short_name`, `store_tz`, `store_open_date`, `is_comp_store`, `latitude`, `longitude`, `weather_cluster_id`, `timezone_name`. Join `store_info.store_id = order_customer.store_id`. Full dictionary: [`data_dictionaries/sales_ops.store_info.md`](../../data_dictionaries/sales_ops.store_info.md). (Guessing `state` failed an analyst session 2026-07-24.)
 - **"Market" means `store_state`** (steward decision 2026-07-30). There is **no** `market` / `region` / `dma` / `metro` column anywhere in `sales_ops` — verified against `INFORMATION_SCHEMA.COLUMNS`. When a user asks for anything "by market," join `store_info` and group by `si.store_state`, and **say in the answer that market = state**. Ten values, one of which is **blank** (one store has no `store_state`) — it becomes a nameless row in any breakdown, so exclude or label it. Caveat worth stating: Utah is 35 of ~90 stores across 28 cities, so one "Utah" row hides most of the geographic spread. `store_city` is finer but `West Valley` and `West Valley City` are separate values for the same metro. A real metro/DMA rollup is an open KB gap — don't invent one per-session.
-- **⚠️ `sales_ops.order_discount` and `sales_ops.discount_detail` are different tables — don't confuse them.** `discount_detail` (new 2026-08-15) is the documented mart; `claude.discount_detail` is what users query. `order_discount` is an older raw Brink passthrough (`order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, `approver_employee_id`, `source`, …), **not documented**, join keys unverified. If a question needs `order_discount`, treat answers as provisional until its dictionary lands. **Its partition column is the legacy spelling `businessdate`, not `business_date`** — the 2026-07-24/30 renames did not reach it, so a query written to the current convention fails with `Unrecognized name: business_date; Did you mean businessdate?` (hit by an analyst MCP session 2026-08-06). Its `approver_employee_id` is the manager-discount audit trail, which `discount_detail` does **not** carry — an open enrichment idea, not a gap anyone has asked for.
+- **`sales_ops.order_discount` no longer exists** — verified absent from `INFORMATION_SCHEMA` on 2026-08-15; it was a BASE TABLE on 2026-08-06. It was an undocumented raw Brink passthrough (`order_id`, `discount_id`, `name`, `amount`, `loyalty_reward_id`, `approver_employee_id`, `source`, partitioned on the legacy `businessdate` spelling), and **`sales_ops.order_line_discount_detail` supersedes it**. A saved query against it now fails loudly with a not-found error — the good failure mode. **Don't confuse the names**: the discount mart is `order_line_discount_detail`, and users query `claude.order_line_discount_detail`. One thing the old table carried that the mart does **not** is `approver_employee_id`, the manager-discount audit trail — an open enrichment idea, not a gap anyone has asked for.
 - **Employee/test exclusion:** internal accounts are identifiable via `customer_type = 'internal'` (`@cafezupas.com`, `@tkxel.com`, `@tkxel.io`) — 119 ids / 736 orders in June 2026. The new `mapped_email_domain` column closes the old `mapped_domain` mart gap on this table. Unidentified internal orders still can't be flagged.
 - The old `cowork_interim` and `nces_staging` scratch datasets were dropped 2026-07-22. Any saved query referencing them must be rebuilt against the marts (materialize intermediates in `scratch` if needed).
 
@@ -1176,7 +1176,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   loaded day shows `'stripe'` placeholders; amounts are gross tendered, not sales; split
   tenders are comma-joined. Full gotchas: `data_dictionaries/claude.order_payment_tender.md`.
 
-- **Discount / loyalty-giveaway questions run on `claude.discount_detail`** (new 2026-08-15).
+- **Discount / loyalty-giveaway questions run on `claude.order_line_discount_detail`** (new 2026-08-15).
   **One row per discount COMPONENT, not per line and not per order** — a single Brink line can
   split into several rows. `discount_amount` is the **only** summable money column (it
   reconciles to `order_lines` exactly); `count(*)` counts components; joining to
@@ -1185,7 +1185,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   `discount_type` is an open domain with no `'Other'` bucket. **`Error` is a health signal:
   0–1 lines on a closed day, but ~76% of *today's* integrated lines until the 4am pass — never
   report today's discount mix intraday.** Full gotchas:
-  `data_dictionaries/claude.discount_detail.md`.
+  `data_dictionaries/claude.order_line_discount_detail.md`.
 
 - **In an incremental build, never window a dimension by the fact window** (rule 2026-08-15).
   `user_offers.create_date` is *issuance*, `pulse.order_discounts.created_at` is order

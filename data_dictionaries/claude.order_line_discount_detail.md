@@ -1,17 +1,28 @@
-# Data Dictionary: `marketing-data-442316.claude.discount_detail`
+# Data Dictionary: `marketing-data-442316.claude.order_line_discount_detail`
 
 **One row per discount COMPONENT** — *not* one row per discount line, and not one row per
 order. Read the grain section before writing anything against this table; it is the single
 easiest thing to get wrong here.
 
-View over `sales_ops.discount_detail` (rolling 3-year window, matching `claude.order_lines`
+View over `sales_ops.order_line_discount_detail` (rolling 3-year window, matching `claude.order_lines`
 and `claude.order_customer`). Base table build script:
-[`sql/sales_ops.discount_detail.sql`](../sql/sales_ops.discount_detail.sql). View:
-[`sql/claude.discount_detail.sql`](../sql/claude.discount_detail.sql). Deployed 2026-08-15.
+[`sql/sales_ops.order_line_discount_detail.sql`](../sql/sales_ops.order_line_discount_detail.sql). View:
+[`sql/claude.order_line_discount_detail.sql`](../sql/claude.order_line_discount_detail.sql).
 
 This is the sanctioned answer to **"what did we give away, and through what?"** It is the
 wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts` and
 `sessionM.user_offers` — **never query those directly.**
+
+> **🛑 Deployment status 2026-08-15 — the base table is live, the view is NOT.**
+> `sales_ops.order_line_discount_detail` is deployed and fully loaded (3,441,279 rows,
+> 2018-08-13 → 2026-08-14, reconciled exactly). **`claude.order_line_discount_detail` does not
+> yet exist** — verified absent from `INFORMATION_SCHEMA`. Until the view in
+> [`sql/claude.order_line_discount_detail.sql`](../sql/claude.order_line_discount_detail.sql)
+> is deployed, no standard user can reach this data at all, and a query against the view name
+> fails with a not-found error. Remove this box once deployed.
+>
+> The table was created as `sales_ops.discount_detail` and renamed the same day, before any
+> user query — the old name never reached anyone.
 
 ## Grain — read this first
 
@@ -27,7 +38,7 @@ over full history, measured 2026-08-14). That surplus is the feature, not a defe
 
 > **⚠️ `discount_amount` is the ONLY summable money column.** It is the prorated value and
 > it reconciles to `order_lines` **exactly**: full history on identical filters,
-> **−$25,967,881.35 on both sides** (verified 2026-08-14).
+> **−$25,977,208.08 on both sides** (verified 2026-08-15 against the deployed table; the same check on the 2026-08-14 pre-deploy build read −$25,967,881.35 — the delta is today's partition still filling, not drift).
 >
 > The un-prorated Brink line amount is deliberately **not exposed**. An earlier draft carried
 > it beside `discount_amount` under the more natural name `amount`; summing it returned
@@ -113,7 +124,7 @@ select
   dd.business_date
 , countif(dd.discount_type = 'Error') as error_lines
 , round(safe_divide(countif(dd.discount_type = 'Error'), countif(dd.item_id = 643536109)) * 100, 2) as pct_of_online_bucket
-from `marketing-data-442316`.claude.discount_detail dd
+from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
 group by
@@ -154,7 +165,7 @@ select
   dd.discount_type
 , count(distinct dd.brink_order_id) as orders
 , round(sum(dd.discount_amount), 2) as discount_amount
-from `marketing-data-442316`.claude.discount_detail dd
+from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 group by
@@ -171,7 +182,7 @@ select
 , dd.discount_type
 , round(sum(dd.discount_amount), 2) as discount_amount
 , sum(dd.points) as points_spent
-from `marketing-data-442316`.claude.discount_detail dd
+from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 and dd.discount_type in ('Reward Redemption', 'In-cart Points Redemption', 'Offer')
@@ -191,7 +202,7 @@ select
   dd.brink_order_id
 , dd.business_date
 , round(sum(dd.discount_amount), 2) as discount_amount
-from `marketing-data-442316`.claude.discount_detail dd
+from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 group by
@@ -256,7 +267,7 @@ order by
   `{dataset: claude, targetTypes: [VIEWS]}` in its access list, so **no new authorized-dataset
   grant is needed** (unlike `claude.order_payment_tender`, which reads `pulse`/`brink`).
 - **`select *` freezes at view-creation time.** If a column is added to or renamed on
-  `sales_ops.discount_detail`, redeploy this view with an identical `create or replace` — the
+  `sales_ops.order_line_discount_detail`, redeploy this view with an identical `create or replace` — the
   `INFORMATION_SCHEMA` metadata and the actual behaviour will disagree until you do.
 
 ## Refresh & cost

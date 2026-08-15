@@ -1,5 +1,5 @@
 -- =====================================================================================
--- sales_ops.discount_detail — scheduled query. Deployed 2026-08-15.
+-- sales_ops.order_line_discount_detail — scheduled query. Deployed 2026-08-15.
 -- History starts 2018-08-07. Same schedule as order_customer, wider reload windows.
 --
 -- GRAIN: one row per discount COMPONENT, not per Brink discount line. Brink emits exactly
@@ -8,12 +8,12 @@
 -- above the source line count (3,440,131 vs 3,388,269 full history, measured 2026-08-14).
 --
 -- discount_amount is the ONLY summable money column, and it reconciles to order_lines
--- exactly: -$25,967,881.35 on both sides, full history, identical filters (2026-08-14).
+-- exactly: -$25,977,208.08 on both sides, full history, identical filters (deployed table, 2026-08-15).
 -- The un-prorated Brink amount is deliberately NOT emitted — it repeats on every split row
 -- and summing it overstated July 2026 by 7.2% (-$504,903.90 vs a true -$471,017.34).
 --
--- Full docs: data_dictionaries/claude.discount_detail.md
--- User-facing view: sql/claude.discount_detail.sql
+-- Full docs: data_dictionaries/claude.order_line_discount_detail.md
+-- User-facing view: sql/claude.order_line_discount_detail.sql
 --
 -- ⚠️ THE 730-DAY FLOOR IS NOT THE WHOLE TABLE. 65.1% of rows (2,239,212 / -$15.6M) sit
 -- before the widest reload window and are NEVER refreshed by any scheduled run. order_lines
@@ -55,16 +55,16 @@ end if;
 -- the next 4am pass.
 begin transaction;
 
-delete `marketing-data-442316`.sales_ops.discount_detail
+delete `marketing-data-442316`.sales_ops.order_line_discount_detail
 where business_date >= start_date;
 
-insert into `marketing-data-442316`.sales_ops.discount_detail
+insert into `marketing-data-442316`.sales_ops.order_line_discount_detail
 
 -- Initial full-history build (run once; also re-run after any order_lines full-history
 -- restatement — see the frozen-block warning in the header):
 -- declare start_date date;
 -- set start_date = '2018-08-07';
--- create or replace table `marketing-data-442316`.sales_ops.discount_detail
+-- create or replace table `marketing-data-442316`.sales_ops.order_line_discount_detail
 -- partition by business_date
 -- cluster by store_id, discount_type, discount_origin
 -- as
@@ -256,7 +256,7 @@ commit transaction;
 -- =====================================================================================
 
 -- A. discount_amount must reconcile to order_lines exactly.
---    Full history 2026-08-14: -$25,967,881.35 both sides.
+--    Full history 2026-08-15: -$25,977,208.08 both sides, 0 NULL discount_type.
 -- select
 --   round(sum(dd.discount_amount), 2) as mart_total
 -- , (
@@ -266,7 +266,7 @@ commit transaction;
 --     and ol.line_item_type in ('discount', 'promotion')
 --     and ol.store_id not in (1111, 999)
 --   ) as source_truth
--- from `marketing-data-442316`.sales_ops.discount_detail dd
+-- from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
 -- ;
 
 -- B. 'Error' on a CLOSED day should be 0-1 lines. Today is expected to spike (~76%).
@@ -274,7 +274,7 @@ commit transaction;
 --   dd.business_date
 -- , countif(dd.discount_type = 'Error') as error_lines
 -- , round(safe_divide(countif(dd.discount_type = 'Error'), countif(dd.item_id = 643536109)) * 100, 2) as pct_of_online_bucket
--- from `marketing-data-442316`.sales_ops.discount_detail dd
+-- from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
 -- where 1=1
 -- and dd.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
 -- group by
@@ -291,7 +291,7 @@ commit transaction;
 -- , countif(dd.offer_name is null) as null_offer_name
 -- , countif(dd.root_offer_id is null) as null_root_offer_id
 -- , count(*) as lines
--- from `marketing-data-442316`.sales_ops.discount_detail dd
+-- from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
 -- where 1=1
 -- and dd.business_date between date_sub(current_date('America/Denver'), interval 380 day)
 --                          and date_sub(current_date('America/Denver'), interval 121 day)

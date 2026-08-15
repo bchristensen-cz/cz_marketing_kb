@@ -1,5 +1,5 @@
 -- =====================================================================================
--- claude.discount_detail — Claude-facing authorized view over sales_ops.discount_detail.
+-- claude.order_line_discount_detail — Claude-facing authorized view over sales_ops.order_line_discount_detail.
 --
 -- Interface layer, per the view-first strategy (steward 2026-07-22). Deployed 2026-08-15.
 --
@@ -21,7 +21,7 @@
 -- claude.order_payment_tender, which reads pulse/brink and needed one.
 --
 -- ⚠️ `select * except(...)` is EXPANDED AND FROZEN at view-creation time. If a column is
--- added to or renamed on sales_ops.discount_detail, this view keeps advertising the old
+-- added to or renamed on sales_ops.order_line_discount_detail, this view keeps advertising the old
 -- schema in INFORMATION_SCHEMA while erroring at query time. Redeploy with an identical
 -- `create or replace` after any base-table schema change, then check INFORMATION_SCHEMA
 -- rather than assuming. (Trap hit on claude.order_customer 2026-07-30.)
@@ -31,11 +31,11 @@
 -- access must not assume base-table order.
 -- =====================================================================================
 
-create or replace view `marketing-data-442316`.claude.discount_detail as
+create or replace view `marketing-data-442316`.claude.order_line_discount_detail as
 select
   dd.* except(revenue_category)
 , case when dd.is_catering = true then 'Catering' else dd.revenue_category end as revenue_category
-from `marketing-data-442316`.sales_ops.discount_detail dd
+from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
 where 1=1
 and dd.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
 ;
@@ -45,7 +45,8 @@ and dd.business_date >= date_trunc(date_sub(current_date, interval 3 year), year
 -- Post-deploy validation.
 --
 -- 1. Reconciliation — discount_amount must tie to order_lines exactly on the same filters.
---    Verified on the full-history build 2026-08-14: -$25,967,881.35 both sides.
+--    Verified against the deployed table 2026-08-15: -$25,977,208.08 both sides, 3,441,279 rows,
+--    2018-08-13 -> 2026-08-14, 28 distinct discount_type values, 0 NULLs.
 -- 2. 'Error' must be 0-1 lines on every CLOSED business day. Today always spikes (~76% of
 --    the integrated bucket) because pulse has not caught up; that is expected and
 --    self-heals at the next 4am pass.
@@ -62,5 +63,5 @@ and dd.business_date >= date_trunc(date_sub(current_date, interval 3 year), year
 --     and ol.store_id not in (1111, 999)
 --   ) as source_truth
 -- , countif(dd.discount_type is null) as null_discount_type
--- from `marketing-data-442316`.claude.discount_detail dd
+-- from `marketing-data-442316`.claude.order_line_discount_detail dd
 -- ;

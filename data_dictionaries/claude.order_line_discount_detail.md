@@ -40,13 +40,22 @@ wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts` and
 > rebuilds on 08-17 healed it. **After a rename, grep the whole scheduled config for the old
 > name — the insert is not the only place it appears.**
 >
-> ⚠️ **PENDING 2026-08-17:** the widened `is_employee_meal_discount` (item_id 1 + 640945199 +
-> the `discount_name` arm + the anchored regex) is committed to the repo, and the deployed
-> config as of the 13:02 MT run carries only the **narrow** first version — flag present, but
-> without `item_id 1`, without `640945199`, and without the anchored regex. It also runs
-> **without the `begin transaction` / `commit transaction` wrapper**. Until the full script is
-> saved to the config AND a full-history rebuild is run, pre-2023 employee-meal spend reads
-> ~$757K low.
+> **✅ FULLY LANDED 2026-08-17, verified against the deployed config and the built table.** The
+> widened `is_employee_meal_discount` reached production in stages, and the staging is worth
+> knowing because it is what a partial deploy looks like from the outside: the 12:02 MT run had
+> no flag at all, the 13:02 run had the flag but only the first narrow draft of it (no
+> `item_id 1`, no `640945199`, unanchored regex, no transaction), and the **14:02 run carries
+> the full version — all four ids, the `discount_name` arm, the anchored `\bemp`, and both
+> `begin transaction` / `commit transaction`.** A full-history rebuild ran behind it.
+>
+> Verified after both: **assertion E returns zero rows** (no unflagged lines in any of the four
+> era buckets), 897,263 lines / −$9,397,581.64 flagged across full history, **zero NULL** flag
+> values, `max(business_date)` current. `discount_type` is now **27 distinct values, down from
+> 28** — that is the `NewTeamMemb Family Meal` fold-in, not a lost program.
+>
+> The reason this box tracks the *run* rather than the *change*: the built table cannot tell you
+> which version produced it, and a config saved between two hourly runs looks identical from the
+> table side. Assertion 0 below is how to check.
 
 ## Grain — read this first
 

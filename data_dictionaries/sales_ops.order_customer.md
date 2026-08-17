@@ -20,6 +20,12 @@
 > - **new `has_order_items`** (BOOL, added 2026-08-04) — audit flag; FALSE = order kept by the build but carrying no qualifying item rows (~2.4% of recent rows)
 > - `phone` is now **STRING** (cast at build)
 > - `email` and `mapped_email` are **lowercased at build**, and the SessionM fallback email is trimmed and stripped of its leading `cater_` prefix — the email-casing gotchas below are ✅ resolved
+>
+> **Further changes 2026-08-17** (deployed + full history rebuilt; verified by steward query the same day):
+> - **`is_employee_discount` DROPPED** — the column no longer exists on the table. Its replacement is `order_line_discount_detail.is_employee_meal_discount`, which is line-level, never NULL, and covers all four eras of the benefit. Any query naming `oc.is_employee_discount` now errors
+> - **`is_catering` widened**: store 50 (Middleton Mobile) is now unconditionally catering, per finance's definition
+> - **`revenue_category` aligned to `is_catering`**: pulse-flagged catering and store 50 both resolve to `'Catering'` in the base table. The two are now **equivalent sets** in `sales_ops` — they were not before
+> - **`destination` / `destination_id` overridden for store 50 only**: `'Middleton Mobile Catering'` / `999999999`. Every other store keeps its raw Brink id and name
 
 ## Table facts
 
@@ -62,21 +68,21 @@
 | `store_id` | INTEGER | FK to `sales_ops.store_info`. **Store 1111 is a test/training store — ALWAYS exclude it** (`store_id <> 1111`) in all sales/order metrics. No exceptions (steward rule 2026-07-23). |
 | `store_name` | STRING | Store name (denormalized). |
 | `store_state` | STRING | Store state — **this is "market"**; there is no market/region/DMA/metro column anywhere. Full state name (`Utah`, not `UT`). Stores with orders in the window: Utah (30), Arizona (14), Minnesota (12), Nevada (9), Wisconsin (8), Idaho (7), Illinois (6), Ohio (3), Texas (1). **⚠️ Renamed from `state` on 2026-07-30** for consistency with `order_lines` and `store_info` — `oc.state` now fails with `Name state not found inside oc`. **NULL for stores absent from `store_info`** (1111, 999), so `store_id <> 1111` is load-bearing for geography. |
-| `destination_id` | INTEGER | **New (synced 2026-08-13).** Raw Brink destination id (`brinkOrder.DestinationId`). `destination` is its name via `brinkDestinations` (id + store). Prefer `destination` / `revenue_category` for reporting; the id is for tracing back to Brink. |
-| `destination` | STRING | Raw Brink destination. Common values: To Stay, Takeout, DoorDash, Online Takeout, Drive Thru, Good Life Lane, UberEats, CZ Delivery, GrubHub, Catering Online Delivery/Takeout, Postmates, Fundraiser, EZ Cater Delivery/Takeout. |
+| `destination_id` | INTEGER | Raw Brink destination id (`brinkOrder.DestinationId`) for every store **except store 50**, which is stamped with the synthetic id **`999999999`** (2026-08-17, finance). `999999999` does **not** exist in `brink.brinkDestinations`, so a join back to Brink on this id drops store 50 entirely. Every other row still round-trips: verified 2026-08-17 across four sample days (2024-06-15, 2025-06-15, 2026-06-15, 2026-08-14), **0 of 77,632 non-store-50 orders differ from the raw Brink id**. `destination` is its name via `brinkDestinations` (id + store). Prefer `destination` / `revenue_category` for reporting. |
+| `destination` | STRING | Raw Brink destination, **except store 50**, which is stamped `'Middleton Mobile Catering'` (2026-08-17, finance). Common values: To Stay, Takeout, DoorDash, Online Takeout, Drive Thru, Good Life Lane, UberEats, CZ Delivery, GrubHub, Catering Online Delivery/Takeout, Postmates, Fundraiser, EZ Cater Delivery/Takeout. |
 | `source` | STRING | Raw pulse order source. NULL for in-store orders. |
-| `revenue_category` | STRING | **Canonical channel rollup**: `In-Store`, `Digital`, `Third_Party`, `Catering`, `Fundraiser`, `Other`. Derived from `destination`. |
+| `revenue_category` | STRING | **Canonical channel rollup**: `In-Store`, `Digital`, `Third_Party`, `Catering`, `Fundraiser`, `Other`. Derived from `destination`, **plus two catering overrides added 2026-08-17**: a pulse-flagged catering order and any store-50 order resolve to `'Catering'` whatever their destination says. **Consequence: `revenue_category = 'Catering'` and `is_catering = true` now select exactly the same orders in `sales_ops`.** They did not before — `is_catering` used to be a strict superset, and `claude.order_customer` existed partly to paper over the difference. That view still applies its own `case when is_catering then 'Catering'` override; it is now a **no-op**, kept as a belt-and-braces guard. |
 | `order_source` | STRING | Cleaned digital source: `Checkmate` (3rd-party integration), `iOS`, `Android`, `Mobile Web`, `Web`, `Outdoor Kiosk`, `Operator`, `ezcater`. NULL = in-store POS order. |
 | `in_store_scan` | INTEGER (0/1) | 1 = loyalty member scanned in-store with no digital order attached. |
 
 ### Flags
 | Column | Type | Description |
 |---|---|---|
-| `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater` **or** the pulse order is flagged catering. **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. |
+| `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater`, **or** the order is at **store 50** (Middleton Mobile), **or** the pulse order is flagged catering. **Widened 2026-08-17** to add store 50, per finance's definition — 807 orders / $10.3K net in the 30 days to 2026-08-16, none of which any earlier rule caught (store 50's Brink destinations are Takeout / To Stay / Drive Thru / Fundraiser and its pulse `is_catering` is always false). **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. **⚠️ `order_lines.is_catering` does not yet carry the store-50 rule — see Gotchas.** |
 | `customer_type` | STRING | **New 2026-07-24.** Classifies the customer **on this order**. NULL when the order has no identified customer. Order-level, not customer-level — see the table below. |
 | `is_guest_order` | BOOLEAN | **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = false`. FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
 | `has_order_items` | BOOLEAN | **New 2026-08-04 (synced 2026-08-13), for auditing.** FALSE = the order row exists but no `brinkOrderItem` rows survived the item filters (not cleared/voided/deleted, sales > 0) — `item_gross_sales`, `mods_gross_sales`, tip-item and fee columns are NULL on these rows. ~2.4% of rows in the trailing 8 days. **⚠️ Corrected 2026-08-15 — an earlier revision of this line said "order-level financials (gross, net, payments) are still real on these orders." That is wrong for discounts.** `total_discount_amount` and `total_promotions_amount` are **silently zeroed** whenever this is FALSE, because both CTEs join on `boi.orderid` rather than `bo.id` (see the gotcha below), and `net_sales` is derived as `gross − discount − promotion` so it inherits the error. Payments and `gross_sales` are still real. |
-| `is_employee_discount` | INTEGER (0/1) | 1 when the order used an employee/team discount — matched via Brink discount names (`%Team%`, `%Employee%`) or SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). ~1.5% of orders. |
+| ~~`is_employee_discount`~~ | — | **REMOVED 2026-08-17. The column does not exist; naming it errors.** It was an order-level 0/1 matched on Brink discount names (`%Team%`, `%Employee%`) plus SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). Use **`order_line_discount_detail.is_employee_meal_discount`** instead — line-level, never NULL, covers all four eras of the benefit. Aggregate to order grain with `max()` / `logical_or()` if you need an order-level flag. |
 
 #### `customer_type` values
 
@@ -139,6 +145,28 @@ Practical consequences:
 Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `brink_order_id` + `business_date`). See `data_dictionaries/sales_ops.order_sequence.md`. The sequence is now computed over full history every run, so the old "reload-window-scoped, treat as approximate" caveat no longer applies — but as of 2026-07-27 the table is **not** filtered to `customer_type = 'person'`, so filter it yourself.
 
 ## Gotchas
+
+- **⚠️ OPEN 2026-08-17 — `order_lines.is_catering` does not have the store-50 rule, so the two
+  marts disagree.** The finance catering definition was applied to `order_customer` only;
+  `sales_ops.order_lines` still computes `is_catering` from raw Brink with the pre-2026-08-17
+  rule. Measured 2026-08-17 over the trailing 30 closed days: **793 orders disagree, every one
+  of them store 50**, `order_customer` true / `order_lines` false. Any catering figure pulled
+  from `order_lines` (item counts, item mix, the report-builder artifact) **understates store 50
+  to zero**; anything from `order_customer` is correct.
+
+  `order_line_discount_detail` inherits the split — it takes `is_catering` from `order_lines`
+  and `revenue_category` from `order_customer`, so a store-50 row would carry
+  `revenue_category = 'Catering'` **and** `is_catering = false` at the same time. Not yet
+  observable: store 50 has **0** discount lines in the trailing 90 days. It will surface the
+  first time the truck rings a discount.
+
+  **This is the third instance of one defect class.** 2026-07-24 (destination test was dead
+  code), 2026-07-31 (`+644` June orders / `+$71,586`), 2026-08-17 (store 50). Every time the
+  cause is the same: `is_catering` is computed **twice, independently, from raw Brink**, so a
+  steward decision applied to one script silently does not apply to the other. The fix in flight
+  is to merge the four order-mart scripts into one chained scheduled query and have `order_lines`
+  read its header attributes from `order_customer` (steward taking it 2026-08-17) — see CLAUDE.md.
+  Until that lands, **catering questions go to `order_customer`, not `order_lines`.**
 
 - **✅ RESOLVED 2026-07-29 — SessionM identity loss (`create_date > start_date`).** Kept here
   because the failure mode is worth recognising and the detector is still worth running.
@@ -439,6 +467,54 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   `has_order_items = false`.
 - Tips: `total_tip_amount` (payment tips) and delivery/other tip items are **separate mechanisms** — don't add them blindly.
 - `is_guest_order` is loyalty-based; a guest can still have `mapped_cust_id` NULL and an email present.
-- `is_catering` is now a **superset** of `revenue_category = 'Catering'` — all catering-destination orders are TRUE, plus 48 June orders that pulse flagged as catering on In-Store/Digital destinations. Use `revenue_category` for channel reporting, `is_catering` to include or exclude catering as a business line.
+- ~~`is_catering` is a **superset** of `revenue_category = 'Catering'`~~ — **no longer true as of
+  2026-08-17.** The build now stamps `'Catering'` on pulse-flagged and store-50 orders too, so the
+  two select identical sets. Use `revenue_category` for channel reporting, `is_catering` to include
+  or exclude catering as a business line; they will agree.
 - `revenue_category = 'Other'` is a catch-all (~5 orders/yr) — safe to ignore.
 - Deduped on `brink_order_id` at build (latest insertion job wins) — but see the pulse fan-out defect above.
+
+## Build-script notes
+
+Migrated here 2026-08-17 when `sql/sales_ops.order_customer.sql` was cut down to the **deployable
+console text, verbatim** (the convention set for `order_line_discount_detail` the same day). The
+repo script now carries no prose, so a diff against the console shows real drift and nothing else.
+That convention immediately earned itself: the repo copy of `sql/claude.order_customer.sql` had
+silently drifted from the deployed view in two places (missing `store_id not in (1111, 999)`,
+missing the `business_date` predicate on the `order_sequence` join), both in the safe direction,
+both invisible until a redeploy was attempted from the repo copy.
+
+- **`brink_order` dedupes the raw table.** `brink.brinkOrder` holds more than one row per order id;
+  the build keeps one per `id` ordered by `insertionjob`. Never read `brinkOrder` without it.
+- **`cust_trans` resolves identity before deduping** (rewritten 2026-07-29). The earlier two-stage
+  shape picked one user per `transaction_id` by recency and only *then* checked whether that user
+  resolved to a mapping, so resolvability was incidental to the ordering. Now the inner joins run
+  first and the dedupe happens once, at `pos_transaction_key` — the grain the final SELECT joins on.
+  Only resolvable users can win, structurally. Verified output-equivalent over 30 days (203,855 rows
+  both ways, 0 links changed): a robustness change, not a recovery. Safe because
+  `pos_transaction_key` ↔ `transaction_id` is 1:1 after `header_trans` (731,353 rows, 731,353
+  distinct of each, 0 reuse).
+- **`sm_external_user_map` partitions on the RAW `u.user_id` while selecting `lower(u.user_id)`.**
+  Harmless today — the source is 100% lowercase — and `cust_trans`'s dedupe caps any fan-out.
+  Partitioning on `lower(u.user_id)` would close it properly (Asana 1216995170178886). Its inner
+  join to `sessionM.users` drops nothing: 0 of 1,782,178 `cafezupas` mapping rows lack a users row
+  (verified 2026-07-27, re-verified 2026-07-29 with 0 null emails).
+- **`pulse_orders` scoping is safe.** `po.business_date >= start_date` cannot orphan an in-window
+  Brink order: verified across June 2026, of the 55 orders where pulse and Brink business dates
+  disagree, pulse is always the **later** date (lag −1 to −42 days), never earlier.
+- **Dead branches in the store-50 destination CASE (2026-08-17, cosmetic).** Both the
+  `destination_id` and `destination` CASE expressions open with `when bo.FKStoreId = 50`, then
+  repeat the same predicate in two further branches (`642414069` / `'Catering Online Delivery'`,
+  `642414070` / `'Catering Online Takeout'`). The first branch always wins, so the other two are
+  unreachable — confirmed in the data: all 808 store-50 orders in the trailing 30 days carry
+  `999999999` / `'Middleton Mobile Catering'` and none carry the catering-online ids. **Store 50 has
+  no delivery/takeout split.** Left in the repo because the repo mirrors the console; flagged to the
+  steward 2026-08-17.
+- **The fee proxy would not have worked anyway.** An earlier revision of this build split catering
+  destinations into Delivery vs Takeout on `total_fees_amount > 0`. `total_fees_amount` counts any
+  item whose name matches `\bfee\b`, and the live set is `CZ Fee`, `Service Fee`, `Delivery Fee`,
+  `Catering Delivery Fee`. Measured 2026-08-17 over the trailing 30 days: **zero** catering orders
+  carried a `Delivery Fee` or `Catering Delivery Fee` item — every "Delivery" classification came
+  from a `Service Fee` or `CZ Fee`. It agreed with the real Brink destination ~99% of the time by
+  correlation, not by construction, and would have flipped silently the first time fee configuration
+  changed. Don't rebuild it on this proxy.

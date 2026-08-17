@@ -36,21 +36,36 @@ A question about 2022 returns **zero rows, not an error** — which presents to 
 case when oc.is_catering = true then 'Catering' else oc.revenue_category end as revenue_category
 ```
 
-**In `claude`, `revenue_category = 'Catering'` and `is_catering = true` are equivalent.** In `sales_ops` they are not — `is_catering` is a superset, catching orders that Pulse flagged as catering on In-Store/Digital destinations (48 such orders in June 2026).
+**In `claude`, `revenue_category = 'Catering'` and `is_catering = true` are equivalent.**
 
-Practical effect: a channel breakdown from `claude` assigns those orders to Catering; the same breakdown from `sales_ops` leaves them in In-Store/Digital. **Neither is wrong — they are different definitions.** Don't "correct" one to match the other; say which you used.
+**⚠️ Updated 2026-08-17 — this override is now a NO-OP, and the `claude`/`sales_ops` difference it
+existed to hide is gone.** The base build now stamps `'Catering'` on pulse-flagged and store-50
+orders itself, so the two columns select identical sets in `sales_ops` as well. A channel breakdown
+run against either layer now returns the same answer. The line is kept in the view deliberately, as
+a guard in case the base definitions diverge again — not because it currently changes anything.
 
-This is a deliberate simplification: it removes the superset/subset trap for users who only ever see this view.
+Historic behaviour, kept because it explains numbers in older reports: `is_catering` used to be a
+strict **superset** of `revenue_category = 'Catering'` in `sales_ops`, catching orders Pulse flagged
+as catering on In-Store/Digital destinations (48 such orders in June 2026). A channel breakdown from
+`claude` assigned those to Catering; the same breakdown from `sales_ops` left them in In-Store /
+Digital. Neither was wrong — they were different definitions — but a `claude`-vs-`sales_ops`
+channel-mix discrepancy dated before 2026-08-17 is very likely this.
 
 ### 3. Sequencing and lifetime columns are folded in
 
 There is **no `claude.order_sequence` and no `claude.customer_attribute`.** They are not missing — this view left-joins both onto the order grain, so a standard user gets first-time-vs-repeat, recency, and LTV from one table. See the added-columns section below.
 
-### 4. Test store 1111 is excluded at the view level (documented 2026-08-13)
+### 4. Test stores 1111 and 999 are excluded at the view level (documented 2026-08-13, corrected 2026-08-17)
 
 ```sql
-and oc.store_id <> 1111
+and oc.store_id not in (1111, 999)
 ```
+
+⚠️ The 2026-08-13 entry recorded this as `store_id <> 1111`, and so did the repo copy of
+`sql/claude.order_customer.sql`. The **deployed** view has always excluded both. Corrected here and
+in the repo script 2026-08-17, after a redeploy from the stale repo copy would have quietly
+readmitted store 999 — the store with no `store_info` row, hence a NULL `store_name` / `store_state`
+that forms a second unnamed group in any store or market breakout.
 
 The deployed view filters the test store out entirely — a standard user **cannot see store 1111 at all**, while the steward's `sales_ops` tables still contain it. Keep writing `store_id <> 1111` in queries anyway (it's free here and load-bearing on every `sales_ops` table), but know that a `claude`-vs-`sales_ops` total that differs by a few hundred orders/month is probably this filter, not a defect. Two side effects: the measured zero-trap numbers below predate the filter (the "person, store 1111" rows no longer appear here), and `customer_order_count` is computed upstream *including* 1111 orders, so a customer who ever ordered at the test store can show a gap in their visible sequence numbers.
 
@@ -58,13 +73,22 @@ The deployed view filters the test store out entirely — a standard user **cann
 
 ## Columns
 
-### Passthrough columns (44)
+### Passthrough columns (43)
 
 Identical to `sales_ops.order_customer` — **see [`sales_ops.order_customer.md`](sales_ops.order_customer.md) for full descriptions**, deliberately not duplicated here so the two can't drift:
 
-`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `total_discount_amount`, `total_promotions_amount`, `is_employee_discount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `brink_net_sales`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `total_discount_amount`, `total_promotions_amount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `brink_net_sales`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
 
 (Updated 2026-08-13: `state` renamed to `store_state` 2026-07-30; `destination_id` and `has_order_items` added to the base table and now advertised here after a metadata-refresh redeploy — new base columns flow through `oc.*` at query time but stay invisible in `INFORMATION_SCHEMA.COLUMNS` until the view is redeployed, same trap as the rename.)
+
+**Updated 2026-08-17 — `is_employee_discount` is GONE.** It was dropped from the base table; use
+`order_line_discount_detail.is_employee_meal_discount` instead. The view was redeployed the same day
+to refresh its metadata, and the live view is now **57 columns** (43 passthrough + `revenue_category`
++ 13 added). Note what the drop looked like before the redeploy, because it is the mirror image of
+the 2026-08-13 add: `select *` returned the correct 57 columns immediately (`*` re-expands at query
+time), while `INFORMATION_SCHEMA.COLUMNS` still listed `is_employee_discount` and naming the column
+explicitly errored. **Metadata and behaviour disagree in both directions until the view is
+redeployed** — after any base-table add, rename *or* drop.
 
 Plus `revenue_category`, which is present but **redefined** — see difference #2 above.
 

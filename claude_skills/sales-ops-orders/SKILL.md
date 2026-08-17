@@ -9,6 +9,10 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 
 > **⚠️ Breaking changes 2026-07-24** — `order_customer` was rebuilt across all history. `businessdate` is now **`business_date`**; `net_sales` is now the **calculated** net (read it directly); `item_net_sales` / `item_netsales_with_mods` / `mods_net_sales` are **gone**; `is_catering` was redefined; a **`customer_type`** column was added and is now **required for customer metrics**; `order_count` / `days_since_prev_order` moved to the new **`sales_ops.order_sequence`** table. Any saved query written before this date needs updating.
 
+> **⚠️ Breaking change 2026-08-17 — `order_customer.is_employee_discount` is GONE.** The column was dropped from the table; naming it now errors rather than returning a stale value. Employee / team-member meal questions run on **`claude.order_line_discount_detail.is_employee_meal_discount`** (line-level, never NULL, covers all four eras of the benefit). Aggregate with `max()` / `logical_or()` for an order-level flag.
+>
+> **⚠️ Catering was redefined the same day (finance's definition).** `is_catering` and `revenue_category` on `order_customer` now both count **store 50 (Middleton Mobile)** as catering, and the two columns select identical orders. **`order_lines` has not caught up** — see the store-50 gotcha before answering any item-level catering question.
+
 > **✅ Deployment status 2026-07-27 — `customer_type` is LIVE.** Verified against `INFORMATION_SCHEMA.COLUMNS`; the earlier "not deployed yet" warning is resolved and the interim email-based stand-in filter is retired. Use `customer_type` directly. Also live in the same rebuild: `mapped_email_domain`, and `is_guest_order` **changed from INTEGER 0/1 to BOOLEAN** — `is_guest_order = 1` now fails, use `= true`.
 >
 > One fix is written but **not yet redeployed**: the `pulse.orders` fan-out dedupe (Asana 1216918745136203). Until the next full rebuild, `brink_order_id` 2279778269187 still has two rows.
@@ -65,7 +69,7 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
    ```sql
    case when oc.is_catering = true then 'Catering' else oc.revenue_category end as revenue_category
    ```
-   So in `claude`, `revenue_category = 'Catering'` and `is_catering = true` are **equivalent**, and the documented superset/subset gotcha is collapsed away. In `sales_ops` they differ — `is_catering` is a superset (48 extra orders in June 2026 flagged catering on In-Store/Digital destinations). Consequence: a channel breakdown from `claude` assigns those orders to Catering; the same breakdown from `sales_ops` leaves them in In-Store/Digital. **Neither is wrong. They are different definitions.** Don't "fix" one to match the other — state which you used.
+   **As of 2026-08-17 this override changes nothing** — the base build stamps `'Catering'` on pulse-flagged and store-50 orders itself, so `revenue_category = 'Catering'` and `is_catering = true` are equivalent in **both** datasets and a channel breakdown now agrees across layers. The line stays in the view as a guard. Before 2026-08-17 they differed: `is_catering` was a `sales_ops` superset (48 extra June 2026 orders flagged catering on In-Store/Digital destinations), so `claude` assigned those to Catering and `sales_ops` left them in In-Store/Digital. **Neither was wrong — different definitions.** A cross-layer channel-mix discrepancy dated before 2026-08-17 is probably this.
 
 3. **`claude.order_lines` is now a plain passthrough.** It used to rename the partition column and left-join `store_info`; the 2026-07-30 full-history rebuild moved both upstream, so the view is `select *` over `sales_ops.order_lines` with the 3-year history filter. SQL written against either side is now identical apart from that floor.
 
@@ -371,7 +375,7 @@ order by ca.mapped_cust_id, s.orders desc
 | Average check | `sum(net_sales) / count(*)` from `order_customer` |
 | Identified customers | `count(distinct mapped_cust_id)` where `mapped_cust_id is not null` **and `customer_type = 'person'`** |
 | Guest orders | `is_guest_order = true` (BOOLEAN since 2026-07-27, was 0/1). **Digital-only and effectively zero before 2026-07-01** — `false` is the default, not "logged in". Always state the denominator; see the gotcha |
-| Catering | `is_catering = true` for the business line; `revenue_category = 'Catering'` for channel reporting (see gotchas — they differ slightly) |
+| Catering | `is_catering = true` for the business line; `revenue_category = 'Catering'` for channel reporting. **Equivalent on `order_customer` since 2026-08-17** — the finance definition (catering destination, pulse catering flag, or store 50) drives both. **Use `order_customer`, not `order_lines`** — see the store-50 disagreement in the gotchas |
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Delivery (first-party) | `destination = 'CZ Delivery'` (steward rule 2026-08-04). Marketplace orders (`revenue_category = 'Third_Party'`) are NOT "delivery" unless explicitly requested — see protocol item 6 |
 | Digital source | `order_source` (NULL = in-store POS) |
@@ -426,7 +430,9 @@ Which dates the question covers. Never assume "last 30 days" or "this month" fro
 
 ### 3. Catering — ask
 
-Included or excluded, defined as **`is_catering = true` / `= false`** (BOOLEAN — `is_catering = 0` fails). It's a superset of `revenue_category = 'Catering'`; see the gotcha. Catering skews item questions hard: catering trays/box lunches carry the same `item_name` as the retail item at very different volumes and prices, so an unstated choice here silently changes the answer.
+Included or excluded, defined as **`is_catering = true` / `= false`** (BOOLEAN — `is_catering = 0` fails). Since 2026-08-17 it is finance's definition — catering destination **or** pulse catering flag **or store 50 (Middleton Mobile)** — and it selects the same orders as `revenue_category = 'Catering'`. Catering skews item questions hard: catering trays/box lunches carry the same `item_name` as the retail item at very different volumes and prices, so an unstated choice here silently changes the answer.
+
+**⚠️ Take the catering split from `order_customer`.** `order_lines` has not been given the store-50 rule yet, so an item-level catering breakdown shows store 50 as zero catering (793 orders in the 30 days to 2026-08-16). See the gotcha.
 
 ### 4. Try 2 Combos — ask whenever the question involves soups, sandwiches, or salads
 
@@ -567,9 +573,11 @@ order by
   dd.business_date
 ```
 
-It supersedes **`order_customer.is_employee_discount`**, which is being retired — that one was
-built from name patterns and its `%Meal%` arm flagged `Free Birthday Meal - Catering Offer` as
-an employee order (55 orders in 90 days). If a saved query still uses it, move it here.
+It replaces **`order_customer.is_employee_discount`**, which was **dropped from the table on
+2026-08-17** — the column no longer exists and naming it errors. That one was built from name
+patterns and its `%Meal%` arm flagged `Free Birthday Meal - Catering Offer` as an employee order
+(55 orders in 90 days). Any saved query still using it is now broken, not merely stale; move it
+here. For an order-level flag, aggregate this table with `max()` / `logical_or()` first.
 
 ⚠️ **Two live caveats.** (1) The flag was widened on 2026-08-17 to cover `Employee 25%`
 (2018→2020) and the pre-cutover family-meal id; that widening reaches history **only after a
@@ -1220,7 +1228,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   - For everyone who is not the steward this is moot — line-level questions run on `sales_ops.order_lines` / `claude.order_lines`, which *are* partitioned on `business_date`. This entry exists so the cost is a known quantity before the scan, not after.
 - **Business questions run on the `claude` views for everyone except the steward — even for accounts whose IAM can read `sales_ops`.** A successful select from `sales_ops` is permission, not a routing signal (rule changed 2026-08-04). `Access Denied` on `sales_ops` is intended, not a broken setup. See the dataset-routing section near the top.
 - **`claude` history starts 2023-01-01 and truncates silently.** The order views filter `business_date >= date_trunc(date_sub(current_date, interval 3 year), year)`. An older range returns **zero rows, not an error** — which reads as "no sales." Check the window before reporting an empty result.
-- **`revenue_category` means something different in `claude` than in `sales_ops`.** The `claude` view forces it to `'Catering'` whenever `is_catering = true`, making the two equivalent; in `sales_ops`, `is_catering` is a superset (48 extra orders in June 2026). Channel breakdowns from the two datasets will legitimately disagree — state which you queried instead of reconciling them.
+- **~~`revenue_category` means something different in `claude` than in `sales_ops`~~ — resolved 2026-08-17.** The `claude` view still forces `'Catering'` whenever `is_catering = true`, but the base build now does the same, so the two layers agree. Channel breakdowns produced **before** 2026-08-17 can still legitimately disagree across datasets (48 June 2026 orders) — state which you queried rather than reconciling them.
 - **In `claude.order_customer`, `0` in a folded count column means "no upstream row," not zero orders.** `customer_order_count = 0` ⟺ unidentified (46.4% of June 2026 orders); `lifetime_order_count = 0` is broader at 51.5% — it also catches all kiosk, most internal, and most store-1111 orders, so 36,261 orders have a real sequence number but zero lifetime. Never `avg()` a lifetime column unfiltered; never present `lifetime_order_count = 0` as a cohort. The FLOAT/DATE lifetime columns are *not* coalesced and stay NULL, so the same absent customer reads `0` in one column and `NULL` in the next. Details in `data_dictionaries/claude.order_customer.md`.
 - **There is no `claude.order_sequence` or `claude.customer_attribute`** — both are folded into `claude.order_customer`. Don't tell a user the data is unavailable; it's on the order view.
 - **The partition column is `business_date` on every table** as of 2026-07-30. `order_lines` was rebuilt across full history that day and its `BusinessDate` column is **gone** — the long-standing two-spellings trap is closed. ⚠️ **Any saved query, template or workbook still writing `ol.BusinessDate` now fails outright** with `Unrecognized name: BusinessDate`. That is the good failure mode (loud, not silent), but it will hit the shared analyst workbook — read the error literally and swap in `business_date`.
@@ -1228,7 +1236,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
 - **`order_customer` emails are now lowercased at build** (fix deployed 2026-07-29 with the full-history rebuild; verified 2026-08-13: 0 non-lowercase `mapped_email` / `email` values in 365 days). `lower()` on them is a harmless no-op — keep it defensively, but the old "~17,900 overstated distinct emails" caveat no longer applies to current data. The SessionM fallback email also strips the leading `cater_` prefix, so catering logins resolve to the individual's address in `mapped_email` — when comparing to `claude.loyalty_user`, compare against `email_normalized`, not `email` (which keeps the prefix). Raw `pulse.*` / `braze.*` emails outside the marts still need `lower()`.
 - **`order_customer` gained two columns, synced 2026-08-13**: `destination_id` (INT64, raw Brink destination id alongside `destination`) and `has_order_items` (BOOL, added 2026-08-04 — FALSE means no qualifying item rows survived the build's item filters, so `item_gross_sales` and friends are NULL on ~2.4% of rows; an audit flag, not a reporting filter). `phone` is now STRING. Both new columns flow through to `claude.order_customer`.
-- **`claude.order_customer` excludes store 1111 at the view level** (deployed filter `and oc.store_id <> 1111`, documented 2026-08-13). Standard users cannot see the test store at all; `sales_ops` tables still contain it, so the exclusion remains load-bearing there. Writing `store_id <> 1111` against the `claude` view stays correct — just expect `claude`-vs-`sales_ops` totals to differ by the test store even when neither query filters it.
+- **`claude.order_customer` excludes stores 1111 AND 999 at the view level** (deployed filter `and oc.store_id not in (1111, 999)` — **corrected 2026-08-17**; the 2026-08-13 entry and the repo script both said `<> 1111`, while the deployed view had always excluded both). Standard users cannot see either unnamed store; `sales_ops` tables still contain them, so the exclusion remains load-bearing there. Writing `store_id not in (1111, 999)` against the `claude` view stays correct — just expect `claude`-vs-`sales_ops` totals to differ by those stores even when neither query filters them.
 - **Per-customer questions should use `sales_ops.customer_attribute`, not a hand-rolled `group by mapped_cust_id`** (new 2026-07-29). Lifetime orders, spend, AOV, recency, tenure, store affinity and trailing 30/90/365-day activity are all precomputed there — that's the whole point, so two sessions can't produce two different LTV numbers. It is already person-only (adding `customer_type = 'person'` errors), it has **no partition column**, and you must check `attribute_asof_date = yesterday` before trusting the window columns. See its section above.
 - **`order_lines.item_net_sales` is usable, with a named limit** (steward ruling 2026-07-30, superseding the earlier "not computable" wording). The column is live on **both** `sales_ops.order_lines` and `claude.order_lines`, fully populated, **zero nulls**. Report it when asked; do **not** treat it as reconcilable to order-level net. Measured on Ultimate Grilled Cheese, 2026-05-03 → 2026-06-27, non-catering, stores 1111/999 excluded:
 
@@ -1241,7 +1249,28 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   The spread is **not constant across sale shapes**, so it is not a flat rate and the difference between gross and net cannot be described as "the discount" without evidence. Order-level discounts and promotions are still *not* allocated per item, so **`order_customer.net_sales` remains the only net figure to quote or tie out** — say that whenever you hand over `item_net_sales`. Still open: what the 2.3–3.8% actually represents, and why it is wider on combo components than on standalone lines (Asana: `KB finding: item_net_sales gross-to-net spread varies by sale shape`).
 - **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
 - **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
-- **`is_catering` is a superset of `revenue_category = 'Catering'`** — every catering-destination order is TRUE, plus a handful (48 in June 2026) that pulse flagged as catering on In-Store/Digital destinations. Before 2026-07-24 the flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers understate it. **`order_lines` only caught up on 2026-07-31** (+644 June orders / +$71,586 gross); the definition is now identical on both marts and verified to agree on all 703,524 June orders. If you're comparing against a catering number produced between 07-24 and 07-31, ask which table it came from before calling either one wrong.
+- **🚨 `order_customer` and `order_lines` disagree on catering again, since 2026-08-17.** Finance's
+  definition added **store 50 (Middleton Mobile)** to `order_customer.is_catering` and to
+  `revenue_category`; `order_lines` still computes its own flag from raw Brink without it. Measured
+  2026-08-17 over the trailing 30 closed days: **793 orders disagree, all store 50**, `order_customer`
+  true / `order_lines` false. **Catering questions go to `order_customer` until the marts are merged.**
+  Any catering item mix, unit count or item-level figure from `order_lines` — including the report
+  builder artifact — shows store 50 as zero catering. `order_line_discount_detail` straddles both
+  (its `is_catering` comes from `order_lines`, its `revenue_category` from `order_customer`), so a
+  store-50 row there can read `revenue_category = 'Catering'` with `is_catering = false`; store 50 has
+  no discount lines yet, so it hasn't surfaced.
+
+  **Third instance of one defect class**: 2026-07-24, 2026-07-31, 2026-08-17. Cause is always that
+  `is_catering` is derived twice, independently, from raw Brink. The fix in flight is to chain the
+  order-mart scripts into one scheduled query and have `order_lines` read header attributes from
+  `order_customer` (steward taking it 2026-08-17).
+- **~~`is_catering` is a superset of `revenue_category = 'Catering'`~~ — not since 2026-08-17.** The
+  base build now stamps `'Catering'` on pulse-flagged and store-50 orders too, so in `sales_ops` the
+  two select **identical** sets, as they already did in `claude`. Historic note: before 2026-07-24 the
+  flag missed all POS-only catering (641 orders / $70.7K net in June), so pre-rebuild catering numbers
+  understate; `order_lines` only caught up 2026-07-31 (+644 June orders / +$71,586 gross). If you're
+  comparing against a catering number produced between 07-24 and 07-31, ask which table it came from
+  before calling either one wrong.
 - **Grain defect (1 order in ~50M):** `brink_order_id` 2279778269187 has two rows in `order_customer` — two pulse orders point at one Brink order, double-counting $263.99 across two customers. Immaterial to totals; use `count(distinct brink_order_id)` if exact uniqueness matters.
 - **`order_sequence` history starts 2023-03-06**, not 2018. `customer_order_count = 1` means "first order since March 2023", not first-ever. Say so when presenting first-time-guest numbers.
 - **`order_sequence` is a `left join`, never inner** — ~47% of orders have no `mapped_cust_id` and so no row; an inner join silently drops them.
@@ -1308,8 +1337,8 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   multiplies the sales side. `discount_origin` is **not** a channel — `revenue_category` is.
   `discount_type` is an open domain with no `'Other'` bucket. **Employee / team-member meal
   questions use `is_employee_meal_discount` (new 2026-08-17), never a `discount_type` filter or
-  a name pattern** — the benefit has run under four Brink programs since 2018; it supersedes the
-  retiring `order_customer.is_employee_discount`. **`Error` is a health signal:
+  a name pattern** — the benefit has run under four Brink programs since 2018; it replaces
+  `order_customer.is_employee_discount`, **dropped from that table 2026-08-17**. **`Error` is a health signal:
   0–1 lines on a closed day, but ~76% of *today's* integrated lines until the 4am pass — never
   report today's discount mix intraday.** Full gotchas:
   `data_dictionaries/claude.order_line_discount_detail.md`.

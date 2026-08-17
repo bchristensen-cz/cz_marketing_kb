@@ -24,6 +24,27 @@
 -- table gained destination_id and has_order_items, and column ADDS freeze out of `oc.*` view
 -- metadata exactly like the 2026-07-30 rename did — the columns RESOLVED at query time but
 -- were absent from INFORMATION_SCHEMA.COLUMNS until the redeploy.
+--
+-- Redeployed again 2026-08-17 (identical logic) for the same reason in the opposite direction:
+-- the base table DROPPED is_employee_discount. `select *` kept working — `*` re-expands at query
+-- time — but INFORMATION_SCHEMA.COLUMNS still advertised the column and `select is_employee_discount`
+-- errored. Adds, renames AND drops all require the redeploy. Live view is now 57 columns.
+--
+-- ⚠️ 2026-08-17 REPO DRIFT FOUND AND CORRECTED. This file had fallen behind the DEPLOYED view in
+-- two places, both in the safe direction, which is exactly why nobody noticed:
+--   * store exclusion   — repo `oc.store_id <> 1111`, deployed `oc.store_id not in (1111, 999)`
+--   * order_sequence    — repo joined on brink_order_id alone, deployed also `and os.business_date
+--                         = oc.business_date` (partition predicate — the join key is the PAIR)
+-- Redeploying from the repo copy would have quietly readmitted store 999 to every standard user's
+-- view and dropped the partition predicate. The deployed text is authoritative and is what is
+-- below. Diff this file against the live definition before every redeploy:
+--   select v.view_definition from `marketing-data-442316`.claude.INFORMATION_SCHEMA.VIEWS v
+--   where v.table_name = 'order_customer'
+--
+-- The `case when oc.is_catering then 'Catering'` override below is a NO-OP as of 2026-08-17: the
+-- base table's revenue_category now stamps 'Catering' on pulse-flagged and store-50 orders itself,
+-- so the two select identical sets. Kept deliberately as a belt-and-braces guard — if the base
+-- definitions ever diverge again, the view still reports catering correctly.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -102,13 +123,14 @@ select
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os
 	on os.brink_order_id = oc.brink_order_id
+	and os.business_date = oc.business_date
 		left join `marketing-data-442316`.sales_ops.customer_attribute ca
 		on ca.mapped_cust_id = oc.mapped_cust_id
 			left join `marketing-data-442316`.claude.loyalty_user lu
 			on lu.sm_external_user_id = oc.mapped_cust_id
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
-and oc.store_id <> 1111  -- 2026-08-13 sync: deployed view excludes the test store entirely
+and oc.store_id not in (1111, 999)  -- 2026-08-17 sync: the DEPLOYED view excludes both unnamed stores
 ;
 
 

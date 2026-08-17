@@ -38,6 +38,13 @@ If `store_info` has one state per store, don't ask "which stores are in the Phoe
 market" — read it. If `is_catering` is false on every matching line, don't ask about
 catering — say so and move on. **Only surface a fork that is genuinely the user's call.**
 
+> ⚠️ **Resolve catering against `order_customer`, not `order_lines` (2026-08-17).** The two
+> marts disagree again: finance's definition made **store 50 (Middleton Mobile) catering**, and
+> `order_lines` hasn't been given that rule — 793 orders / 30 days show `true` on one table and
+> `false` on the other. So "`is_catering` is false on every matching line" can be an artefact of
+> the table you asked, not a fact about the business. Check `order_customer` before telling a
+> user a catering fork is dead. Resolves when the order-mart builds are chained (in flight).
+
 ### Never ask a dead question
 
 Check whether a fork applies before presenting it. Asking about Try 2 Combo on a question

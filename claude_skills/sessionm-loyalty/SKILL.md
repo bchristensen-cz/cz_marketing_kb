@@ -292,6 +292,7 @@ Documented so nobody re-derives them the hard way:
 |---|---|
 | `points_remaining` overstates | Sums to 628.6M vs an actual 595.9M balance (+5.5%). Not reliably decremented |
 | `user_offers` 2023 bulk load | 24.8M of 33.1M rows landed in 2023 when the catalog was mass-provisioned to every member. Flagged as `is_bulk_provisioned_2023` |
+| `user_offers` mixes DATE and TIMESTAMP | **`create_date` is DATE; `acquire_date`, `redeem_date`, `redemption_start_date`, `redemption_end_date`, `created_at`, `last_updated_at` are all TIMESTAMP** (verified 2026-08-17). `date_diff(redeem_date, create_date, day)` fails with `No matching signature for function DATE_DIFF … Unable to coerce type TIMESTAMP to expected type DATE` — the steward's own session burned three attempts on it 2026-08-15, and the two failing variants read as correct. Days-to-redeem is `date_diff(date(uo.redeem_date), uo.create_date, day)`: wrap the TIMESTAMP in `date()`, and put it **first** so the argument order matches the answer you want (later minus earlier). Also note `select *` on this table bills **8.4 GiB** — name your columns |
 | `reference_type` looks like an enum | Free text: agent names, ticket reasons, campaign names. Hundreds of distinct values, unstable |
 | `reward_store` is not a store | Boolean-as-string separating two populations with 90.5% vs 3.2% redemption |
 | `point_operation_correlation` is stale | Max `created_at` is 2026-05-28 for Deposit/Spend, 2026-05-01 for Expiration — roughly two months behind. Do not use it for recent periods. The views don't depend on it |

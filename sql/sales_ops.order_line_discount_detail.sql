@@ -14,8 +14,16 @@
 -- The un-prorated Brink amount is deliberately NOT emitted — it repeats on every split row
 -- and summing it overstated July 2026 by 7.2% (-$504,903.90 vs a true -$471,017.34).
 --
+-- ⚠️ THE RECONCILIATION BELOW WAS WRITTEN AGAINST THE REPO SCRIPT, NOT A DEPLOYED TABLE. The
+-- order_lines guard was committed 2026-08-15 but NOT deployed until 2026-08-17, so between
+-- those dates this header described a tie-out that did not hold in production. It holds from
+-- the 2026-08-17 full-history rebuild onward, and only if the deployed guard carries BOTH arms
+-- (`sum(amount) > 0 or sum(item_net_sales) > 0`) — the gross arm alone leaves 61 orders /
+-- $2,104.52 that order_customer bills and this table would not. Confirm against
+-- INFORMATION_SCHEMA.JOBS_BY_PROJECT, not against the repo file.
+--
 -- ⚠️ IT NOW RECONCILES TO order_customer TOO — a NEW property, 2026-08-15. order_lines gained
--- a `sellable_orders` guard that suppresses discount and promotion lines on orders whose
+-- a `valid_order_lines` guard that suppresses discount and promotion lines on orders whose
 -- brinkOrderItem rows carry no sellable value. Before it, this table ran $753.68 ABOVE
 -- order_customer's total_discount_amount + total_promotions_amount over 90 days across 80
 -- orders. Cause: order_customer joins its discount and promotion CTEs on `boi.orderid`, so any

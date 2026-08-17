@@ -125,10 +125,20 @@ and boi.IsVoided = false
 and boi.IsDeleted = false
 )
 
--- '2026-08-15' SELLABLE-ORDER GUARD. Orders whose brinkOrderItem rows carry no sellable
--- value. Discount and promotion lines are suppressed for these orders (see the two
--- `join sellable_orders` below); item / modifier / gift_card / surcharge lines are NOT
--- touched — a gift-card-only order is legitimately item-less and its gift card is a real sale.
+-- SELLABLE-ORDER GUARD. Orders whose brinkOrderItem rows carry no sellable value. Discount and
+-- promotion lines are suppressed for these orders (see the two `join valid_order_lines` below);
+-- item / modifier / gift_card / surcharge lines are NOT touched — a gift-card-only order is
+-- legitimately item-less and its gift card is a real sale.
+--
+-- ⚠️ DEPLOYMENT HISTORY — this sat in the repo UNDEPLOYED for two days. Committed 2026-08-15
+-- under the name `sellable_orders` (223b774); the scheduled query kept running without it, so
+-- the repo tie-out numbers below described a table that did not exist yet. Brent deployed the
+-- guard himself 2026-08-17 as `valid_order_lines`, with a full-history CTAS rebuild; the repo
+-- CTE was renamed that day to match the deployed name. Authoritative check on whether a
+-- guard is actually live — the built table alone will mislead you:
+--   select regexp_contains(j.query, r'(?i)valid_order_lines') from `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT j
+--   where j.query like '%sales_ops.order_lines%' and j.query like '%brinkOrderPromotion%'
+--   order by j.creation_time desc
 --
 -- WHY: sales_ops.order_customer joins its discount and promotion CTEs on `boi.orderid`, where
 -- boi is a CTE carrying this exact `having` guard. An order the guard drops therefore reports
@@ -147,12 +157,27 @@ and boi.IsDeleted = false
 -- VERIFIED 2026-08-15: this guard reproduces order_customer.has_order_items EXACTLY —
 -- 2,050,577 orders over 90 days, zero disagreements in either direction.
 --
+-- RE-VERIFIED 2026-08-17 over FULL HISTORY, at discount grain, against order_customer. Every
+-- order carrying a live brinkOrderDiscount row, bucketed by what the guard sees:
+--
+--   bucket                          orders     order_customer bills discount?
+--   1. no surviving item rows       29,092     0 of 29,092  → suppress (both arms agree)
+--   2. items all zero/negative       1,605     0 of  1,605  → suppress (both arms agree)
+--   3. gross <= 0 but net > 0           61     61 of     61  → KEEP (net arm only)
+--   4. sellable                  3,101,131     2,762,087     → keep
+--
+-- Buckets 1 and 2 are why the guard exists and both arms drop them. Bucket 3 is the entire
+-- reason the second arm is not optional. With both arms, bucket 4 ties to the penny:
+-- order_customer $23,457,616.95 vs order_lines -$23,457,616.95.
+--
 -- SCOPE: removes 42,092 discount/promotion lines / -$238,698.36 over full history (orders with
 -- no surviving item rows) plus 2,701 lines / -$45,348.22 (orders whose surviving items are all
 -- $0). The second bucket is concentrated in 2019-2022; it is -$58.17 in 2026 and -$396.97 in
 -- 2025. Post-change full-history discount total: -$25,693,161.50 (was -$25,967,881.35).
 --
 -- ⚠️ BOTH ARMS ARE LOAD-BEARING. DO NOT SIMPLIFY THIS TO `having sum(ol.amount) > 0`.
+-- THE VERSION DEPLOYED 2026-08-17 HAD THE GROSS ARM ONLY — if the live scheduled query still
+-- reads `having sum(ol.amount) > 0`, it is short this arm and owes a full-history rebuild.
 -- (Corrected 2026-08-17. The note that stood here claimed the arms "only diverge on a tip-only
 -- order with non-positive gross, which the gross arm already excludes" — that is WRONG. The
 -- divergent orders carry ZERO tip rows.)
@@ -172,7 +197,7 @@ and boi.IsDeleted = false
 -- 380-day and full-history rebuilds break. The zero-disagreement check above ran over 90 days
 -- and therefore could not have covered a single one of them — it validated the guard, not the
 -- choice between one arm and two.
-, sellable_orders as (
+, valid_order_lines as (
 select
   ol.order_id
 from order_lines ol
@@ -226,7 +251,7 @@ bod.OrderId
 from `marketing-data-442316`.brink.brinkOrderDiscount bod
 	join brink_order bo
 	on bo.id = bod.orderid
-		join sellable_orders so   -- '2026-08-15' see the guard above; ties this table to order_customer
+		join valid_order_lines so   -- '2026-08-15' see the guard above; ties this table to order_customer
 		on so.order_id = bod.orderid
 where 1=1
 and bod.isDeleted = false
@@ -266,7 +291,7 @@ p.orderId
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
 	on bo.id = p.orderid
-		join sellable_orders so   -- '2026-08-15' see the guard above; ties this table to order_customer
+		join valid_order_lines so   -- '2026-08-15' see the guard above; ties this table to order_customer
 		on so.order_id = p.orderid
     left join promotions pn  -- '2026-07-31' name master, joined per store
     on pn.id = p.promotionid

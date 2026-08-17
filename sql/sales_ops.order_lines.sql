@@ -152,10 +152,26 @@ and boi.IsDeleted = false
 -- $0). The second bucket is concentrated in 2019-2022; it is -$58.17 in 2026 and -$396.97 in
 -- 2025. Post-change full-history discount total: -$25,693,161.50 (was -$25,967,881.35).
 --
--- ⚠️ `ol.amount` on item/fee/tip lines IS the raw boi.ItemGrossSales, so the gross arm mirrors
--- order_customer exactly. `ol.item_net_sales` is zeroed for tip items where order_customer uses
--- raw ItemNetSales — the arms only diverge on a tip-only order with non-positive gross, which
--- the gross arm already excludes. Confirmed immaterial by the zero-disagreement check above.
+-- ⚠️ BOTH ARMS ARE LOAD-BEARING. DO NOT SIMPLIFY THIS TO `having sum(ol.amount) > 0`.
+-- (Corrected 2026-08-17. The note that stood here claimed the arms "only diverge on a tip-only
+-- order with non-positive gross, which the gross arm already excludes" — that is WRONG. The
+-- divergent orders carry ZERO tip rows.)
+--
+-- `ol.amount` on item/fee/tip lines IS the raw boi.ItemGrossSales, so the gross arm mirrors
+-- order_customer. The net arm alone keeps 61 orders / 61 discount lines / -$2,104.52 over full
+-- history: orders whose surviving brinkOrderItem rows ALL carry ItemGrossSales = 0 while the
+-- order HEADER records real revenue — GrossSales $8,136.30 and Total $6,446.83 across the 61.
+-- ItemNetSales survives on them as rounding crumbs ($4.38 total), and that is the only thing
+-- holding them on the sellable side. They are real sales with a zeroed item-level gross, not
+-- voided shells. sales_ops.order_customer reports a non-zero total_discount_amount for ALL 61
+-- (+$2,104.52, verified 2026-08-17), so dropping the net arm re-opens an order_lines vs
+-- order_customer gap — in the OPPOSITE direction from the one this guard was built to close.
+--
+-- ⚠️ A ONE-ARM GUARD HIDES ON EVERY DAILY RUN. All 61 orders fall in 2019-2023 (9/10/15/25/2
+-- by year). The 8-day and 35-day reloads tie out perfectly without the net arm; only the
+-- 380-day and full-history rebuilds break. The zero-disagreement check above ran over 90 days
+-- and therefore could not have covered a single one of them — it validated the guard, not the
+-- choice between one arm and two.
 , sellable_orders as (
 select
   ol.order_id

@@ -546,6 +546,38 @@ order by
   discount_amount
 ```
 
+### Employee / team-member meal questions — use `is_employee_meal_discount` (new 2026-08-17)
+
+**Do not filter on `discount_type` or on a name pattern.** The employee benefit has run under
+four different Brink programs and two sessionM offer paths since 2018, and no single name or id
+covers them. `is_employee_meal_discount` is the canonical flag and is never NULL.
+
+```sql
+select
+  dd.business_date
+, count(distinct dd.brink_order_id) as employee_meal_orders
+, round(sum(dd.discount_amount), 2) as employee_meal_discount
+from `marketing-data-442316`.claude.order_line_discount_detail dd
+where 1=1
+and dd.business_date between @start_date and @end_date
+and dd.is_employee_meal_discount = true
+group by
+  dd.business_date
+order by
+  dd.business_date
+```
+
+It supersedes **`order_customer.is_employee_discount`**, which is being retired — that one was
+built from name patterns and its `%Meal%` arm flagged `Free Birthday Meal - Catering Offer` as
+an employee order (55 orders in 90 days). If a saved query still uses it, move it here.
+
+⚠️ **Two live caveats.** (1) The flag was widened on 2026-08-17 to cover `Employee 25%`
+(2018→2020) and the pre-cutover family-meal id; that widening reaches history **only after a
+full-history rebuild**, because the widest scheduled reload is 730 days. Until that runs,
+pre-2023 employee-meal spend reads ~$757K low. (2) `discount_type` still keeps `Employee 25%`
+and `Employee Meal Discount` as **separate** programs on purpose — 25%-off and 100%-off are
+different benefits. Use the flag to union them, not a merged `discount_type`.
+
 ### `discount_origin` is not a channel
 
 Values: `In-Store`, `Online`, `Third Party`, `Outdoor Kiosk`. **The column deliberately mixes
@@ -1274,7 +1306,10 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   reconciles to `order_lines` exactly); `count(*)` counts components; joining to
   `order_customer` requires aggregating this table to order grain first or the split
   multiplies the sales side. `discount_origin` is **not** a channel — `revenue_category` is.
-  `discount_type` is an open domain with no `'Other'` bucket. **`Error` is a health signal:
+  `discount_type` is an open domain with no `'Other'` bucket. **Employee / team-member meal
+  questions use `is_employee_meal_discount` (new 2026-08-17), never a `discount_type` filter or
+  a name pattern** — the benefit has run under four Brink programs since 2018; it supersedes the
+  retiring `order_customer.is_employee_discount`. **`Error` is a health signal:
   0–1 lines on a closed day, but ~76% of *today's* integrated lines until the 4am pass — never
   report today's discount mix intraday.** Full gotchas:
   `data_dictionaries/claude.order_line_discount_detail.md`.

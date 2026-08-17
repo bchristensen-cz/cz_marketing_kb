@@ -25,10 +25,28 @@ wrapper around `pulse.order_discounts`, `sessionM.transaction_discounts` and
 > user query — the old name never reached anyone. **There is no alias for the old name**, so
 > anything still saying `discount_detail` fails loudly rather than returning stale numbers.
 >
-> ⚠️ **PENDING:** the `order_lines` sellable-order guard (see the tie-out section) is committed
-> to the repo but must still be deployed to the scheduled query, followed by a **full-history
-> rebuild of `order_lines` and then of this table**. Until both land, the numbers below that
-> reference −$25,693,161.50 describe the intended state, not the deployed one.
+> **✅ RESOLVED 2026-08-17.** The `order_lines` `valid_order_lines` guard was deployed with both
+> arms and `order_lines` rebuilt full history at 11:45 MT, then this table behind it at 11:49.
+> That order matters — this table is downstream, and rebuilding it against a stale `order_lines`
+> just re-freezes the old numbers. All three marts now read −$25,720,068.34 at order grain, full
+> history, closed days, zero orders disagreeing.
+>
+> ⚠️ **AND THE RENAME BIT THE BUILD SCRIPT ITSELF.** "Anything still saying `discount_detail`
+> fails loudly" turned out to include this table's own scheduled query: the `insert` target was
+> renamed but the `delete` target was not. Every run from **2026-08-15 04:02 MT to 2026-08-17
+> 09:02 MT — 37 consecutive runs — died** on `Not found: ... sales_ops.discount_detail at
+> [29:1]`, and the failures are near-invisible because the job reports `state = DONE` with a
+> populated `error_result`. Two days of incremental loads were lost; only the manual full
+> rebuilds on 08-17 healed it. **After a rename, grep the whole scheduled config for the old
+> name — the insert is not the only place it appears.**
+>
+> ⚠️ **PENDING 2026-08-17:** the widened `is_employee_meal_discount` (item_id 1 + 640945199 +
+> the `discount_name` arm + the anchored regex) is committed to the repo, and the deployed
+> config as of the 13:02 MT run carries only the **narrow** first version — flag present, but
+> without `item_id 1`, without `640945199`, and without the anchored regex. It also runs
+> **without the `begin transaction` / `commit transaction` wrapper**. Until the full script is
+> saved to the config AND a full-history rebuild is run, pre-2023 employee-meal spend reads
+> ~$757K low.
 
 ## Grain — read this first
 
@@ -132,6 +150,7 @@ them over 90 days carry $82,441.99 of gift cards and **$0.00 of discount**. The 
 | `item_id` | INTEGER | Brink discount/promotion id |
 | `discount_origin` | STRING | Where the discount came from — **not a channel**, see below |
 | `discount_type` | STRING | What kind of discount — **open domain**, see below |
+| **`is_employee_meal_discount`** | BOOLEAN | **The canonical employee / team-member meal flag.** Added 2026-08-17. Never NULL. Covers all four eras of the benefit — see below. Supersedes `order_customer.is_employee_discount`, which is being retired |
 | `item_name` | STRING | Brink `brinkDiscounts` program name (since the 2026-08-12 `order_lines` rebuild) |
 | `discount_name` | STRING | Best available name: sessionM → Pulse item → `item_name` |
 | `root_offer_id` | STRING | sessionM root offer id. NULL for non-offer discounts |
@@ -165,11 +184,89 @@ surfaces under its own `item_name` on day one rather than vanishing into an unna
 2026-08-14) — most of the long tail is the pre-2023 Punchh/OLO era (`OlO Discounts`,
 `Employee 25%`, `Punchh Loyalty`).
 
-Two seams in that tail worth knowing: the Brink id space changed at the 2023 cutover, so
-`NewTeamMemb Family Meal` (pre-2023) and `New Team Member Family Meal` (curated) are the same
-program under two labels; and the master itself carries both `Punchh Loyalty` and
-`Punch Loyalty`. Don't present a full-history `discount_type` breakdown without collapsing
-those by hand.
+One seam in that tail is still live: the master carries both `Punchh Loyalty` and
+`Punch Loyalty`, so collapse those by hand in a full-history breakdown. The family-meal seam
+is **fixed as of 2026-08-17** — `item_id 640945199` (pre-cutover) now maps to the same
+`New Team Member Family Meal` label as `643529958`, so the two no longer split. That takes the
+distinct count from 28 to 27, but **only for rows a full-history rebuild has touched**;
+untouched pre-2024 partitions still carry the old `NewTeamMemb Family Meal` spelling.
+
+## `is_employee_meal_discount` — the canonical employee-meal flag
+
+**Added 2026-08-17.** `true` = the discount is a team-member / employee meal benefit, in **any
+era**. This is the sanctioned answer to "what do we give away to team members?" — use it
+instead of filtering on `discount_type` or on any name pattern.
+
+Never NULL (`ifnull(..., false)`). Full history: **897,198 lines / −$9,396,781.51 true.**
+
+### Why it is three arms and not one
+
+No single source covers the whole history, so the flag ORs three independent tests. Each one
+exists because the arm above it provably misses a population:
+
+| Arm | Catches | Window | Lines | Amount |
+|---|---|---|---|---|
+| `item_id in (1, 2, 643529958, 640945199)` | the four Brink programs | 2018-08-20 → live | 870,665 | −$9,003,373 |
+| `discount_name = 'Team Member Meal'` | sessionM rows where the `user_offers` lookup missed, so `offer_name` is NULL | 2025-01-21 → 2026-05-30 | 7 | −$115.64 |
+| `offer_name` regex `team member meal\|\bemp.*(meal\|lunch)` | the sessionM offer path + the Jan-2025 `Emp Meal` / `Emp Lunch` test offers | 2023-07-27 → live | 26,572 | −$391,448 |
+
+The four Brink ids, and why each is there:
+
+| `item_id` | Program | Window | Lines | Amount |
+|---|---|---|---|---|
+| 2 | `Team Member 100% Discount` | 2018-08-22 → live | 707,194 | −$8,138,233.89 |
+| **1** | `Employee 25%` — the pre-COVID 25%-off benefit | 2018-08-20 → 2020-03-21 | 155,792 | −$687,404.85 |
+| 643529958 | `New Team Member Family Meal` | 2023-01-18 → live | 4,834 | −$107,433.85 |
+| **640945199** | the SAME family-meal program on its pre-cutover Brink id | 2019-03-12 → 2023-02-14 | 2,845 | −$70,301.44 |
+
+> **⚠️ `discount_type` deliberately does NOT merge these.** `item_id 1` keeps its own
+> `discount_type` of `'Employee 25%'` because a 25%-off program and a 100%-off program are
+> different things and collapsing them is irreversible for anyone reading history. The flag is
+> what unions them. By contrast 640945199 and 643529958 **do** share one `discount_type`
+> (`'New Team Member Family Meal'`) because they are one program under two POS ids across the
+> Brink cutover — identical `item_name`, four weeks of overlap.
+>
+> The rule: **merge on `item_name`, not on who received the discount.**
+
+### The arm that is a defect guard, not a definition
+
+The `discount_name` arm is small (7 lines) and load-bearing. `offer_detail` filters
+`uo.redeem_date is not null`, which is semantically right but degrades **silently** if sessionM
+lags on stamping redemptions — offer attribution just goes NULL with no alarm. Without this
+arm, employee meals would quietly stop flagging during such a lag. Do not simplify it away
+because it looks like it catches nothing.
+
+Likewise `\bemp` in the regex is anchored on purpose: unanchored `emp` would match a future
+offer named `Temp … Meal`. Verified 2026-08-17 — both forms return the identical 9 offer names
+/ 26,572 lines across full history, so the anchor costs nothing today and closes the trap.
+
+### ⚠️ The widening only reaches history after a FULL rebuild
+
+Measured 2026-08-17: widening the flag turns **+158,799 lines / −$760,224.18** from `false` to
+`true`, and flips **zero** lines the other way. But the widest scheduled reload is 730 days.
+`Employee 25%` ended 2020-03-21 and the legacy family-meal id ended 2023-02-14 — both sit
+behind that floor and stay `false` until the full-history `create or replace table` is re-run.
+**Employee-meal spend before 2023 reads ~$757K low until then.** Assertion E in
+[`sql/sales_ops.order_line_discount_detail.sql`](../sql/sales_ops.order_line_discount_detail.sql)
+is the check; all four buckets must return zero unflagged lines.
+
+### Relationship to `order_customer.is_employee_discount`
+
+`sales_ops.order_customer.is_employee_discount` is an ORDER-level flag built from name
+patterns (`%Team%`, `%Employee%` on Brink names; `%Meal%`, `%Emp%`, `%Team%` on sessionM
+offers). **Brent is retiring it 2026-08-17 — this table is the source of truth for employee
+discounts.** Measured disagreement over 90 days to 2026-08-15, at order grain: 34,612 orders
+agree, 78 disagree —
+
+- **55 orders**: `order_customer` flags `Free Birthday Meal - Catering Offer` as an employee
+  order. Its `%Meal%` pattern is too loose. This is the reason it is being retired.
+- **13 orders**: an `Offer` line with no resolved `offer_name`.
+- **5 orders**: `order_customer` flags an order that carries **no discount line at all** —
+  the voided/comped shells the `order_lines` `valid_order_lines` guard suppresses.
+- **3 orders / 2 orders**: the `discount_name` arm above, in each direction.
+
+⚠️ Dropping that column from `sales_ops.order_customer` will break `claude.order_customer`,
+which is a frozen `select * except(...)` view. Redeploy the view in the same change.
 
 ### `Error` is a health signal, not a category
 

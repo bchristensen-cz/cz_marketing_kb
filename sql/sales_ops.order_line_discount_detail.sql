@@ -14,28 +14,12 @@
 -- The un-prorated Brink amount is deliberately NOT emitted — it repeats on every split row
 -- and summing it overstated July 2026 by 7.2% (-$504,903.90 vs a true -$471,017.34).
 --
--- ⚠️ THE RECONCILIATION BELOW WAS WRITTEN AGAINST THE REPO SCRIPT, NOT A DEPLOYED TABLE. The
--- order_lines guard was committed 2026-08-15 but NOT deployed until 2026-08-17, so between
--- those dates this header described a tie-out that did not hold in production. It holds only
--- if the deployed guard carries BOTH arms (`sum(amount) > 0 or sum(item_net_sales) > 0`) — the
--- gross arm alone leaves 61 orders / $2,104.52 that order_customer bills and this table would
--- not. Confirm against INFORMATION_SCHEMA.JOBS_BY_PROJECT, not against the repo file.
---
--- ✅ HOLDS AS OF 2026-08-17. order_lines rebuilt full history with both arms at 11:45 MT, THIS
--- table rebuilt behind it at 11:49 — that order matters, this table is downstream and a rebuild
--- here against a stale order_lines just re-freezes the old numbers. Measured after both:
--- order_lines / order_customer / this table all -$25,720,068.34 at order grain, full history,
--- closed days, store_id not in (1111, 999), zero orders disagreeing.
---
--- ⚠️ IT NOW RECONCILES TO order_customer TOO — a NEW property, 2026-08-15. order_lines gained
--- a `valid_order_lines` guard that suppresses discount and promotion lines on orders whose
--- brinkOrderItem rows carry no sellable value. Before it, this table ran $753.68 ABOVE
--- order_customer's total_discount_amount + total_promotions_amount over 90 days across 80
--- orders. Cause: order_customer joins its discount and promotion CTEs on `boi.orderid`, so any
--- order its item CTE drops silently reports zero discount, while order_lines keyed on bo.id and
--- kept the money. Those orders are voided/comped shells — Brink zeroes the header (GrossSales /
--- NetSales / Subtotal / Total all 0) and voids the items but leaves the brinkOrderDiscount row
--- standing with isDeleted = false. Nothing was sold, so nothing was given away.
+-- ✅ HOLDS AS OF 2026-08-17. order_lines rebuilt full history with both arms of the
+-- valid_order_lines guard at 11:45 MT, THIS table rebuilt behind it at 11:49 — that order
+-- matters, this table is downstream and a rebuild here against a stale order_lines just
+-- re-freezes the old numbers. Measured after both: order_lines / order_customer / this table
+-- all -$25,720,068.34 at order grain, full history, closed days, store_id not in (1111, 999),
+-- zero orders disagreeing.
 --
 -- ⚠️ RUN THAT TIE-OUT ON CLOSED DAYS ONLY, AT ORDER GRAIN. The current business date drifts
 -- ~47 orders / ~$438 against live brink because order_customer is a snapshot from its last
@@ -44,11 +28,32 @@
 -- Full docs: data_dictionaries/claude.order_line_discount_detail.md
 -- User-facing view: sql/claude.order_line_discount_detail.sql
 --
+-- =====================================================================================
+-- ⚠️ 2026-08-17 — THE RENAME BROKE THIS QUERY FOR 37 CONSECUTIVE SCHEDULED RUNS.
+-- From 2026-08-15 04:02 MT to 2026-08-17 09:02 MT every run died on the DELETE with
+--   `Not found: Table marketing-data-442316:sales_ops.discount_detail ... at [29:1]`
+-- because the deployed config's delete target still carried the pre-rename table name while
+-- the insert target had been updated. Two days of incremental loads were lost; only the
+-- manual full rebuilds on 08-17 healed it. WHEN YOU RENAME A TABLE, GREP THE WHOLE SCHEDULED
+-- CONFIG FOR THE OLD NAME — the insert is not the only place it appears. And check
+-- INFORMATION_SCHEMA.JOBS_BY_PROJECT for error_result after any rename; the scheduled query
+-- reports state = DONE with a populated error_result, so the run history looks normal.
+--
+-- ⚠️ THE TRANSACTION BELOW IS LOAD-BEARING AND HAS BEEN DROPPED ONCE ALREADY.
+-- While fixing the rename on 2026-08-17 the `begin transaction` line was lost and the orphan
+-- `commit transaction` failed with `There is no active transaction to commit at [185:1]`;
+-- the response was to delete the commit too, and the config ran unwrapped from 10:02 MT.
+-- Unwrapped, a failed insert after a committed delete leaves a 120-day hole (730 on the 1st)
+-- that returns ZEROS rather than an error, and the intraday runs only cover today so nothing
+-- heals it until the next 4am pass. Keep both statements or keep neither.
+-- =====================================================================================
+--
 -- ⚠️ THE 730-DAY FLOOR IS NOT THE WHOLE TABLE. 65.1% of rows (2,239,212 / -$15.6M) sit
 -- before the widest reload window and are NEVER refreshed by any scheduled run. order_lines
 -- was restated across full history three times in the month to 2026-08-14 (07-30, 07-31,
 -- 08-12). Re-running the full-history build below is a REQUIRED step in the order_lines
--- rebuild checklist.
+-- rebuild checklist — and it is the ONLY way a change to is_employee_meal_discount reaches
+-- the 2018-2024 rows the flag was widened to cover.
 --
 -- ⚠️ SOURCE LOOKBACK IS A BET. The source CTEs read start_date - 60 because
 -- pulse.order_discounts.created_at is order PLACEMENT time while business_date is
@@ -78,10 +83,8 @@ if start_date is null then
   return;
 end if;
 
--- Explicit transaction: BigQuery scripts are not atomic. Without this, a failed insert
--- after a committed delete leaves a 120-day hole (730 on the 1st) that returns zeros
--- rather than an error, and the intraday runs only cover today so nothing heals it until
--- the next 4am pass.
+-- Explicit transaction: BigQuery scripts are not atomic. See the warning in the header —
+-- this has been dropped once and it silently converts a failed insert into a data hole.
 begin transaction;
 
 delete `marketing-data-442316`.sales_ops.order_line_discount_detail
@@ -90,7 +93,8 @@ where business_date >= start_date;
 insert into `marketing-data-442316`.sales_ops.order_line_discount_detail
 
 -- Initial full-history build (run once; also re-run after any order_lines full-history
--- restatement — see the frozen-block warning in the header):
+-- restatement, and after any change to the discount_type or is_employee_meal_discount CASE
+-- — see the frozen-block warning in the header):
 -- declare start_date date;
 -- set start_date = '2018-08-07';
 -- create or replace table `marketing-data-442316`.sales_ops.order_line_discount_detail
@@ -202,7 +206,8 @@ where 1=1
 and uo.create_date >= start_date - 60
 -- cuts the user_offers scan hard and is semantically right (this is a redemption lookup),
 -- but creates a silent dependency: if sessionM ever lags on stamping redeem_date, offer
--- attribution degrades with no alarm. 4 of 27,772 affected as of 2026-08-14.
+-- attribution degrades with no alarm. 4 of 27,772 affected as of 2026-08-14. This is why
+-- is_employee_meal_discount does NOT rely on offer_name alone — see that column's comment.
 and uo.redeem_date is not null
 )
 
@@ -235,6 +240,18 @@ dl.brink_order_id
 -- 'Error' = an integrated line with neither a Pulse type nor a Third_Party category.
 -- 0-1 lines on any closed day; a sustained non-zero on a closed day means the -60 source
 -- lookback got too short.
+--
+-- ⚠️ discount_type names a PROGRAM. Do not merge two programs into one arm just because
+-- both went to team members — that is what is_employee_meal_discount is for, and the merge
+-- is irreversible for anyone reading history. Specifically:
+--   item_id 1 = 'Employee 25%'  (2018-08-20 -> 2020-03-21, 155,792 lines / -$687,404.85)
+--   item_id 2 = 'Team Member 100% Discount' (2018-08-22 -> live, 707,194 lines / -$8.14M)
+-- are DIFFERENT programs at different rates and keep separate discount_type values; item 1
+-- falls through to the item_name fallback and reads 'Employee 25%'. By contrast
+--   item_id 640945199 (2019-03-12 -> 2023-02-14) and 643529958 (2023-01-18 -> live)
+-- are the SAME program under two POS ids across the Brink cutover — identical item_name
+-- 'NewTeamMemb Family Meal', four weeks of overlap — so they share one arm. Test for
+-- same-vs-different by item_name, not by who received the discount.
 , case
 	when dl.item_id = 643536109 and pd.type = 'points' then 'In-cart Points Redemption'
 	when dl.item_id = 643536109 and pd.type = 'reward' then 'Reward Redemption'
@@ -246,7 +263,7 @@ dl.brink_order_id
 	when dl.item_id = 3 then 'Manager Discount'
 	when dl.item_id = 2 then 'Employee Meal Discount'
 	when dl.item_id = 643529939 then 'Guest Relations'
-	when dl.item_id = 643529958 then 'New Team Member Family Meal'
+	when dl.item_id in (643529958, 640945199) then 'New Team Member Family Meal'
 	when dl.item_id = 643529965 then 'Face To Face'
 	when dl.item_id = 643571119 then 'Offline Cafe Zupas Rewards'
 	-- open domain by design: item_name carries the brinkDiscounts program name since the
@@ -254,6 +271,41 @@ dl.brink_order_id
 	-- vanishing into 'Other'. Zero NULLs across 3.44M rows (verified 2026-08-14).
 	else dl.item_name
 end as discount_type
+-- ADDED 2026-08-17. TRUE = the discount is a team-member / employee meal benefit, ANY era.
+-- This is the canonical employee-meal flag; sales_ops.order_customer.is_employee_discount
+-- was a looser name-pattern version of the same idea and is being retired (it flagged
+-- 'Free Birthday Meal - Catering Offer' as employee via a `%Meal%` pattern — 55 orders in
+-- 90 days).
+--
+-- THREE INDEPENDENT ARMS, because no single source covers all four eras:
+--   1. item_id — the Brink programs. 1 = Employee 25% (retired 2020-03-21), 2 = Team Member
+--      100% Discount, 643529958 + 640945199 = New Team Member Family Meal (both ids).
+--   2. discount_name — catches the 7 lines (2025-01-21 -> 2026-05-30) where the sessionM
+--      transaction_discount is named 'Team Member Meal' but the user_offers lookup missed,
+--      so offer_name is NULL. This arm exists PRECISELY because offer_detail's
+--      `redeem_date is not null` filter degrades silently; do not simplify it away.
+--   3. offer_name regex — 'Team Member Meal' plus the Jan-2025 test offers ('250113 Emp
+--      Meal', 'Emp Lunch - CTA Test', 'Emp Free Meal Test 2', …). `\bemp` is anchored on
+--      purpose: unanchored `emp` would swallow a future offer named 'Temp … Meal'. Verified
+--      2026-08-17 — both forms match the same 9 offer names / 26,572 lines full history, so
+--      the anchor costs nothing today and closes the trap tomorrow.
+--
+-- Widening measured 2026-08-17 against the deployed table: +158,799 lines / -$760,224.18
+-- newly TRUE, ZERO lines flipped TRUE -> FALSE. Totals go 738,399 -> 897,198 lines and
+-- -$8,636,557.33 -> -$9,396,781.51 full history. Reported employee-meal spend before 2023
+-- was understated by ~$757K until this landed.
+--
+-- ⚠️ NONE of the widening reaches the table until a FULL-HISTORY rebuild runs — the widest
+-- scheduled reload is 730 days and 65% of rows sit behind it. Assertion E below is the check.
+, ifnull(
+    dl.item_id in (1, 2, 643529958, 640945199)
+    or coalesce(r.discount_name, pd.discount_name, dl.item_name) = 'Team Member Meal'
+    or regexp_contains(
+         lower(coalesce(odr.offer_name, od.offer_name, ''))
+       , r'team member meal|\bemp.*(meal|lunch)'
+       )
+  , false
+  ) as is_employee_meal_discount
 , dl.item_name
 , coalesce(r.discount_name, pd.discount_name, dl.item_name) as discount_name
 , coalesce(odr.root_offer_id, pd.sessionM_root_offer_id) as root_offer_id
@@ -282,6 +334,25 @@ commit transaction;
 -- `current_date` silently means "tomorrow" for a third of the schedule. This bit during
 -- review 2026-08-14: three test builds either side of the UTC rollover picked different
 -- windows and the comparison read as a logic regression when it was a clock difference.
+--
+-- ⚠️ Assertion 0, before any of these: does the DEPLOYED config match this file? The built
+-- table cannot tell you. Read the job text, and filter to job_id like 'scheduled_query%' —
+-- a manual console CTAS (bquxjob_*) fixes the DATA while leaving the saved config unchanged.
+-- select
+--   datetime(j.creation_time, 'America/Denver') as run_mt
+-- , j.job_id
+-- , j.error_result.message as err_message
+-- , regexp_contains(j.query, r'(?i)is_employee_meal_discount') as has_emp_flag
+-- , regexp_contains(j.query, r'(?i)begin transaction') as has_txn
+-- from `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT j
+-- where 1=1
+-- and j.creation_time >= timestamp_sub(current_timestamp(), interval 2 day)
+-- and j.query like '%sales_ops.order_line_discount_detail%'
+-- and j.query like '%sessionM.transaction_discounts%'
+-- and j.job_id like 'scheduled_query%'
+-- order by
+--   j.creation_time desc
+-- ;
 -- =====================================================================================
 
 -- A. discount_amount must reconcile to order_lines exactly.
@@ -331,7 +402,7 @@ commit transaction;
 --   dd.business_date desc
 -- ;
 
--- D. '2026-08-15' NEW. Must tie to sales_ops/claude.order_customer at ORDER grain.
+-- D. '2026-08-15' Must tie to sales_ops/claude.order_customer at ORDER grain.
 --    Expect zero rows.
 --    ⚠️ CLOSED DAYS ONLY — the current business date drifts ~47 orders / ~$438 against live
 --    brink because order_customer is a snapshot from its last load. Not a defect.
@@ -373,4 +444,32 @@ commit transaction;
 -- 	and oc.brink_order_id = dd.brink_order_id
 -- where 1=1
 -- and ifnull(dd.amount, 0) <> ifnull(oc.order_discount, 0)
+-- ;
+
+-- E. '2026-08-17' NEW. is_employee_meal_discount must cover all four eras. Every bucket
+--    must return zero unflagged lines. A non-zero legacy bucket means the full-history
+--    rebuild has not been run since the flag was widened — the scheduled reload only
+--    reaches 730 days and the legacy programs are older than that.
+-- select
+--   case
+--     when dd.item_id = 1 then 'A. Employee 25% (2018-08 -> 2020-03)'
+--     when dd.item_id = 640945199 then 'B. NewTeamMemb Family Meal, legacy id'
+--     when regexp_contains(lower(ifnull(dd.offer_name, '')), r'\bemp.*(meal|lunch)') then 'C. Emp * Meal/Lunch offers'
+--     else 'D. discount_name Team Member Meal, offer lookup missed'
+--   end as bucket
+-- , count(*) as unflagged_lines
+-- , round(sum(dd.discount_amount), 2) as unflagged_amount
+-- from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
+-- where 1=1
+-- and dd.business_date >= '2018-08-07'
+-- and dd.is_employee_meal_discount = false
+-- and (
+--      dd.item_id in (1, 640945199)
+--   or regexp_contains(lower(ifnull(dd.offer_name, '')), r'\bemp.*(meal|lunch)')
+--   or dd.discount_name = 'Team Member Meal'
+-- )
+-- group by
+--   bucket
+-- order by
+--   bucket
 -- ;

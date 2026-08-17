@@ -132,10 +132,16 @@ and boi.IsDeleted = false
 --
 -- ⚠️ DEPLOYMENT HISTORY — this sat in the repo UNDEPLOYED for two days. Committed 2026-08-15
 -- under the name `sellable_orders` (223b774); the scheduled query kept running without it, so
--- the repo tie-out numbers below described a table that did not exist yet. Brent deployed the
--- guard himself 2026-08-17 as `valid_order_lines`, with a full-history CTAS rebuild; the repo
--- CTE was renamed that day to match the deployed name. Authoritative check on whether a
--- guard is actually live — the built table alone will mislead you:
+-- the repo tie-out numbers below described a table that did not exist yet. Brent deployed it
+-- 2026-08-17 as `valid_order_lines` — gross arm only at 10:51, both arms at 11:45 with a
+-- full-history CTAS, order_line_discount_detail rebuilt behind it at 11:49. The repo CTE was
+-- renamed and re-aliased (`vol`) that day to match the deployed text.
+--
+-- ✅ CONFIRMED LIVE IN THE SCHEDULED-QUERY CONFIG, not just in a manual run: the 12:02 MT
+-- scheduled run on 2026-08-17 carries both arms and completed clean. This distinction is the
+-- whole trap — a manual console CTAS fixes the DATA while leaving the CONFIG one-armed, and
+-- the next full rebuild silently undoes it. Authoritative check, since the built table alone
+-- will mislead you (filter to job_id like 'scheduled_query%' to test the config, not a run):
 --   select regexp_contains(j.query, r'(?i)valid_order_lines') from `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT j
 --   where j.query like '%sales_ops.order_lines%' and j.query like '%brinkOrderPromotion%'
 --   order by j.creation_time desc
@@ -167,8 +173,20 @@ and boi.IsDeleted = false
 --   4. sellable                  3,101,131     2,762,087     → keep
 --
 -- Buckets 1 and 2 are why the guard exists and both arms drop them. Bucket 3 is the entire
--- reason the second arm is not optional. With both arms, bucket 4 ties to the penny:
--- order_customer $23,457,616.95 vs order_lines -$23,457,616.95.
+-- reason the second arm is not optional.
+--
+-- ✅ POST-DEPLOY TIE-OUT, 2026-08-17 after the both-arms rebuild. Full history, closed days
+-- only, ORDER GRAIN, store_id not in (1111, 999) applied to all three marts:
+--
+--     order_lines            -$25,720,068.34
+--     order_customer         -$25,720,068.34   (total_discount_amount + total_promotions_amount)
+--     order_line_discount_detail  -$25,720,068.34
+--     orders where order_lines <> order_customer: 0    absolute gap: $0.00
+--
+-- Buckets re-measured on the rebuilt table: 31,159 / 1,605 orders carry zero discount lines,
+-- all 61 bucket-3 orders carry theirs at -$2,104.52, and all 3,101,131 sellable orders are
+-- present. Partitioning and clustering survived the manual CTAS on both tables (checked via
+-- INFORMATION_SCHEMA.TABLES.ddl — a hand-run `create or replace` is where those get dropped).
 --
 -- SCOPE: removes 42,092 discount/promotion lines / -$238,698.36 over full history (orders with
 -- no surviving item rows) plus 2,701 lines / -$45,348.22 (orders whose surviving items are all
@@ -176,8 +194,9 @@ and boi.IsDeleted = false
 -- 2025. Post-change full-history discount total: -$25,693,161.50 (was -$25,967,881.35).
 --
 -- ⚠️ BOTH ARMS ARE LOAD-BEARING. DO NOT SIMPLIFY THIS TO `having sum(ol.amount) > 0`.
--- THE VERSION DEPLOYED 2026-08-17 HAD THE GROSS ARM ONLY — if the live scheduled query still
--- reads `having sum(ol.amount) > 0`, it is short this arm and owes a full-history rebuild.
+-- The first version deployed 2026-08-17 had the gross arm only; if the live scheduled query
+-- ever reads `having sum(ol.amount) > 0` again, it is short this arm and owes a full-history
+-- rebuild — a windowed reload will NOT repair it (see the hiding note below).
 -- (Corrected 2026-08-17. The note that stood here claimed the arms "only diverge on a tip-only
 -- order with non-positive gross, which the gross arm already excludes" — that is WRONG. The
 -- divergent orders carry ZERO tip rows.)
@@ -251,8 +270,8 @@ bod.OrderId
 from `marketing-data-442316`.brink.brinkOrderDiscount bod
 	join brink_order bo
 	on bo.id = bod.orderid
-		join valid_order_lines so   -- '2026-08-15' see the guard above; ties this table to order_customer
-		on so.order_id = bod.orderid
+    join valid_order_lines vol   -- see the guard above; ties this table to order_customer
+    on vol.order_id = bod.orderid
 where 1=1
 and bod.isDeleted = false
 
@@ -291,11 +310,11 @@ p.orderId
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
 	on bo.id = p.orderid
-		join valid_order_lines so   -- '2026-08-15' see the guard above; ties this table to order_customer
-		on so.order_id = p.orderid
     left join promotions pn  -- '2026-07-31' name master, joined per store
     on pn.id = p.promotionid
     and pn.storeid = bo.storeid
+      join valid_order_lines vol   -- see the guard above; ties this table to order_customer
+      on vol.order_id = p.orderid
 
 union all
 

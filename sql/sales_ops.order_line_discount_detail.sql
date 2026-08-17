@@ -16,11 +16,16 @@
 --
 -- ⚠️ THE RECONCILIATION BELOW WAS WRITTEN AGAINST THE REPO SCRIPT, NOT A DEPLOYED TABLE. The
 -- order_lines guard was committed 2026-08-15 but NOT deployed until 2026-08-17, so between
--- those dates this header described a tie-out that did not hold in production. It holds from
--- the 2026-08-17 full-history rebuild onward, and only if the deployed guard carries BOTH arms
--- (`sum(amount) > 0 or sum(item_net_sales) > 0`) — the gross arm alone leaves 61 orders /
--- $2,104.52 that order_customer bills and this table would not. Confirm against
--- INFORMATION_SCHEMA.JOBS_BY_PROJECT, not against the repo file.
+-- those dates this header described a tie-out that did not hold in production. It holds only
+-- if the deployed guard carries BOTH arms (`sum(amount) > 0 or sum(item_net_sales) > 0`) — the
+-- gross arm alone leaves 61 orders / $2,104.52 that order_customer bills and this table would
+-- not. Confirm against INFORMATION_SCHEMA.JOBS_BY_PROJECT, not against the repo file.
+--
+-- ✅ HOLDS AS OF 2026-08-17. order_lines rebuilt full history with both arms at 11:45 MT, THIS
+-- table rebuilt behind it at 11:49 — that order matters, this table is downstream and a rebuild
+-- here against a stale order_lines just re-freezes the old numbers. Measured after both:
+-- order_lines / order_customer / this table all -$25,720,068.34 at order grain, full history,
+-- closed days, store_id not in (1111, 999), zero orders disagreeing.
 --
 -- ⚠️ IT NOW RECONCILES TO order_customer TOO — a NEW property, 2026-08-15. order_lines gained
 -- a `valid_order_lines` guard that suppresses discount and promotion lines on orders whose

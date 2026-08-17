@@ -450,7 +450,146 @@ a failed insert after a committed delete would leave a 120-day (730-day on the 1
 returning zeros rather than an error, and the intraday runs only cover today so nothing would
 heal it until the next 4am pass.
 
+## Build script & post-load assertions
+
+[`sql/sales_ops.order_line_discount_detail.sql`](../sql/sales_ops.order_line_discount_detail.sql)
+is **the deployable script, verbatim** — paste it straight into the scheduled-query config.
+Convention set 2026-08-17: the build file carries only the comments Brent wants living in the
+console; everything explanatory lives here. Keep it that way, or the two copies drift and the
+structural diff that catches deploy gaps stops being clean.
+
+Run these after any logic change and after every `order_lines` full-history rebuild.
+
+> ⚠️ **Every date function below is pinned to `America/Denver`.** Bare `current_date` is UTC,
+> and the intraday runs fire 8pm–11pm Denver = 2am–5am the *next* UTC day, so a bare
+> `current_date` silently means "tomorrow" for a third of the schedule. This bit during the
+> 2026-08-14 review: three test builds either side of the UTC rollover picked different windows
+> and the comparison read as a logic regression when it was a clock difference.
+
+### 0. Does the DEPLOYED config match the repo file?
+
+**Run this first. The built table cannot tell you what is deployed.** Filter to
+`job_id like 'scheduled_query%'` — a manual console CTAS (`bquxjob_*`) fixes the *data* while
+leaving the saved config untouched, and the next scheduled rebuild silently undoes it. Also
+check `error_result`, not `state`: a failed run still reports `state = DONE`.
+
+```sql
+select
+  datetime(j.creation_time, 'America/Denver') as run_mt
+, j.job_id
+, ifnull(j.error_result.message, 'ok') as result
+, regexp_contains(j.query, r'(?i)is_employee_meal_discount') as has_emp_flag
+, regexp_contains(j.query, r'(?i)640945199') as has_legacy_family_meal_id
+, regexp_contains(j.query, r'(?i)begin transaction') as has_txn
+from `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT j
+where 1=1
+and j.creation_time >= timestamp_sub(current_timestamp(), interval 2 day)
+and j.query like '%sales_ops.order_line_discount_detail%'
+and j.query like '%sessionM.transaction_discounts%'
+and j.job_id like 'scheduled_query%'
+order by
+  j.creation_time desc
+```
+
+### A. `discount_amount` must reconcile to `order_lines` exactly
+
+Full history 2026-08-15: **−$25,693,161.50 on both sides** (−$25,977,208.08 before the
+`order_lines` `valid_order_lines` guard).
+
+```sql
+select
+  round(sum(dd.discount_amount), 2) as mart_total
+, (
+    select round(sum(ol.amount), 2)
+    from `marketing-data-442316`.sales_ops.order_lines ol
+    where 1=1
+    and ol.line_item_type in ('discount', 'promotion')
+    and ol.store_id not in (1111, 999)
+  ) as source_truth
+from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
+```
+
+### B. `Error` on a closed day must be 0–1 lines
+
+Today is expected to spike (~76%). A sustained non-zero on a **closed** day means the 60-day
+source lookback got too short. Query is in the `Error` section above.
+
+### C. Offer attribution must not move when the reload window changes
+
+Run on a Monday (380d pass) and again on a Tuesday (120d pass) — the numbers must match. They
+did not before the windowing fix (275 rows differed over an 8-day window).
+
+```sql
+select
+  dd.business_date
+, countif(dd.offer_name is null) as null_offer_name
+, countif(dd.root_offer_id is null) as null_root_offer_id
+, count(*) as lines
+from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
+where 1=1
+and dd.business_date between date_sub(current_date('America/Denver'), interval 380 day)
+                         and date_sub(current_date('America/Denver'), interval 121 day)
+group by
+  dd.business_date
+order by
+  dd.business_date desc
+```
+
+### D. Must tie to `order_customer` at ORDER grain — expect zero rows
+
+⚠️ **Closed days only** (the current business date drifts ~47 orders / ~$438 against live Brink
+because `order_customer` is a snapshot from its last load — not a defect). ⚠️ **Exclude store
+999 on the `order_customer` side** — this table drops it upstream, `claude.order_customer` drops
+only 1111; leaving it in costs $13.49 / 90 days. ⚠️ **Order grain, not date grain** — date grain
+lets a compensating pair cancel out and read as a match. Query is in the
+"Tying this table to `order_customer`" section above.
+
+### E. `is_employee_meal_discount` must cover all four eras — expect zero rows
+
+Added 2026-08-17. A non-zero legacy bucket means the **full-history rebuild has not been run**
+since the flag was widened; the scheduled reload only reaches 730 days.
+
+```sql
+select
+  case
+    when dd.item_id = 1 then 'A. Employee 25% (2018-08 -> 2020-03)'
+    when dd.item_id = 640945199 then 'B. NewTeamMemb Family Meal, legacy id'
+    when regexp_contains(lower(ifnull(dd.offer_name, '')), r'\bemp.*(meal|lunch)') then 'C. Emp * Meal/Lunch offers'
+    else 'D. discount_name Team Member Meal, offer lookup missed'
+  end as bucket
+, count(*) as unflagged_lines
+, round(sum(dd.discount_amount), 2) as unflagged_amount
+from `marketing-data-442316`.sales_ops.order_line_discount_detail dd
+where 1=1
+and dd.business_date >= '2018-08-07'
+and dd.is_employee_meal_discount = false
+and (
+     dd.item_id in (1, 640945199)
+  or regexp_contains(lower(ifnull(dd.offer_name, '')), r'\bemp.*(meal|lunch)')
+  or dd.discount_name = 'Team Member Meal'
+)
+group by
+  bucket
+order by
+  bucket
+```
+
 ## Version note
+
+**2026-08-17 — `is_employee_meal_discount` added and widened; build file slimmed to the
+deployable script.** The flag covers the team-member meal benefit in all four eras (see its
+section above); widening it moved +158,799 lines / −$760,224.18 from `false` to `true` with zero
+flips the other way. `discount_type` gained `640945199` alongside `643529958` (one program, two
+POS ids) and deliberately did **not** merge `item_id 1` into `item_id 2` (different programs).
+`order_customer.is_employee_discount` is being retired in favour of this column.
+
+Same day: the `order_lines` `valid_order_lines` guard was deployed with both arms and both tables
+rebuilt from full history (11:45 then 11:49 — order matters). And the 08-15 rename was found to
+have broken this build's own `delete` target, failing 37 consecutive scheduled runs invisibly;
+the `begin`/`commit transaction` wrapper was lost during that fix and has been restored.
+
+Convention change: [`sql/sales_ops.order_line_discount_detail.sql`](../sql/sales_ops.order_line_discount_detail.sql)
+is now the deployable script verbatim. Documentation lives here, not in the scheduled query.
 
 **2026-08-15 (later same day) — renamed, view deployed, reconciled to `order_customer`.**
 `sales_ops.discount_detail` → `sales_ops.order_line_discount_detail`, and the `claude` view with

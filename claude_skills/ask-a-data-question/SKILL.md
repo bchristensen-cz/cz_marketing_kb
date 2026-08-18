@@ -126,6 +126,31 @@ Three scope points to resolve or state, beyond the standard forks:
 
 Full gotchas: [`data_dictionaries/claude.order_payment_tender.md`](../../data_dictionaries/claude.order_payment_tender.md).
 
+### "Earned" / "redeemed" discounts mean points were traded (steward decision 2026-08-18)
+
+A guest **earned** a discount only if they paid points for it. Everything else was **given** —
+marketing offers, in-store promotions, service recovery, manager discretion, employee meals.
+Resolve this before asking anything else, because the obvious filter is wrong:
+
+**Do not use `discount_type in ('Reward Redemption', 'In-cart Points Redemption')`.**
+`In-cart Points Redemption` is 100% earned, but **`Reward Redemption` is a mixed bucket** —
+Brink id `643571116` is a single in-store POS program carrying both points-purchased rewards
+and marketing offers, because the `'Offer'` label is only reachable on the online path.
+10,064 lines / **−$36,798** of marketing offers sit inside `Reward Redemption` over
+2026-05-01 → 2026-07-31, a **+5.1%** overstatement of earned, all of it in-store.
+
+Split it with `claude.loyalty_offer_usage.offer_kind` — `points_purchase` = earned,
+`promotional` = given — and **`upper()` both sides of the `root_offer_id` join**, which is
+mixed-case and otherwise matches nothing. Canonical SQL and the two blind spots (the online
+reward path has no offer evidence; 2023 has an 18% unattributable `Error` bucket) are in
+[`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
+[`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
+
+**No fork to present here** — the split is decided, not a user choice. State the resolved
+meaning in the answer instead: *"earned = traded for points; marketing offers and in-store
+promotions are excluded."* If the user wants the give-aways too, that's a second row in the
+same breakdown, not a different definition.
+
 ## Step 2 — ask once, with clickable options
 
 Use `AskUserQuestion`. **Every option label must carry its consequence**, drawn from the

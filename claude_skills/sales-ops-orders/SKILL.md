@@ -357,7 +357,7 @@ order by ca.mapped_cust_id, s.orders desc
 ## Hard rules (consistency guarantees)
 
 1. **Never query upstream/raw datasets** (`brink.*`, `pulse.*`, `sessionM.*`) to answer business questions. They contain voided rows, duplicates, and unfiltered records that these marts already handle. If the marts can't answer the question, say so — don't improvise from raw tables.
-2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. `sales_ops.order_line_discount_detail` uses `business_date` too. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — the since-removed `sales_ops.order_discount` still spelled it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.) **Write one predicate per line** — a `--` comment runs to the end of the line and will silently delete every predicate after it, `LIMIT` included; see [the 2026-08-18 finding](#-a----comment-eats-every-predicate-after-it-on-that-line-including-the-limit-new-2026-08-18).
+2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. `sales_ops.order_line_discount_detail` uses `business_date` too. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — the since-removed `sales_ops.order_discount` still spelled it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.) **A non-partition predicate is not a substitute for the date** — filtering a raw Brink table by `Id` alone still reads every partition, and `LIMIT` does not bound bytes; see [the 2026-08-18 finding](#️-commenting-out-the-date-filter-is-not-widening-the-search--an-id-predicate-prunes-nothing-measured-2026-08-18).
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only; hours 0–3 and 5–7 skip). Yesterday and older is stable after the 4am run.
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
@@ -399,25 +399,32 @@ Three things worth carrying forward:
 2. **A wall breach can have a legitimate cause, and the cause is the thing to fix.** Five templates reach into `pulse.order_customers` under a predicate of `oc.email is null and oc.mapped_email is null` on `source in ('mobile_web_source','web_source')` — they are recovering **the email a guest typed at checkout**, which no mart column carries. That's a mart gap wearing a breach's clothes (Asana 1217645882648277, flagged as inferred from SQL and not yet measured). Closing it removes the motive for about a third of the pulse queries; repeating the rule would not.
 3. **The clean day did not stick.** 08-14 had zero `pulse.*` queries and was recorded as progress. 08-18 has 34, at higher volume than the 08-04 record. One compliant day is noise, not a trend — don't close a systemic finding on it.
 
-### ⚠️ A `--` comment eats every predicate after it on that line, including the `LIMIT` (new 2026-08-18)
+### ⚠️ Commenting out the date filter is not "widening the search" — an id predicate prunes nothing (measured 2026-08-18)
 
-The single most expensive authoring mistake in the log to date, and it is not about this project's marts at all — it will bite anyone writing SQL in a console. Observed from a new direct-console account, **20 full-table scans / 224.08 GiB in one day, 99.9% of that account's entire spend**:
+The most expensive authoring mistake in the log to date, and it isn't about this project's marts — it will bite anyone doing single-order lookups on a raw Brink table. Observed from a new direct-console account: **20 full-table scans / 224.08 GiB in one day, 99.9% of that account's entire spend.** The shape, verbatim:
 
 ```sql
 -- ANTI-PATTERN, do not copy
-select * from `marketing-data-442316`.brink.brinkOrder bo
+select *
+from `marketing-data-442316`.brink.brinkOrder bo
 where 1=1
---and bo.businessdate = '2026-8-17' and bo.id = 105394802264065 LIMIT 200500
+--and bo.businessdate = '2026-8-17'
+and bo.id = 105394802264065
+LIMIT 200500
 ```
 
-The author commented out the date to widen the search. But `--` runs to the **end of the line**, so it also deleted the `bo.id` predicate *and* the `LIMIT`. What executed is `select * from brinkOrder where 1=1` — the whole table, 17 times, each one believed to be a single-order lookup. `where 1=1` makes it worse by guaranteeing the query still parses with every real predicate gone.
+The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire table, because **`brink.brinkOrder` is partitioned on `BusinessDate` and not clustered on `Id`** — an id filter is evaluated after the scan, and `LIMIT` doesn't bound bytes either. Measured on that table the same day:
 
-Two habits that would have caught it:
+| Predicate | Billed |
+|---|---|
+| `where businessDate = '2026-8-17'` | **0.01 GiB** |
+| `where bo.id = <literal>` (no date) | **11.20 GiB** |
 
-- **Put one predicate per line**, so a comment can only ever kill one. This is already the repo's SQL style (leading commas, one condition per line) — this is what that style is *for*.
-- **Watch `total_bytes_billed` for repetition.** Twelve of those queries carried twelve different order ids and every one billed exactly **11.2 GiB**. Identical bytes across different literals means the literal is not pruning anything. A cost that doesn't move when the filter moves is the tell.
+~1,120x, for a query that looks *more* selective. The author commented the date out to search across days, which is a reasonable intent with an unreasonable price. **A single-order lookup must carry a date**; if the date genuinely isn't known, expect and budget a full scan, or ask for the table to be clustered on `Id` (Asana 1217554047292419).
 
-Related and measured the same day on `brink.brinkOrder`: **filtering by `Id` alone is a full scan.** `where businessDate = '2026-8-17'` billed **0.01 GiB**; `where bo.id = <literal>` with no date billed **11.20 GiB** — ~1,120x. The table is partitioned on `BusinessDate` and not clustered on `Id`, so a single-order lookup must carry a date. (Clustering ask: Asana 1217554047292419.)
+**The detection signal is a cost that doesn't move when the filter moves.** All 20 of these billed 11.2 GiB whether the id predicate was live or commented, and across twelve different order ids. Identical `total_bytes_billed` across different literals proves the literal is pruning nothing.
+
+> **🧰 Harness note for whoever runs the query-log review — do not analyse query text with whitespace collapsed.** This finding was first written up as "the `--` comment swallowed the `bo.id` predicate and the `LIMIT` too," which is **false and was retracted the next morning**. The cause was the review's own SQL: `substr(regexp_replace(query, r'\s+', ' '), 1, 700)` flattens the six-line query onto one line, after which a leading `--` genuinely *appears* to comment out everything following it. Line structure is load-bearing whenever a `--` is present. Inspect with `split(query, '\n')` before drawing any conclusion about what a comment covers — and note that the wrong version was self-consistent with the byte counts, so plausibility was no protection.
 
 ## Canonical metric definitions
 

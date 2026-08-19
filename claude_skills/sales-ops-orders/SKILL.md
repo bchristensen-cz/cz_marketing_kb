@@ -357,7 +357,7 @@ order by ca.mapped_cust_id, s.orders desc
 ## Hard rules (consistency guarantees)
 
 1. **Never query upstream/raw datasets** (`brink.*`, `pulse.*`, `sessionM.*`) to answer business questions. They contain voided rows, duplicates, and unfiltered records that these marts already handle. If the marts can't answer the question, say so — don't improvise from raw tables.
-2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. `sales_ops.order_line_discount_detail` uses `business_date` too. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — the since-removed `sales_ops.order_discount` still spelled it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.)
+2. **Always filter the partition column** on every table. It is **`business_date` everywhere** as of 2026-07-30 — `order_customer`, `order_sequence` and `order_lines` all agree. Never run unbounded scans. `sales_ops.order_line_discount_detail` uses `business_date` too. ("Everywhere" means the documented marts: the 2026-07-30 rename did **not** cover undocumented `sales_ops` tables — the since-removed `sales_ops.order_discount` still spelled it `businessdate`, observed failing a `business_date` query 2026-08-06. If you're on a table this skill doesn't document, you shouldn't be — but don't assume the column name either.) **Write one predicate per line** — a `--` comment runs to the end of the line and will silently delete every predicate after it, `LIMIT` included; see [the 2026-08-18 finding](#-a----comment-eats-every-predicate-after-it-on-that-line-including-the-limit-new-2026-08-18).
 3. **Same metric, same definition.** Use the canonical definitions below verbatim.
 4. Data is fresh as of the top of the current hour (loads run at minute :02, intraday 8am–11pm MT reload today's date only; hours 0–3 and 5–7 skip). Yesterday and older is stable after the 4am run.
 5. **Brink is the sole financial source of truth** (steward rule 2026-07-23). Pulse is a helper for digital order/customer metadata only — never compute financials (sales, discounts, tax, tips) from Pulse data.
@@ -380,6 +380,44 @@ order by ca.mapped_cust_id, s.orders desc
 > **✅ Genuine progress the same day, and it locates the real obstacle.** At 15:10–15:12 the same analyst ran a cohort analysis that is textbook-correct: `claude.order_customer`, `customer_type = 'person'`, `is_catering = false`, `store_id not in (1111, 999)`, `customer_order_count = 1`, a real partition filter, cohorts keyed on `mapped_cust_id`, **and** a maturity bound (`wk <= date_sub(current_date, interval 37 day)`) implementing the 2026-08-13 right-censoring rule. Cost: **0.55–1.31 GiB** per query versus 45 GiB for the legacy equivalent — the compliant path is ~40x cheaper, which is the argument to lead with.
 >
 > It failed on its first attempt with `No matching signature for operator <= for argument types: TIMESTAMP, DATETIME` — a **type mismatch between `order_datetime` (DATETIME) and a Braze TIMESTAMP**, not a wall or a definition problem. That is the friction that sends analysts back to a legacy table they know compiles. The pairing rule is now documented in the `braze-campaigns` skill: compare on **`order_timestamp_utc`**, never `order_datetime`, when the other side is Braze. **Read this as the operative lesson of the day: the compliant path lost adoption on ergonomics, not on trust or on cost.** When a correct query errors and a wrong one doesn't, document the correct query's sharp edges with the same urgency as the wall itself.
+
+**Seventh business day, 2026-08-18 — 460.37 GiB from one analyst, and the day's clearest lesson is that documentation cannot fix a saved file.** Measured on `JOBS_BY_PROJECT` for the Denver day, one MCP-labeled analyst account, 144 jobs:
+
+| What | Count of 144 | GiB |
+|---|---|---|
+| Reference legacy `sales_ops.OrderCustomer` | 41 | **293.84** (63.8% of the day) |
+| Reference `pulse.*` in the query text | 34 | 106.32 |
+| Still carry the hard-coded future end date `2026-09-13` | 17 | 28.28 |
+| Contain `customer_type = 'person'` | **4** | — |
+| Reference any `claude.*` object | **4** | — |
+
+Read the last two rows together: **~97% of one analyst's day ran outside the sanctioned interface layer.** Day totals are escalating, not settling — 18.45 GiB (08-13) → 267.18 (08-17) → 460.37 (08-18). The two most expensive templates billed 91.37 and 91.31 GiB across two runs each, i.e. the same ~45.6 GiB email-self-join Braze attribution queries recorded on 08-17, run twice.
+
+Three things worth carrying forward:
+
+1. **The `2026-09-13` future cohort end date has now been documented three times and edited zero times** (08-13, 08-17, 08-18). Stop re-documenting it. The defect survives because *nothing about it errors*: it compiles, returns a plausible pooled rate, and lives in a saved template nobody reopens. **Guidance reaches new work and cannot reach a saved file** — the same analyst authored a textbook-correct cohort query on 08-17 while this template kept running unchanged beside it. If a rule must hold inside a template, ship it as something that returns zero rows rather than a wrong number: `and cohort_end <= date_sub(current_date, interval @window_days day)`.
+2. **A wall breach can have a legitimate cause, and the cause is the thing to fix.** Five templates reach into `pulse.order_customers` under a predicate of `oc.email is null and oc.mapped_email is null` on `source in ('mobile_web_source','web_source')` — they are recovering **the email a guest typed at checkout**, which no mart column carries. That's a mart gap wearing a breach's clothes (Asana 1217645882648277, flagged as inferred from SQL and not yet measured). Closing it removes the motive for about a third of the pulse queries; repeating the rule would not.
+3. **The clean day did not stick.** 08-14 had zero `pulse.*` queries and was recorded as progress. 08-18 has 34, at higher volume than the 08-04 record. One compliant day is noise, not a trend — don't close a systemic finding on it.
+
+### ⚠️ A `--` comment eats every predicate after it on that line, including the `LIMIT` (new 2026-08-18)
+
+The single most expensive authoring mistake in the log to date, and it is not about this project's marts at all — it will bite anyone writing SQL in a console. Observed from a new direct-console account, **20 full-table scans / 224.08 GiB in one day, 99.9% of that account's entire spend**:
+
+```sql
+-- ANTI-PATTERN, do not copy
+select * from `marketing-data-442316`.brink.brinkOrder bo
+where 1=1
+--and bo.businessdate = '2026-8-17' and bo.id = 105394802264065 LIMIT 200500
+```
+
+The author commented out the date to widen the search. But `--` runs to the **end of the line**, so it also deleted the `bo.id` predicate *and* the `LIMIT`. What executed is `select * from brinkOrder where 1=1` — the whole table, 17 times, each one believed to be a single-order lookup. `where 1=1` makes it worse by guaranteeing the query still parses with every real predicate gone.
+
+Two habits that would have caught it:
+
+- **Put one predicate per line**, so a comment can only ever kill one. This is already the repo's SQL style (leading commas, one condition per line) — this is what that style is *for*.
+- **Watch `total_bytes_billed` for repetition.** Twelve of those queries carried twelve different order ids and every one billed exactly **11.2 GiB**. Identical bytes across different literals means the literal is not pruning anything. A cost that doesn't move when the filter moves is the tell.
+
+Related and measured the same day on `brink.brinkOrder`: **filtering by `Id` alone is a full scan.** `where businessDate = '2026-8-17'` billed **0.01 GiB**; `where bo.id = <literal>` with no date billed **11.20 GiB** — ~1,120x. The table is partitioned on `BusinessDate` and not clustered on `Id`, so a single-order lookup must carry a date. (Clustering ask: Asana 1217554047292419.)
 
 ## Canonical metric definitions
 

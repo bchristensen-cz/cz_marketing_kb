@@ -276,6 +276,32 @@ disagree on case:
 > **Build fix pending:** wrap `pd.sessionM_root_offer_id` in `upper()` in
 > `sql/sales_ops.order_line_discount_detail.sql` — one line below where
 > `sessionM_user_offer_id` is already uppercased for exactly this reason.
+>
+> **Still pending as of the 2026-08-18 evening build run** — confirmed by the query log: ten
+> executions of that script between 17:26 and 18:15 MT all carry
+> `, upper(od.sessionM_user_offer_id) as sessionM_user_offer_id` immediately followed by a bare
+> `, od.sessionM_root_offer_id`. The asymmetry is one line apart in the source and still there.
+
+> **❓ Open question — is the sessionM arm actually uniform UPPERCASE?** The table above states it
+> is, but that has not been proven, and the steward's own census on 2026-08-18 (17:20–17:26 MT)
+> tested for the *opposite*:
+>
+> ```sql
+> select count(*) from `marketing-data-442316`.sessionM.user_offers uo where uo.root_offer_id <> upper(uo.root_offer_id)
+> select count(*) from `marketing-data-442316`.sessionM.user_offers uo where uo.root_offer_id <> lower(uo.root_offer_id)  -- ← this one
+> select count(*) from `marketing-data-442316`.sessionM.user_offers uo where uo.user_offers_id  <> upper(uo.user_offers_id)
+> select count(*) from `marketing-data-442316`.sessionM.transaction_discounts d where d.discount_reference_id <> upper(d.discount_reference_id)
+> ```
+>
+> Testing both `<> upper()` **and** `<> lower()` on the same column is how you detect case mixed
+> *within* one arm, not just between arms. Results are not retained in `JOBS_BY_PROJECT`, so the
+> answer isn't recorded yet (Asana 1217613902597256). **Until it is, `upper()` BOTH sides of the
+> join, not just the Pulse side** — that is correct under either outcome and costs nothing. If the
+> sessionM arm turns out to be internally mixed, the "UPPERCASE" row above is wrong and the
+> one-line build fix is insufficient.
+>
+> `discount_reference_id` on `sessionM.transaction_discounts` was censused in the same pass, so
+> treat its case as unverified too until stated otherwise.
 
 ### ⚠️ Employee meals sit inside earned — don't double-count
 

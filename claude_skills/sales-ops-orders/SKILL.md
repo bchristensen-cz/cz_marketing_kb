@@ -620,57 +620,25 @@ pre-2023 Punchh/OLO era; two label seams there (`NewTeamMemb Family Meal` vs
 `New Team Member Family Meal`, and `Punchh Loyalty` vs `Punch Loyalty`) need collapsing by
 hand before presenting a full-history breakdown.
 
-### "Earned" vs "given" discounts — the points-traded split (steward definition 2026-08-18)
+### "Earned" discounts = the two loyalty redemption types (steward definition 2026-08-18)
 
-**"Earned" means the guest paid points for it.** Everything else was *given*: marketing offers,
-in-store promotions, and service-recovery / manager discounts handed out for various reasons.
-When a user says "earned", "redeemed", "points", "loyalty rewards", or asks what the loyalty
-program costs, this is the split they mean.
-
-The naive read — `discount_type in ('Reward Redemption', 'In-cart Points Redemption')` — is
-**directionally right and materially wrong**, and the reason is one Brink program. Use the
-canonical definition below.
-
-#### The canonical definition
-
-A discount component is **earned** when either:
-
-1. `discount_type = 'In-cart Points Redemption'` — the guest spent points at checkout. **100%
-   verified**: `points > 0` on all 33,702 lines (2026-05-01 → 2026-07-31). No exceptions.
-2. `discount_type = 'Reward Redemption'` **AND** its sessionM offer is not `promotional` —
-   i.e. `offer_kind = 'points_purchase'`, or there is no offer link at all (the online reward
-   path, which carries no offer id; see the blind spot below).
-
-Everything else is **given**, including all of `Offer`, `Promotion`, `Manager Discount`,
-`Guest Relations`, `Face To Face`, `Third Party Discount`, and the employee-meal programs.
+**Earned = `discount_type in ('Reward Redemption', 'In-cart Points Redemption')`.** Full stop.
+Confirmed by the steward 2026-08-18. Everything else was **given**: marketing offers outside the
+loyalty wallet, in-store promotions, third-party discounts, service recovery, manager
+discretion, employee benefit.
 
 ```sql
--- earned (points-traded) vs given discounts
--- note: upper() on BOTH sides of the offer join is REQUIRED, see the case defect below
-with offers as (
-
-select
-    upper(o.root_offer_id) as root_offer_id_u
-  , max(o.offer_kind) as offer_kind
-from `marketing-data-442316`.claude.loyalty_offer_usage o
-group by
-    upper(o.root_offer_id)
-)
-
 select
     dd.business_date
   , case
-      when dd.discount_type = 'In-cart Points Redemption' then 'earned'
-      when dd.discount_type = 'Reward Redemption'
-           and ifnull(o.offer_kind, 'unlinked') <> 'promotional' then 'earned'
+      when dd.discount_type in ('Reward Redemption', 'In-cart Points Redemption')
+        then 'earned'
       else 'given'
     end as discount_basis
   , count(*) as discount_lines
   , count(distinct dd.brink_order_id) as orders
   , round(sum(dd.discount_amount), 2) as discount_amount
 from `marketing-data-442316`.claude.order_line_discount_detail dd
-    left join offers o
-    on o.root_offer_id_u = upper(dd.root_offer_id)
 where 1=1
     and dd.business_date between @start_date and @end_date
 group by
@@ -681,106 +649,109 @@ order by
   , discount_basis
 ```
 
-#### Why `Reward Redemption` alone is not the answer
+2026-05-01 → 2026-07-31: earned **103,540 lines / −$752,606.55**, out of 181,505 lines /
+−$1,485,468.22 of all discounts — **50.7% of discount dollars**.
 
-**Brink discount id `643571116` is one in-store POS program used for two different things.**
-Every in-store loyalty discount — points-purchased reward *and* marketing offer alike — rings
-up on that single id, and the build labels all of it `Reward Redemption`. There is no
-`'Offer'` bucket in-store at all; in-store offers have nowhere else to go.
+#### Why both Brink ids belong, including `643571116`
 
-Only the sessionM offer join separates them, and it does so cleanly. Measured
-2026-05-01 → 2026-07-31:
+**`643571116` is a purpose-built loyalty-redemption id** — the in-store Cafe Zupas Rewards
+button. It fires only when a member redeems something from their loyalty wallet. That is the
+definition of the id, not an inference from its contents.
 
-| `discount_type` | `discount_origin` | Brink `item_id` | `offer_kind` | Lines | Amount |
+The data agrees. Every reward line resolves to a sessionM member wallet offer
+(`root_offer_id`), on both ids and every origin:
+
+| `discount_type` | `discount_origin` | `item_id` | Lines | With wallet offer | Coverage |
 |---|---|---|---|---|---|
-| In-cart Points Redemption | Online / Kiosk | 643536109 | *(n/a — `points > 0`)* | 33,702 | −$275,674.39 |
-| Reward Redemption | In-Store / Kiosk | **643571116** | `points_purchase` | 32,299 | −$243,048.45 |
-| Reward Redemption | In-Store / Kiosk | **643571116** | **`promotional`** | **10,064** | **−$36,798.41** |
-| Reward Redemption | In-Store / Kiosk | 643571116 | no offer link | 415 | −$2,951.08 |
-| Reward Redemption | Online / Kiosk | 643536109 | *(no offer link — see blind spot)* | 27,060 | −$194,134.21 |
-| Offer | Online / Kiosk | 643536109 | `promotional` (**100%**) | 12,040 | −$112,060.67 |
+| Reward Redemption | In-Store | 643571116 | 42,173 | 41,767 | **99.0%** |
+| Reward Redemption | Online | 643536109 | 26,675 | 26,452 | **99.2%** |
+| Reward Redemption | Outdoor Kiosk | 643571116 | 605 | 597 | 98.7% |
+| Reward Redemption | Outdoor Kiosk | 643536109 | 385 | 383 | 99.5% |
+| In-cart Points Redemption | Online / Kiosk | 643536109 | 33,702 | n/a — `points > 0` on 100% | — |
 
-`offer_kind` has exactly two values and is a clean discriminator: `points_required > 0` on
-**100%** of `points_purchase` usage rows (59,190 rows redeemed in the window, avg 1,110 points)
-and on **0%** of `promotional` rows. The `promotional` names sitting inside `Reward Redemption`
-are unmistakably marketing, not earned — `$1 Happy Hour Mocktail` (4,374 lines),
-`Free Reg Drink w/ Purch` (1,251), `Birthday Free Dessert` (1,049), `$5 off Oconomowoc` (498),
-`Sip Pass - Free Daily Drink` (442), `$5 off Your First Order` (439), `Team Member Meal` (289),
-`Free Delivery`, `10% Off Catering - Adhoc`. The `points_purchase` names are the points menu,
-with prices: `Try 2 Combo` 1,950 pts, `Protein Bowl` 1,900, `Large Salad` 1,750,
-`Sandwich` 1,350, `Regular Drink` 450, `Chips` 300.
+`In-cart Points Redemption` carries the point spend directly: `points > 0` on **all 33,702
+lines**, 43.0M points in the window, zero exceptions.
 
-**Cost of getting it wrong**, same window:
+> **Do not "correct" this by excluding `offer_kind = 'promotional'` rows.** A wallet offer that
+> was issued rather than points-priced is still a loyalty redemption by a member — the program
+> earned it, and the steward's definition covers it. An earlier pass at this question excluded
+> them and understated earned by −$36,798.41. That was wrong.
 
-| Definition | Lines | Amount | Share of all discount $ |
-|---|---|---|---|
-| All discounts | 181,505 | −$1,485,468.22 | 100% |
-| Naive `type in ('Reward Redemption','In-cart Points Redemption')` | 103,540 | −$752,606.55 | 50.7% |
-| **Canonical (promotional excluded)** | **93,476** | **−$715,808.14** | **48.2%** |
-| Overstatement | 10,064 | **$36,798.41** | **+5.1% on earned** |
+#### Optional breakdown *within* earned — points-priced vs issued-to-wallet
 
-$36.8K per quarter, ~$147K/yr, and it lands entirely in-store — so the naive definition also
-makes in-store look like a heavier points-redeemer than it is.
+If someone asks specifically about **points cost, points liability, or what points bought**,
+they want the points-priced subset, not all of earned. `claude.loyalty_offer_usage.offer_kind`
+splits it: `points_purchase` = the guest paid points at a published price, `promotional` = the
+offer was issued into the wallet and redeemed at no point cost. Verified clean over offers
+redeemed in the window — `points_required > 0` on **59,190 of 59,190** `points_purchase` rows
+(avg 1,110 points) and **0 of 22,074** `promotional` rows.
 
-#### 🚨 `root_offer_id` case is inconsistent — `upper()` both sides or the join silently returns nothing
+| Subset of earned (in-store `643571116`, 2026-05-01 → 07-31) | Lines | Amount |
+|---|---|---|
+| `points_purchase` — points paid at a published price | 32,299 | −$243,048.45 |
+| `promotional` — offer issued to the wallet, redeemed free | 10,064 | −$36,798.41 |
 
-`order_line_discount_detail.root_offer_id` is populated by two arms of a `coalesce` that
-disagree on case. `odr.root_offer_id` (the sessionM path) is **UPPERCASE**;
-`pd.sessionM_root_offer_id` (the Pulse path) is **lowercase**. `claude.loyalty_offer_usage`
-is uppercase.
+The points menu with its prices: `Try 2 Combo` 1,950 pts, `Protein Bowl` 1,900,
+`Large Salad` 1,750, `Sandwich` 1,350, `Half Salad` 1,350, `Half Soup` 1,100,
+`Cheesecake` 1,000, `50% Off Try 2 Combo` 975, `Large Drink` 550, `Regular Drink` 450,
+`Chips` 300, `French Baguette Bread` 200. The issued-to-wallet side:
+`$1 Happy Hour Mocktail`, `Birthday Free Dessert`, `Free Reg Drink w/ Purch`,
+`Sip Pass - Free Daily Drink`, `$5 off Your First Order`, `$5 off Oconomowoc`, `Free Delivery`.
 
-Consequence measured 2026-08-18: joining without `upper()` matches **0 of 12,040** `Offer`
-lines and drops 317 `Reward Redemption` lines — and it fails *silently*, in the direction that
-makes `Offer` look unclassifiable. That is exactly how a first pass at this question concludes
-"offers have no master row." They all do. Always `upper()` both sides.
+**This is a breakdown, not a filter.** Both rows are earned. Present it only when the question
+is about points economics, and label the two rows in the words above — not as
+"earned vs not earned."
 
-> Build fix worth taking: wrap `pd.sessionM_root_offer_id` in `upper()` in
-> `sql/sales_ops.order_line_discount_detail.sql`, the same way `sessionM_user_offer_id`
-> already is one line above it.
+#### 🚨 `root_offer_id` case is inconsistent — `upper()` both sides or the join returns nothing
 
-#### ⚠️ The blind spot: the online reward path carries no offer evidence
+Independent of the definition, and still live. The column is
+`coalesce(odr.root_offer_id, pd.sessionM_root_offer_id)`: the sessionM arm is **UPPERCASE**,
+the Pulse arm is **lowercase**. `claude.loyalty_offer_usage.root_offer_id` is UPPERCASE.
 
-`Reward Redemption` on the online id `643536109` — **27,060 lines / −$194,134.21** in the
-window, ~26% of the earned total — has **no `points` and no usable `root_offer_id`** (only 317
-of 27,377 have one). It is classified earned on the strength of Pulse's own
-`order_discounts.type = 'reward'`, which the build trusts. That trust is *evidenced but not
-proven*: the sibling value `type = 'offer'` resolves to `promotional` on 100% of its lines once
-the case is fixed, so the field does discriminate. But we cannot rule out that the same
-in-store contamination exists online and is simply invisible.
+Joining without `upper()` matches **0 of 12,040** `Offer` lines and drops online reward lines
+too, and it fails **silently** — in the direction that makes wallet offers look unresolvable.
+Same offer under two cases: `06ce255f-b15b-405e-8b0b-720059a51715` (Pulse,
+`Sip Pass - Free Daily Drink`) vs `06CE255F-B15B-405E-8B0B-720059A51715` (sessionM).
 
-**Do not try to rescue it by name.** `discount_name` on that path holds the **discounted menu
-item's** name, not the reward's — `CHIPOTLE GLAZED`, `MEDITERRANEAN BOWL`,
-`MISS VICKIE'S SEA SALT & VINEGAR`, `DR. RED`, `FOUNTAIN DRINK`. Matching those against
-`loyalty_offer_usage.offer_name` produces coincidental hits (`TRY 2 COMBO` matches; `POWER BOWL`
-doesn't) and is a fabrication, not a resolution.
+Always `upper()` both sides. Build fix pending: `upper()` on `pd.sessionM_root_offer_id`, one
+line below where `sessionM_user_offer_id` already is.
 
-State this as a stated assumption whenever the answer leans on it: *"online reward redemptions
-are counted as earned on Pulse's own classification; unlike in-store, they cannot be
-independently verified against the points price."*
+#### ⚠️ Employee meals sit inside earned — don't double-count them
 
-#### Window rules for earned reporting
+**292 lines / −$4,255.83** in the window are `discount_type = 'Reward Redemption'` **and**
+`is_employee_meal_discount = true` — the `Team Member Meal` offer, issued to team members'
+loyalty wallets. Both flags are correct and both are canonical, so an earned-vs-employee
+rollup that treats the two as exclusive double-counts them. State which one the question is
+asking about; if it needs both, subtract the overlap explicitly.
 
-- **Reliable from 2024-01-01 forward.** In 2023 the unattributable `Error` bucket is **18.0%**
-  of loyalty-bucket dollars (−$407,324); it falls to 2.9% in 2024, 0.1% in 2025, 1.3% in 2026.
-- **2023 also spans the Punchh → sessionM cutover.** The legacy points programs
-  (`Punchh Loyalty` / `Punch Loyalty`, both ended 2023-05-30; `Loyalty Reward-Free Drink`,
-  `-Birthday Meal`, `-Free Dessert`, all ended 2023-02-10; `Catering Redemption`,
-  2023-05-31 → 2023-12-01) were earned in the old program's terms but carry **zero** `points`
-  and **zero** `root_offer_id`, so the definition above cannot see them. For a pre-2024
-  earned figure, add them by name explicitly and label the result as two incompatible programs
-  stitched together.
+#### Window rules
+
+- **Reliable 2024-01-01 forward.** Unattributable `Error` as a share of loyalty-bucket dollars:
+  **2023: 18.0%** (−$407,323.83) · 2024: 2.9% · 2025: 0.1% · 2026: 1.3%.
+- **2023 spans the Punchh → sessionM cutover**, and the legacy earned programs carry different
+  `discount_type` values the rule above does not name: `Punch Loyalty` 4,028 lines (→2023-05-30),
+  `Catering Redemption` 3,627 (2023-05-31→12-01), `Punchh Loyalty` 534 (→2023-02-15),
+  `Loyalty Reward-Free Drink` / `-Birthday Meal` / `-Free Dessert` 37 combined (→2023-02-10).
+  These *were* earned in the old program's terms. Add them by name for any pre-2024 figure and
+  label the result as two incompatible loyalty programs stitched together.
 - **`Offline Cafe Zupas Rewards`** (`item_id 643571119`, 2,225 lines full history) is always
-  **$0.00** — a marker line, not money. It never moves an earned dollar total; it will inflate
-  a line or order count.
-- **Never intraday** — the `Error` rule above applies here too. Answer through yesterday.
+  **$0.00** — a marker line. Harmless in dollar totals, inflates line and order counts. It is
+  not one of the two earned types, so the rule above already excludes it.
+- **Never intraday** — see the `Error` health signal below.
 
-#### Open build item
+#### ⚠️ Offer resolution shifts when a wide reload runs
 
-There is no `is_earned_discount` column on the mart yet. The definition above needs a
-three-table join every time it is asked, and the `upper()` trap is a live footgun for anyone
-reproducing it. The right shape is a boolean on `sales_ops.order_line_discount_detail`
-alongside `is_employee_meal_discount` — same reasoning, same precedent: *merge on the program,
-flag the intent*. Not built; steward call pending.
+Measured 2026-08-18: online reward `root_offer_id` coverage read **314 of 26,675 lines** early
+in the session and **26,452 of 26,675** after `sales_ops.order_line_discount_detail` was
+modified at 17:15 MT the same afternoon. Same table, same window, same query.
+
+The likely mechanism is the build's `offer_detail` CTE filtering
+`uo.create_date >= start_date - 60`: a narrow daily reload cannot see older offers, so
+`root_offer_id` goes NULL on rows a wide reload would resolve. **That explanation is untested** —
+do not repeat it as fact. What is certain: **wallet-offer attribution on this table is not
+stable across reload widths**, so a coverage percentage is only true as of a stated timestamp,
+and a low one means "check what last touched the partition" before it means "the data is
+missing." Same family as the `is_employee_meal_discount` widening note.
 
 ### 🚨 `Error` is a health signal — and today always fails it
 
@@ -1399,8 +1370,10 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 
 ## Gotchas checklist (scan before answering)
 
-- **🚨 "Earned" discounts are NOT `discount_type in ('Reward Redemption','In-cart Points Redemption')`** (steward definition 2026-08-18). Earned = traded for points. `In-cart Points Redemption` is 100% earned (`points > 0`, no exceptions), but **`Reward Redemption` is a mixed bucket**: Brink id `643571116` is one in-store POS program carrying both points-purchased rewards *and* marketing offers, because in-store has no `'Offer'` bucket to put them in. 10,064 lines / **−$36,798** of promotional offers hide inside `Reward Redemption` in 2026-05-01 → 2026-07-31 — a **+5.1%** overstatement of earned, entirely in-store. Split with `claude.loyalty_offer_usage.offer_kind` (`points_purchase` = earned, `promotional` = given). Full definition, SQL and blind spots in the discount section above.
-- **🚨 `order_line_discount_detail.root_offer_id` mixes UPPERCASE and lowercase — `upper()` both sides of any offer join.** The sessionM arm of the `coalesce` is uppercase, the Pulse arm is lowercase, and `claude.loyalty_offer_usage` is uppercase. Joining raw matches **0 of 12,040** `Offer` lines (measured 2026-08-18) and fails silently in the direction that makes offers look unclassifiable. Build fix pending: `upper()` on `pd.sessionM_root_offer_id`.
+- **"Earned" discounts = `discount_type in ('Reward Redemption','In-cart Points Redemption')`** (steward definition 2026-08-18). Both Brink ids belong: **`643571116` is a purpose-built in-store loyalty-redemption id** (the Cafe Zupas Rewards button), and 99.0–99.5% of reward lines on every id/origin resolve to a sessionM member wallet offer. `In-cart Points Redemption` carries the spend directly (`points > 0` on 100% of 33,702 lines). Earned = 103,540 lines / **−$752,606.55** of −$1,485,468.22 all discounts (50.7%), 2026-05-01 → 07-31. **Do not exclude `offer_kind = 'promotional'` rows** — a wallet offer issued rather than points-priced is still a member redemption; excluding them understates earned by −$36,798.41. `offer_kind` is a **breakdown within earned** for points-economics questions only. Full section above.
+- **⚠️ Employee meals sit inside earned — 292 lines / −$4,255.83** in the window are `Reward Redemption` **and** `is_employee_meal_discount = true` (the `Team Member Meal` wallet offer). Both flags are canonical and correct; an earned-vs-employee rollup treating them as exclusive double-counts. Subtract the overlap explicitly.
+- **🚨 `order_line_discount_detail.root_offer_id` mixes UPPERCASE and lowercase — `upper()` both sides of any offer join.** The sessionM arm of the `coalesce` is uppercase, the Pulse arm is lowercase, and `claude.loyalty_offer_usage` is uppercase. Joining raw matches **0 of 12,040** `Offer` lines (measured 2026-08-18) and fails silently in the direction that makes wallet offers look unresolvable. Build fix pending: `upper()` on `pd.sessionM_root_offer_id`.
+- **⚠️ Wallet-offer attribution is not stable across reload widths.** Online reward `root_offer_id` coverage read 314/26,675 lines early on 2026-08-18 and 26,452/26,675 after the table was rebuilt at 17:15 MT that afternoon — same query, same window. Likely the `offer_detail` CTE's `create_date >= start_date - 60` filter, but **untested — don't repeat it as fact**. Practical rule: a coverage figure is only true as of a stated timestamp, and a low one means "check what last touched the partition" before it means "the data is missing."
 
 - **🔴 Steward-only, and expensive: the `brink` child tables have no partitioning or clustering at all** (verified from DDL 2026-08-17). `brinkOrder` is `PARTITION BY BusinessDate`, but **`brinkOrderItem`, `brinkOrderSurcharge` and `brinkOrderDiscount` are plain unpartitioned tables keyed only on `orderId`**. Consequences, all measured 2026-08-15:
   - Looking up **one order** — `select boi.* from brink.brinkOrderItem where boi.orderId = 31418142951520` — billed **29.75 GiB**. There is no cheap single-order lookup in these tables.

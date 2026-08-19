@@ -126,30 +126,34 @@ Three scope points to resolve or state, beyond the standard forks:
 
 Full gotchas: [`data_dictionaries/claude.order_payment_tender.md`](../../data_dictionaries/claude.order_payment_tender.md).
 
-### "Earned" / "redeemed" discounts mean points were traded (steward decision 2026-08-18)
+### "Earned" / "redeemed" discounts mean the two loyalty redemption types (steward decision 2026-08-18)
 
-A guest **earned** a discount only if they paid points for it. Everything else was **given** —
-marketing offers, in-store promotions, service recovery, manager discretion, employee meals.
-Resolve this before asking anything else, because the obvious filter is wrong:
+**Earned = `discount_type in ('Reward Redemption', 'In-cart Points Redemption')`** on
+`claude.order_line_discount_detail`. Given = everything else — marketing offers outside the
+loyalty wallet, in-store promotions, third-party discounts, service recovery, manager
+discretion, employee benefit.
 
-**Do not use `discount_type in ('Reward Redemption', 'In-cart Points Redemption')`.**
-`In-cart Points Redemption` is 100% earned, but **`Reward Redemption` is a mixed bucket** —
-Brink id `643571116` is a single in-store POS program carrying both points-purchased rewards
-and marketing offers, because the `'Offer'` label is only reachable on the online path.
-10,064 lines / **−$36,798** of marketing offers sit inside `Reward Redemption` over
-2026-05-01 → 2026-07-31, a **+5.1%** overstatement of earned, all of it in-store.
+Both Brink ids are loyalty ids: **`643571116` is the purpose-built in-store Cafe Zupas Rewards
+id** and fires only on a member wallet redemption (99.0–99.5% of reward lines carry a sessionM
+`root_offer_id`), while `In-cart Points Redemption` carries the point spend directly
+(`points > 0` on 100% of lines). Earned is **−$752,606.55 of −$1,485,468.22** all discounts
+over 2026-05-01 → 07-31 (50.7%).
 
-Split it with `claude.loyalty_offer_usage.offer_kind` — `points_purchase` = earned,
-`promotional` = given — and **`upper()` both sides of the `root_offer_id` join**, which is
-mixed-case and otherwise matches nothing. Canonical SQL and the two blind spots (the online
-reward path has no offer evidence; 2023 has an 18% unattributable `Error` bucket) are in
-[`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
+**Do not narrow it.** A wallet offer that was issued rather than points-priced is still a
+member redemption. Excluding `offer_kind = 'promotional'` understates earned by −$36,798.41.
+
+**No fork to present** — the split is decided, not a user choice. State the resolved meaning in
+the answer: *"earned = redeemed through the loyalty program; marketing offers outside the
+wallet, promotions and manager discounts are excluded."*
+
+**One follow-up is worth asking**, but only when the question is about **points cost, points
+liability, or what points bought** — that wants the `points_purchase` subset of earned
+(−$243,048.45), not all of it. Anything phrased as redemptions, giveaway, or discount spend
+wants all of earned.
+
+Full definition, the `upper()` join trap on `root_offer_id`, the employee-meal overlap, and the
+pre-2024 window rule are in [`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
 [`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
-
-**No fork to present here** — the split is decided, not a user choice. State the resolved
-meaning in the answer instead: *"earned = traded for points; marketing offers and in-store
-promotions are excluded."* If the user wants the give-aways too, that's a second row in the
-same breakdown, not a different definition.
 
 ## Step 2 — ask once, with clickable options
 

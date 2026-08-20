@@ -160,9 +160,9 @@ Also note:
 
 Note that bitmask 2 mixes genuine reward redemptions with manual support deductions and fraud clawbacks, which is why the column is named `redeemed_or_deducted`. For redemptions specifically tied to a reward, join to `loyalty_offer_usage` on the member and date, or use `points_spent` on that view.
 
-## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
+## SQL style (steward rule 2026-07-23, extended 2026-07-29 and 2026-08-20 — MANDATORY)
 
-Same as `sales-ops-orders` — read that section for the full rules and a worked example. In short: fully qualified table names with **backticks around the project only** (`` `marketing-data-442316`.claude.loyalty_user lu ``, never the whole path) **and** an alias on every single column reference (even in single-table queries); lowercase except where a schema name or compared literal needs case; leading commas, one column per line; `where 1=1` first, then one `and` per line; each join with `on` lined up beneath it and one extra indent per successive join. Fixed aliases: `order_customer` → `oc`, `order_lines` → `ol`.
+Same as `sales-ops-orders` — read that section for the full rules and a worked example. In short: fully qualified table names with **backticks around the project only** (`` `marketing-data-442316`.claude.loyalty_user lu ``, never the whole path) **and** an alias on every single column reference (even in single-table queries); lowercase except where a schema name or compared literal needs case; leading commas, one column per line with **the first field flush with `select` / `group by` / `order by` rather than indented**, and **exactly one space before `as` (no alignment padding)**; `where 1=1` first, then one `and` per line; each join with `on` lined up beneath it and one extra indent per successive join. Fixed aliases: `order_customer` → `oc`, `order_lines` → `ol`.
 
 ## Join patterns
 
@@ -170,7 +170,7 @@ Same as `sales-ops-orders` — read that section for the full rules and a worked
 
 ```sql
 select
-  lb.member_program
+lb.member_program
 , count(distinct lb.user_id) as members
 , round(sum(lb.current_balance)) as points_balance
 , round(sum(oc.net_sales), 2) as net_sales
@@ -189,7 +189,7 @@ group by 1
 
 ```sql
 select
-  lb.user_id
+lb.user_id
 , lb.current_balance
 , sum(le.points_expiring) as expiring_next_90d
 from `marketing-data-442316`.claude.loyalty_points_balance lb
@@ -209,7 +209,7 @@ group by 1,2
 
 ```sql
 select
-  pe.point_account_name
+pe.point_account_name
 , format_date('%Y-%m', pe.expires_on) as expiry_month
 , count(distinct pe.user_id) as members
 , round(sum(pe.points_expiring)) as points_expiring
@@ -225,7 +225,7 @@ order by 1,2
 
 ```sql
 select
-  format_date('%Y-%m', pa.activity_date) as month
+format_date('%Y-%m', pa.activity_date) as month
 , pa.point_account_name
 , round(sum(pa.points_issued)) as points_issued
 , round(sum(pa.points_redeemed)) as points_redeemed
@@ -242,7 +242,7 @@ order by 1,2
 
 ```sql
 select
-  ou.offer_kind
+ou.offer_kind
 , ou.offer_name
 , ou.points_required
 , count(*) as times_issued
@@ -261,7 +261,7 @@ order by times_redeemed desc
 
 ```sql
 select
-  cp.campaign_name
+cp.campaign_name
 , cp.campaign_type
 , cp.action_category
 , count(distinct cp.user_id) as members

@@ -85,7 +85,7 @@ Step 1 — resolve the window (tiny scan, run it first):
 
 ```sql
 select
-  min(dd.cal_date) as start_date
+min(dd.cal_date) as start_date
 , max(dd.cal_date) as end_date
 from `marketing-data-442316`.claude.date_dim dd
 where 1=1
@@ -97,7 +97,7 @@ Step 2 — query the fact with those literals, joining `date_dim` only for label
 
 ```sql
 select
-  dd.fsc_period
+dd.fsc_period
 , dd.fsc_week
 , min(dd.week_beginning) as week_beginning
 , count(distinct oc.brink_order_id) as orders
@@ -120,7 +120,7 @@ pattern here is the two-step date resolution, not the measure list.)
 ```sql
 -- step 1: current period, then the window of the 13 complete periods before it
 select
-  min(dd.cal_date) as start_date
+min(dd.cal_date) as start_date
 , max(dd.cal_date) as end_date
 from `marketing-data-442316`.claude.date_dim dd
 where 1=1
@@ -143,7 +143,7 @@ precisely so this needs no year-boundary arithmetic.
 
 ```sql
 select
-  ifnull(dd.holiday, '(ordinary day)') as day_kind
+ifnull(dd.holiday, '(ordinary day)') as day_kind
 , count(distinct oc.business_date) as days
 , round(sum(oc.net_sales) / count(distinct oc.business_date), 0) as net_sales_per_day
 from `marketing-data-442316`.claude.order_customer oc
@@ -177,8 +177,10 @@ These forks join the standard set in `ask-a-data-question`:
 ## SQL style (steward rule — MANDATORY)
 
 Same as `sales-ops-orders` — read that section for the full rules. Backticks around the
-project only, alias every column, leading commas, `where 1=1`, one extra indent per
-successive join. Fixed aliases: `oc`, `ol`, and **`dd`** for `date_dim`.
+project only, alias every column, leading commas with **the first field flush with `select`
+(and flush with `group by` / `order by`), never indented**, **one space before `as` — no
+alignment padding**, `where 1=1`, one extra indent per successive join. Fixed aliases: `oc`,
+`ol`, and **`dd`** for `date_dim`.
 
 ## Known gaps / not yet answerable
 

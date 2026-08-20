@@ -125,7 +125,7 @@ raw payment tables — **which remain off-limits directly**.
 
 ```sql
 select
-  opt.payment_tender
+opt.payment_tender
 , count(*) as order_qty
 , round(sum(oc.net_sales), 2) as net_sales
 from `marketing-data-442316`.claude.order_customer oc
@@ -313,7 +313,7 @@ Rules specific to this table:
 **Top lifetime-value customers:**
 ```sql
 select
-  ca.mapped_cust_id
+ca.mapped_cust_id
 , ca.lifetime_order_count
 , ca.lifetime_net_sales
 , ca.primary_store_name
@@ -328,7 +328,7 @@ limit 50
 **Lapsed customers who used to be frequent (win-back candidates):**
 ```sql
 select
-  ca.mapped_cust_id
+ca.mapped_cust_id
 , ca.mapped_email
 , ca.lifetime_order_count
 , ca.last_order_date
@@ -344,7 +344,7 @@ order by ca.lifetime_net_sales desc
 **Multi-store customers, with the store list expanded:**
 ```sql
 select
-  ca.mapped_cust_id
+ca.mapped_cust_id
 , ca.lifetime_store_count
 , s.store_name
 , s.orders
@@ -579,7 +579,7 @@ Since the 2026-07-30/31 fixes, `item_type not in ('Discount','Promotion')` is a 
 
 ```sql
 select
-  ol.description as promotion_name
+ol.description as promotion_name
 , count(*) as lines
 , round(sum(ol.amount), 2) as promotion_amount
 from `marketing-data-442316`.claude.order_lines ol
@@ -597,7 +597,7 @@ Same shape as promotion reporting, but group by **`item_name`** — on discount 
 
 ```sql
 select
-  ol.item_name as discount_program
+ol.item_name as discount_program
 , count(*) as lines
 , round(sum(ol.amount), 2) as discount_amount
 from `marketing-data-442316`.claude.order_lines ol
@@ -643,16 +643,16 @@ own `discount_type`. Row count runs **~1.5% above the source line count** (3,440
 
 ```sql
 select
-  dd.discount_type
+dd.discount_type
 , count(distinct dd.brink_order_id) as orders
 , round(sum(dd.discount_amount), 2) as discount_amount
 from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 group by
-  dd.discount_type
+dd.discount_type
 order by
-  discount_amount
+discount_amount
 ```
 
 ### Employee / team-member meal questions — use `is_employee_meal_discount` (new 2026-08-17)
@@ -663,7 +663,7 @@ covers them. `is_employee_meal_discount` is the canonical flag and is never NULL
 
 ```sql
 select
-  dd.business_date
+dd.business_date
 , count(distinct dd.brink_order_id) as employee_meal_orders
 , round(sum(dd.discount_amount), 2) as employee_meal_discount
 from `marketing-data-442316`.claude.order_line_discount_detail dd
@@ -671,9 +671,9 @@ where 1=1
 and dd.business_date between @start_date and @end_date
 and dd.is_employee_meal_discount = true
 group by
-  dd.business_date
+dd.business_date
 order by
-  dd.business_date
+dd.business_date
 ```
 
 It replaces **`order_customer.is_employee_discount`**, which was **dropped from the table on
@@ -716,24 +716,24 @@ discretion, employee benefit.
 
 ```sql
 select
-    dd.business_date
-  , case
-      when dd.discount_type in ('Reward Redemption', 'In-cart Points Redemption')
-        then 'earned'
-      else 'given'
-    end as discount_basis
-  , count(*) as discount_lines
-  , count(distinct dd.brink_order_id) as orders
-  , round(sum(dd.discount_amount), 2) as discount_amount
+dd.business_date
+, case
+    when dd.discount_type in ('Reward Redemption', 'In-cart Points Redemption')
+      then 'earned'
+    else 'given'
+  end as discount_basis
+, count(*) as discount_lines
+, count(distinct dd.brink_order_id) as orders
+, round(sum(dd.discount_amount), 2) as discount_amount
 from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
-    and dd.business_date between @start_date and @end_date
+and dd.business_date between @start_date and @end_date
 group by
-    dd.business_date
-  , discount_basis
+dd.business_date
+, discount_basis
 order by
-    dd.business_date
-  , discount_basis
+dd.business_date
+, discount_basis
 ```
 
 2026-05-01 → 2026-07-31: earned **103,540 lines / −$752,606.55**, out of 181,505 lines /
@@ -872,20 +872,20 @@ things break it and all three look like a data defect:
 ```sql
 with dd as (
 select
-  dd.business_date
+dd.business_date
 , dd.brink_order_id
 , abs(round(sum(dd.discount_amount), 2)) as amount
 from `marketing-data-442316`.claude.order_line_discount_detail dd
 where 1=1
 and dd.business_date between @start_date and @end_date
 group by
-  dd.business_date
+dd.business_date
 , dd.brink_order_id
 )
 
 , oc as (
 select
-  oc.business_date
+oc.business_date
 , oc.brink_order_id
 , round(oc.total_discount_amount + oc.total_promotions_amount, 2) as order_discount
 from `marketing-data-442316`.claude.order_customer oc
@@ -895,7 +895,7 @@ and oc.store_id not in (1111, 999)
 )
 
 select
-  dd.business_date
+dd.business_date
 , dd.brink_order_id
 , dd.amount
 , oc.order_discount
@@ -1102,9 +1102,9 @@ Same pending decision, same Asana task.
 > The legacy column name is `mapped_domain` on `sales_ops.OrderCustomer`; on the current
 > `order_customer` / `claude.order_customer` it is **`mapped_email_domain`**.
 
-## SQL style (steward rule 2026-07-23, extended 2026-07-29 — MANDATORY)
+## SQL style (steward rule 2026-07-23, extended 2026-07-29 and 2026-08-20 — MANDATORY)
 
-All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. Match the build scripts in `sql/`:
+All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. The rules below are the source of truth. **Do not copy layout from `sql/`** — those build scripts predate the 2026-08-20 first-field and alias-padding rules and are deliberately left unreformatted so the repo stays diffable against the deployed scheduled-query text; each one gets reformatted the next time it is actually deployed.
 
 1. **Fully qualify everything — tables *and* every column reference.**
    - Tables: `` `marketing-data-442316`.dataset.table ``. Never rely on a default project or dataset.
@@ -1117,14 +1117,36 @@ All SQL — shown to users or executed — follows the steward's format so he ca
 3. **Lowercase whenever possible**: keywords, functions, aliases, CTE names. Case only where the identifier or value requires it — schema column names as they actually exist (`business_date` on `order_lines`) and string literals being compared (`'Third Party'`).
 4. **Layout**:
    - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
+   - **the first field is flush with `select` — do not indent it** (steward rule 2026-08-20). `group by` and `order by` lists follow the same rule: first field flush with the keyword, then `, field` lines beneath it. A leading-comma list has no reason to be indented; indenting the first field alone just makes it fail to line up with everything under it
+   - **exactly one space before `as` — never pad or column-align aliases** (steward rule 2026-08-20). `oc.net_sales as net_sales`, not `oc.net_sales                 as net_sales`. Alignment padding survives exactly one edit before it's wrong, and it turns a one-column change into a whole-block diff
    - CTEs: `with name as (` … `)`, chained as `, next_name as (`
    - **`where 1=1` is always the first condition**, then each real condition on its own `and ...` line — so conditions can be added, removed, or commented out without touching the rest
    - each join on its own line with `on ...` on the line directly beneath it, **lined up with the `join`**
    - **indent one additional level for each successive join**, so nesting depth is readable at a glance
 
+Wrong — indented first field, padded aliases:
+
 ```sql
 select
-  oc.business_date
+  oc.business_date                        as business_date
+, oc.store_id                             as store_id
+, count(distinct oc.brink_order_id)       as orders
+```
+
+Right:
+
+```sql
+select
+oc.business_date as business_date
+, oc.store_id as store_id
+, count(distinct oc.brink_order_id) as orders
+```
+
+Full worked example:
+
+```sql
+select
+oc.business_date
 , oc.store_id
 , ol.item_name
 , count(distinct oc.brink_order_id) as orders
@@ -1139,11 +1161,11 @@ and oc.business_date between @start and @end
 and ol.business_date between @start and @end
 and oc.store_id <> 1111
 group by
-  oc.business_date
+oc.business_date
 , oc.store_id
 , ol.item_name
 order by
-  oc.business_date
+oc.business_date
 ```
 
 ## Join patterns
@@ -1425,7 +1447,7 @@ lifetime counts, and everything in `customer_attribute`.
 
 ```sql
 select
-  oc.business_date
+oc.business_date
 , count(*) as all_orders
 , countif(oc.sm_external_user_id is not null) as sm_linked
 , countif(oc.customer_type = 'person') as person_orders

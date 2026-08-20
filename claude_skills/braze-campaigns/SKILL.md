@@ -72,7 +72,7 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 
   ```sql
   case when is_canvas = 1 then 'canvas' else 'campaign' end as program_type
-  , coalesce(nullif(campaign_id, ''), canvas_id)   as program_id
+  , coalesce(nullif(campaign_id, ''), canvas_id) as program_id
   , coalesce(nullif(campaign_name, ''), canvas_name) as program_name
   ```
 
@@ -96,7 +96,7 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 ## Conventions these templates follow (team SQL style)
 
 - All lower case; fully-qualified table names with backticks around **the project only** (`` `marketing-data-442316`.braze.table ``, never `` `marketing-data-442316.braze.table` ``).
-- **Steward SQL layout (mandatory 2026-07-23, extended 2026-07-29, applies to ALL generated SQL):** select list one column per line with leading commas; column aliases use `as`; **every column reference carries its table alias — no bare column names anywhere, even in single-table queries**; CTEs chained `with a as (...)`, `, b as (...)`; `where 1=1` as the first condition, then one `and ...` per line; each join on its own line with `on ...` on the next line lined up beneath the join, **one extra indent per successive join**; short lowercase table aliases (fixed: `order_customer` → `oc`, `order_lines` → `ol`). See the "SQL style" section of `claude_skills/sales-ops-orders/SKILL.md` and the build scripts in `sql/` for reference.
+- **Steward SQL layout (mandatory 2026-07-23, extended 2026-07-29 and 2026-08-20, applies to ALL generated SQL):** select list one column per line with leading commas; **the first field is flush with `select`, not indented** (same for `group by` / `order by` lists); column aliases use `as` with **exactly one space before it — never padded or column-aligned**; **every column reference carries its table alias — no bare column names anywhere, even in single-table queries**; CTEs chained `with a as (...)`, `, b as (...)`; `where 1=1` as the first condition, then one `and ...` per line; each join on its own line with `on ...` on the next line lined up beneath the join, **one extra indent per successive join**; short lowercase table aliases (fixed: `order_customer` → `oc`, `order_lines` → `ol`). See the "SQL style" section of `claude_skills/sales-ops-orders/SKILL.md` for the source of truth — **not** the build scripts in `sql/`, which predate the 2026-08-20 layout rules and stay unreformatted so the repo remains diffable against deployed scheduled-query text.
 - **All datasets are read-only.** Materialize intermediate results ONLY in `marketing-data-442316.scratch` (the single writable dataset; 7-day auto-expiry). Use `create table`, not views over heavy unions.
 - **Early partition filtering** on `event_date` in every base CTE.
 - Select only the columns needed.
@@ -113,7 +113,7 @@ It unions the seven activity tables (email, push, SMS, RCS, content card, banner
 ```sql
 -- after the normalized select (call it activity_norm):
 select
-  an.event_date
+an.event_date
 , an.program_type
 , an.program_id
 , an.program_name
@@ -125,12 +125,12 @@ from activity_norm an
 where 1=1
 and an.program_id is not null
 group by
-  an.event_date
+an.event_date
 , an.program_type
 , an.program_id
 , an.program_name
 order by
-  an.event_date
+an.event_date
 , an.program_name;
 ```
 
@@ -229,7 +229,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
   ```sql
   select
-    u.external_id
+  u.external_id
   , max(case
         when json_value(a, '$.platform') in ('iOS', 'Android')
          and json_value(a, '$.first_used') is not null
@@ -294,7 +294,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
   ```sql
   select
-    e.name as event_name
+  e.name as event_name
   , k as property_key
   , count(*) as events
   from `marketing-data-442316`.braze.customevent e
@@ -352,14 +352,14 @@ A **future-dated** watermark means the merge job is holding the lock and is mid-
 
 ```sql
 select
-  lw.job_name
+lw.job_name
 , lw.watermark
 , lw.updated_at
 , lw.watermark > current_timestamp() as lock_currently_held
 from `marketing-data-442316`.braze.load_watermark lw
 where 1=1
 order by
-  lw.job_name
+lw.job_name
 ```
 
 Check this alongside the ~2-day event maturation rule below. `watermark` is already a TIMESTAMP — see the caveat about not casting it.

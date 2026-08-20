@@ -451,7 +451,7 @@ should appear in the daily query-log review (or query it directly). Confirm the 
 
 ```sql
 select
-  creation_time
+creation_time
 , user_email
 , job_id
 , labels

@@ -201,9 +201,29 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   > | `cast(event_timestamp as timestamp)`, or any `braze.users` `*_at` column as-is | **`oc.order_timestamp_utc`** (TIMESTAMP) | ✅ Types match **and** both are UTC |
   > | raw `event_timestamp` (DATETIME) | `oc.order_datetime` (DATETIME) | ⚠️ Compiles, silently wrong — see below |
   >
-  > The second row is the trap worth more than the type error: `order_datetime` is **store-local business time** and Braze `event_timestamp` is **UTC**, so a DATETIME-to-DATETIME comparison type-checks cleanly and is off by 6–7 hours. In a "did the email precede the order?" or "first app use within 30 days of first order" test, that silently reclassifies every event inside the offset window. **Reach for `order_timestamp_utc` on any cross-source time comparison; keep `order_datetime` for reporting a local time to a human.** If you must use `order_datetime`, convert explicitly — `timestamp(oc.order_datetime, 'America/Denver')` — and say so.
+  > The second row is the trap worth more than the type error: `order_datetime` is **store-local business time** and Braze `event_timestamp` is **UTC**, so a DATETIME-to-DATETIME comparison type-checks cleanly and is off by 4–7 hours. In a "did the email precede the order?" or "first app use within 30 days of first order" test, that silently reclassifies every event inside the offset window. **Reach for `order_timestamp_utc` on any cross-source time comparison; keep `order_datetime` for reporting a local time to a human.**
   >
   > Generalisable lesson: a type error is loud and gets fixed in seconds; the timezone error underneath it is silent and survives. When a cross-source join errors on types, pick the column pair that fixes **both** problems rather than casting until it compiles.
+
+  > **🚨 `timestamp(order_datetime)` is the bare cast, and it is the single most common wrong "fix" for the type error above — observed in 73 of one analyst's 160 queries on 2026-08-19, with `order_timestamp_utc` appearing in **zero** of them.** `timestamp(DATETIME)` with no second argument assumes the value is **UTC**. `order_datetime` is store-local, so the cast produces a timestamp that is *earlier than reality by the store's UTC offset* — and it compiles, runs, and returns a plausible number.
+  >
+  > **The offset is not a constant, so it cannot be corrected downstream.** Measured on `claude.order_customer`, 2026-08-01 → 08-16, 355,700 orders, `timestamp_diff(order_timestamp_utc, timestamp(order_datetime), hour)`:
+  >
+  > | True offset | Orders | States |
+  > |---|---|---|
+  > | 4 h | 7,518 | Ohio |
+  > | 5 h | 101,855 | Illinois, Minnesota, Texas, Wisconsin |
+  > | 6 h | 159,691 | Idaho, Utah |
+  > | 7 h | 78,406 | Arizona, Nevada |
+  > | *NULL* | 8,230 | see the NULL box below |
+  >
+  > The chain spans **four** live offsets, so `timestamp(oc.order_datetime, 'America/Denver')` — which an earlier revision of this file recommended as the explicit fallback, and which is now **retracted** — is wrong for 187,779 of those 355,700 orders (52.8%). There is no single timezone literal that is correct for Cafe Zupas. The bias is also one-directional: every order looks earlier than it happened, so an *order-after-exposure* test **under-attributes** and a *pre-exposure* test over-counts.
+  >
+  > **Rule: never build a UTC order timestamp yourself.** `order_timestamp_utc` already applies each store's own `timezone_name`. If a `timestamp(` wrapping `order_datetime` appears anywhere in a cross-source query, that query's attribution is wrong.
+
+  > **⚠️ `order_timestamp_utc` is NULL for stores whose `store_info.timezone_name` is missing — new stores fail silently** (found 2026-08-19, Asana 1217684772713570). It is built as `timestamp(order_datetime, s.timezone_name)`, and `timestamp()` returns NULL on a NULL timezone. Six stores currently have no `timezone_name`: **191** San Tan Valley (AZ), **192** Ocotillo (AZ), **196** Westgate (AZ), **197** Rexburg (ID), **198** Signal Butte (AZ), **199** Tooele (UT). Two are already trading, and over 2026-08-01 → 08-16 they account for **8,230 orders with a NULL `order_timestamp_utc`** (197 Rexburg 6,330 since 08-03; 191 San Tan Valley 1,895 since 08-11).
+  >
+  > A NULL never errors — it fails every inequality — so a newly-opened store is **invisible in every Braze attribution and UTC-windowed analysis** rather than throwing. Two obligations: **(1)** before quoting an attribution figure, check `countif(oc.order_timestamp_utc is null)` over your window and say what it excluded; **(2)** if a new store is in scope, the number is not answerable until the timezone is populated — surface it as a data gap, don't quietly drop the store. Expect this to recur with every opening until the `store_info` build defaults the timezone.
 - **`braze.users` is not partitioned** — every query against it is a full scan. Touch it once per analysis (or wait for the planned user-dim mart), not inside repeated CTE runs.
 - **`braze.users` join key is `external_id`, NOT `external_user_id`** — the event tables call the customer id `external_user_id`; the user dimension calls the same id `external_id`, and there is no `external_user_id` column on it (an MCP query failed on exactly this 2026-08-03: `Name external_user_id not found inside u`). Join `on u.external_id = es.external_user_id`. Its nested columns (`custom_attributes`, `apps`, `devices`, `user_aliases`, …) are all **native JSON** — no `parse_json`, see the `json_keys` note above. App-adoption pattern (mined from working analyst SQL 2026-08-03): one row per user with platform and first-use time via
 

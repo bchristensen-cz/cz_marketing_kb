@@ -26,7 +26,14 @@ status. Join it to any order/line table on `store_id` to break results out by ge
 | `latitude` | FLOAT | NULL on the non-store rows |
 | `longitude` | FLOAT | |
 | `weather_cluster_id` | INTEGER | 12 distinct. From `marketing_ops.zip_weather_cluster`, refreshed daily |
-| `timezone_name` | STRING | IANA name (`America/Denver`, `America/Chicago`), 5 distinct. Use this one |
+| `timezone_name` | STRING | IANA name (`America/Denver`, `America/Chicago`), 5 distinct. Use this one. **⚠️ NULL on 6 stores as of 2026-08-19 — this silently NULLs `order_timestamp_utc` on both order marts. See the gotcha below.** |
+
+> **🚨 OPEN 2026-08-19 — a missing `timezone_name` silently removes a store from every UTC-based analysis** (Asana 1217684772713570). Both order marts build
+> `order_timestamp_utc = timestamp(order_datetime, s.timezone_name)`, and BigQuery's `timestamp()` returns **NULL** on a NULL timezone rather than erroring. So a store with no timezone has no UTC order timestamp, fails every inequality against a Braze (UTC) event, and disappears from the result instead of raising.
+>
+> Six stores currently have a NULL `timezone_name`: **191** San Tan Valley (AZ, opened 2026-08-14), **192** Ocotillo (AZ), **196** Westgate (AZ), **197** Rexburg (ID, opened 2026-08-05), **198** Signal Butte (AZ), **199** Tooele (UT). Two are already trading: over 2026-08-01 → 08-16 they produced **8,230 orders with a NULL `order_timestamp_utc`** (197 Rexburg 6,330 since 08-03, 191 San Tan Valley 1,895 since 08-11; the remaining 5 are one-off rows at established stores).
+>
+> **This is a recurring-by-construction defect, not a one-time data entry miss** — the same 4 of these 6 stores also carry a NULL `store_open_date` (see that row), so new openings arrive in this table incomplete and the hole grows with each one. Until the build defaults `timezone_name` (from `store_state`, or by failing loudly), any analysis joining orders to a UTC source must check `countif(order_timestamp_utc is null)` over its window and state what was excluded.
 
 ## "Market" means `store_state` (steward decision 2026-07-30)
 

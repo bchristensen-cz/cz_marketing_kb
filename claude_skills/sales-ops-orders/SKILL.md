@@ -81,7 +81,9 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
 
    There is also a **`claude.store_info`** view for the attributes that aren't denormalised (city, zip, address, open date, comp status, lat/long, timezone); it carries a `market` column aliasing `store_state`, and drops three non-store rows. See [`data_dictionaries/claude.store_info.md`](../../data_dictionaries/claude.store_info.md).
 
-   > **⚠️ The market column is NULL for stores 1111 and 999** on both views — `store_info` has no row for either. A market breakdown **without `store_id <> 1111` grows a phantom tenth market**: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
+   > **⚠️ The market column is NULL for stores 1111 and 999** — `store_info` has no row for either. On **`sales_ops`**, a market breakdown **without `store_id not in (1111, 999)` grows a phantom tenth market**: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
+   >
+   > **Correction 2026-08-19 — this box previously said "on both views," which was wrong.** `claude.order_customer` and `claude.order_lines` **already exclude both stores in the view definition** (`store_id not in (1111, 999)`, read from `INFORMATION_SCHEMA.VIEWS.view_definition`), so the phantom market cannot appear on the `claude` layer and the predicate there is redundant, not load-bearing. See the per-view table in [the store-exclusion section](#store-11111999-which-layer-already-excludes-them-measured-2026-08-19) — the exclusion is **not uniform** across the five `claude` views, which is why you should keep writing it rather than relying on the layer.
 
 ### `claude.order_customer` folds in the sequencing and lifetime columns
 
@@ -399,6 +401,27 @@ Three things worth carrying forward:
 2. **A wall breach can have a legitimate cause, and the cause is the thing to fix.** Five templates reach into `pulse.order_customers` under a predicate of `oc.email is null and oc.mapped_email is null` on `source in ('mobile_web_source','web_source')` — they are recovering **the email a guest typed at checkout**, which no mart column carries. That's a mart gap wearing a breach's clothes (Asana 1217645882648277, flagged as inferred from SQL and not yet measured). Closing it removes the motive for about a third of the pulse queries; repeating the rule would not.
 3. **The clean day did not stick.** 08-14 had zero `pulse.*` queries and was recorded as progress. 08-18 has 34, at higher volume than the 08-04 record. One compliant day is noise, not a trend — don't close a systemic finding on it.
 
+**Eighth business day, 2026-08-19 — the migration finally happened, and it carried a silent error across with it.** Same analyst account, 160 MCP jobs / **431.49 GiB** (08-18: 144 / 460.37). The first genuine movement in eight reviews:
+
+| Signal | 2026-08-18 | 2026-08-19 |
+|---|---|---|
+| Queries referencing `claude.*` | 4 | **44** |
+| Queries with `customer_type = 'person'` | 4 | **54** |
+| Queries referencing legacy `sales_ops.OrderCustomer` | 41 / 293.84 GiB | 39 / **184.72 GiB** |
+| Cohorts keyed on `mapped_cust_id` | ~0 | 13 (vs 102 still email-keyed) |
+| `having date(min(odt)) between …` unbounded shape | most | 67 |
+| Hard-coded future end date `2026-09-13` | 17 | 8 |
+
+Three lessons, and the middle one is the reason to read this section rather than skim the table.
+
+1. **A partial migration is progress and must be recorded as such.** Guidance did move a template that three previous write-ups could not. What moved it was not repetition — it was the cost argument plus a working correct example, and the residue is concentrated in the *saved* file rather than in the analyst's judgement (Asana 1217645792289097).
+
+2. **🚨 The migration introduced a new, silent, worse defect than the one it fixed: 73 of the 160 queries carry `timestamp(order_datetime)`, and `order_timestamp_utc` appears in zero of them.** The 2026-08-17 `TIMESTAMP vs DATETIME` type error was resolved by wrapping the local datetime in a bare `timestamp()` — which assumes UTC — instead of switching to the UTC column. `order_datetime` is **store-local**, and the chain spans **four** live UTC offsets (Ohio 4 h, IL/MN/TX/WI 5 h, ID/UT 6 h, AZ/NV 7 h — measured 2026-08-01 → 08-16, 355,700 orders), so every affected order reads 4–7 hours earlier than it happened, with **no constant offset available to correct it downstream**. Full measurement and the retraction of the old `timestamp(x, 'America/Denver')` advice are in [`braze-campaigns`](../braze-campaigns/SKILL.md). **The general lesson: when you push a user off a wrong table, check what they did to the code to make it compile against the right one.** Fixing the routing does not fix the semantics, and the second error is quieter than the first — a wrong table returns numbers someone might sanity-check, a wrong timezone returns numbers nobody can.
+
+3. **One reported "regression" was not one — verify a dropped filter before writing it up.** 42 of the 44 migrated `claude.order_customer` queries dropped their `store_id <> 1111` predicate, which looks exactly like a compliance regression. It isn't: the view already excludes 1111 and 999. Checking `view_definition` took one query and prevented a false finding — and turned up the real one, that the exclusion is *inconsistent across the five `claude` views*. See [the per-view table](#store-11111999-which-layer-already-excludes-them-measured-2026-08-19).
+
+> **✅ The positive control, same day.** A second MCP account (`dgetz@`) ran 26 jobs / 13.5 GiB with **zero** raw-dataset queries and zero legacy-table queries, diagnosing a guest-checkout-recovery canvas: `claude.order_customer` with `customer_type = 'person'`, `is_catering = false`, a real partition filter, the folded `customer_order_count` / `days_since_prev_order` columns, **`order_timestamp_utc`** for the Braze comparison, `date_trunc(business_date, week(monday))` for the Mon–Sat business week, and intermediate cohorts materialized in `scratch` per hard rule 7 rather than re-scanned per query. Cheapest single query in the day's log was 0.01 GiB. Two analysts, same board, same day, a **32x** cost difference — worth quoting when the compliant path needs an advocate.
+
 ### ⚠️ Commenting out the date filter is not "widening the search" — an id predicate prunes nothing (measured 2026-08-18)
 
 The most expensive authoring mistake in the log to date, and it isn't about this project's marts — it will bite anyone doing single-order lookups on a raw Brink table. Observed from a new direct-console account: **20 full-table scans / 224.08 GiB in one day, 99.9% of that account's entire spend.** The shape, verbatim:
@@ -483,7 +506,26 @@ State which you did whenever it affects the answer.
 
 ### 1. Store 1111 — never ask, always exclude
 
-**`store_id <> 1111`** on whichever table you're querying. Test/training store. Not a question, not a default the user can override, and don't raise it as an assumption — just do it and note it in the assumptions line.
+**`store_id not in (1111, 999)`** on whichever table you're querying. Test/training store, plus 999 which has no `store_info` row and so forms a second unnamed group. Not a question, not a default the user can override, and don't raise it as an assumption — just do it and note it in the assumptions line.
+
+#### Store 1111/999: which layer already excludes them (measured 2026-08-19)
+
+Read from `INFORMATION_SCHEMA.VIEWS.view_definition`, not from documentation:
+
+| Object | Excludes |
+|---|---|
+| `claude.order_customer` | `store_id not in (1111, 999)` ✅ both |
+| `claude.order_lines` | `store_id not in (1111,999)` ✅ both |
+| `claude.order_payment_tender` | `store_id <> 1111` only — **999 not excluded** |
+| `claude.order_line_discount_detail` | **nothing** — neither store excluded |
+| `claude.store_info` | `store_id not in (0, 901, 9001)` — a different list for a different purpose (non-store dimension rows) |
+| every `sales_ops.*` table | **nothing** — the filter is entirely yours |
+
+**Write the predicate every time anyway.** It costs nothing on a view that already applies it, and the rule above is *not uniform* — a user who learns "the `claude` layer handles it" from `order_customer` is then wrong on `order_line_discount_detail`. Making it uniform is a steward decision on the board (Asana 1217684901778249); until it lands, the predicate is your responsibility on all five.
+
+> **Store 1111 is not dormant, so this still matters.** On `sales_ops.order_customer`, 2026-07-01 → 2026-08-19: **626 orders / $17,325.14 net / 223 of them `customer_type = 'person'`**. Store 999 had **zero** orders in the same window — it is `order_lines`-only and tiny, which is exactly why it went unnoticed until 2026-07-30.
+>
+> Two corollaries worth keeping. **(1)** `customer_type = 'person'` does *not* substitute for the store filter — 223 of those 626 orders are person orders, so a `sales_ops` cohort filtered only on customer type still pulls the test store in. **(2)** A measurement of store 1111 taken *through* `claude.order_customer` is vacuously zero, because the view filters it out. If you are asked "is the test store still active?", that question can only be answered on `sales_ops` — a zero from the `claude` layer proves nothing about the store and everything about the view. Guard against reading a view's own filter as a fact about the world.
 
 ### 2. Date range — ask
 

@@ -58,7 +58,7 @@
 |---|---|---|
 | `business_date` | DATE | Operating day (partition column). Canonical date for all reporting. **Renamed from `businessdate` 2026-07-24.** |
 | `order_datetime` | DATETIME | Local time. Normally `ClosedTime`; if the order closed on a later day than its `business_date` (catering / advance orders), falls back to `promise_time` then `OpenedTime`. |
-| `order_timestamp_utc` | TIMESTAMP | `order_datetime` converted to UTC using the store's timezone. |
+| `order_timestamp_utc` | TIMESTAMP | `order_datetime` converted to UTC using the store's timezone: `timestamp(order_datetime, s.timezone_name)`. **NULL whenever `store_info.timezone_name` is NULL** — see the gotcha below. The canonical column for any comparison against a UTC source (Braze); never rebuild it with a `timestamp()` cast of your own. |
 | `opened_time` | DATETIME | Raw POS opened time. |
 | `loyalty_signup_date` | DATE | Customer's loyalty enrollment date (NULL for guests). |
 
@@ -146,6 +146,21 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
+- **⚠️ OPEN 2026-08-19 — `order_timestamp_utc` is NULL for stores missing a `timezone_name`,
+  which silently drops newly-opened stores from every UTC-based analysis**
+  (Asana 1217684772713570). Built as `timestamp(order_datetime, s.timezone_name)`; BigQuery's
+  `timestamp()` returns NULL on a NULL timezone instead of erroring. Six stores have no
+  timezone today (191, 192, 196, 197, 198, 199) and two of them are trading — **8,230 orders
+  over 2026-08-01 → 08-16** carry a NULL `order_timestamp_utc`. Details and the store list are
+  in [`sales_ops.store_info.md`](sales_ops.store_info.md).
+- **⚠️ Never rebuild a UTC timestamp from `order_datetime` yourself.** `order_datetime` is
+  **store-local**, so `timestamp(oc.order_datetime)` — the bare cast, which assumes UTC — is
+  wrong by the store's offset, and the chain spans **four** live offsets (Ohio 4 h;
+  Illinois/Minnesota/Texas/Wisconsin 5 h; Idaho/Utah 6 h; Arizona/Nevada 7 h — measured
+  2026-08-01 → 08-16 over 355,700 orders). No single timezone literal is correct for Cafe
+  Zupas, so the error cannot be corrected downstream by a fixed shift, and it always makes an
+  order look *earlier* than it happened. Observed in 73 of one analyst's 160 queries on
+  2026-08-19. Use `order_timestamp_utc`.
 - **⚠️ OPEN 2026-08-17 — `order_lines.is_catering` does not have the store-50 rule, so the two
   marts disagree.** The finance catering definition was applied to `order_customer` only;
   `sales_ops.order_lines` still computes `is_catering` from raw Brink with the pre-2026-08-17

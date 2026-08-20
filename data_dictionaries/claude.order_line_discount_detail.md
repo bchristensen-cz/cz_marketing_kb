@@ -91,14 +91,25 @@ on `claude.order_customer`, **to the cent, at order grain, on closed days** — 
 and all three were learned the hard way on 2026-08-15:
 
 ```sql
-and oc.store_id not in (1111, 999)   -- this table drops 999 upstream; claude.order_customer drops only 1111
+and oc.store_id not in (1111, 999)   -- both sides now drop both stores; keep the predicate anyway
 and dd.business_date <= date_sub(current_date('America/Denver'), interval 1 day)
 -- ...and join on brink_order_id, not just business_date
 ```
 
-- **Store 999.** The build excludes `store_id not in (1111, 999)`; `claude.order_customer`
-  excludes only 1111. Leaving 999 in produced one order / **$13.49** over 90 days — small, but a
-  permanent floor on any comparison that omits it.
+- **Store 999 — corrected 2026-08-19.** The `sales_ops` build behind this table excludes
+  `store_id not in (1111, 999)` (so the `claude` view carries no store predicate of its own and
+  doesn't need one). The original note here said `claude.order_customer` "excludes only 1111,"
+  which produced a one-order / **$13.49** floor on any tie-out over 90 days. That asymmetry is
+  **gone**: the deployed `claude.order_customer` reads `store_id not in (1111, 999)` (verified
+  against `INFORMATION_SCHEMA.VIEWS.view_definition` 2026-08-19), matching this table, so the
+  floor no longer exists.
+
+  Worth keeping visible as a pattern: the asymmetry disappeared when the view was redeployed on
+  2026-08-17 and **nothing failed**, so the note describing it survived four days past being
+  true. A documented difference between two objects is only true as of the last time someone read
+  the deployed definition — re-read `view_definition` before relying on one, and note that
+  `claude.order_payment_tender` still excludes **only 1111**, so the asymmetry is real somewhere
+  else in the layer (Asana 1217684901778249).
 - **Today.** `order_customer` is a snapshot from its last load while raw Brink moves all day, so
   the current business date drifts ~47 orders / ~$438. Not a defect. Compare closed days only.
 - **Order grain, not date grain.** At date grain a compensating pair on the same day cancels out

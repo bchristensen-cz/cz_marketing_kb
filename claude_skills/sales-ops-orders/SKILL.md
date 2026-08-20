@@ -9,6 +9,19 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 
 > **⚠️ Breaking changes 2026-07-24** — `order_customer` was rebuilt across all history. `businessdate` is now **`business_date`**; `net_sales` is now the **calculated** net (read it directly); `item_net_sales` / `item_netsales_with_mods` / `mods_net_sales` are **gone**; `is_catering` was redefined; a **`customer_type`** column was added and is now **required for customer metrics**; `order_count` / `days_since_prev_order` moved to the new **`sales_ops.order_sequence`** table. Any saved query written before this date needs updating.
 
+> **⚠️ Breaking change 2026-08-20 — on the `claude` views, `order_datetime` is now `order_datetime_local`.** `claude.order_customer` and `claude.order_lines` no longer expose `order_datetime`; selecting it fails with `Name order_datetime not found inside oc`. The column is unchanged in value and type (DATETIME, store-local); only the name moved, and only on the `claude` layer — `sales_ops.*` still says `order_datetime`.
+>
+> **Why:** on 2026-08-19, **73 of one analyst's 160 queries** contained `timestamp(order_datetime)` and **zero** used `order_timestamp_utc`. That bare cast assumes the value is UTC. It isn't — it is store-local, across **four** live UTC offsets (Ohio 4 h, IL/MN/TX/WI 5 h, ID/UT 6 h, AZ/NV 7 h), so every affected order read 4–7 hours early with no constant offset available to correct it downstream. The name `order_datetime` gave no hint of that; `timestamp(order_datetime_local)` reads obviously wrong at the call site, and the rename fails loudly on saved queries rather than silently returning a plausible number.
+>
+> **Rule: two time columns, two jobs, never convert between them yourself.**
+>
+> | Question | Column |
+> |---|---|
+> | Daypart, hour-of-day, "what time do people order", anything shown to a human | **`order_datetime_local`** (DATETIME) |
+> | Any comparison against Braze or another UTC source | **`order_timestamp_utc`** (TIMESTAMP) |
+>
+> Neither column is redundant and neither is being dropped — dropping the local one would push a timezone conversion into daypart analysis (the most common time question), and dropping the UTC one recreates this exact bug. If you find yourself wrapping either in `timestamp()` or `datetime()`, you have picked the wrong column.
+
 > **⚠️ Breaking change 2026-08-17 — `order_customer.is_employee_discount` is GONE.** The column was dropped from the table; naming it now errors rather than returning a stale value. Employee / team-member meal questions run on **`claude.order_line_discount_detail.is_employee_meal_discount`** (line-level, never NULL, covers all four eras of the benefit). Aggregate with `max()` / `logical_or()` for an order-level flag.
 >
 > **⚠️ Catering was redefined the same day (finance's definition).** `is_catering` and `revenue_category` on `order_customer` now both count **store 50 (Middleton Mobile)** as catering, and the two columns select identical orders. **`order_lines` has not caught up** — see the store-50 gotcha before answering any item-level catering question.
@@ -453,7 +466,7 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 
 | Metric | Definition |
 |---|---|
-| Net sales | `sum(net_sales)` from `order_customer`. The column **is** the canonical calculated net (`gross_sales - total_discount_amount - total_promotions_amount`) as of 2026-07-24. Do NOT use `brink_net_sales` — validation only |
+| Net sales | `sum(net_sales)` from `order_customer` — **read the column, never rebuild it.** Do NOT use `brink_net_sales` (validation only, and not exposed on the `claude` view) |
 | Gross sales | `sum(gross_sales)` from `order_customer` |
 | Order count | `count(*)` from `order_customer` (or `count(distinct brink_order_id)` — see the grain defect note) |
 | Average check | `sum(net_sales) / count(*)` from `order_customer` |
@@ -470,6 +483,26 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 | Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it (see below) |
 | Item net sales | `sum(item_net_sales)` from `order_lines` — live, fully populated, safe to report **when asked**. Runs 2.3–3.8% under gross depending on sale shape, and does **not** reconcile to order-level `net_sales`; say so in the same breath. See the gotcha below |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; menu category via `rev_center_name` (`item_type` is only the closed 7-value rollup Entree / Kids Meals / Beverage / Discount / Promotion / Surcharge / Other as of 2026-08-12 — category values like `Desserts` return zero rows there) |
+
+> **🚩 CORRECTION 2026-08-20 — the net-sales formula this skill used to publish was wrong twice over.** It read
+> `net_sales = gross_sales - total_discount_amount - total_promotions_amount`. Two problems, both measured on
+> `sales_ops.order_customer` over 2026-08-11 → 08-16 (143,407 orders, stores 1111/999 excluded):
+>
+> 1. **`total_promotions_amount` does not exist.** The discount columns are `discount_amount`,
+>    `promotions_amount` and `total_discount_amount`. Anyone copying the formula gets
+>    `Unrecognized name`.
+> 2. **Promotions are already inside `total_discount_amount`** — `total_discount_amount =
+>    discount_amount + promotions_amount` on **143,407 of 143,407** orders, exactly. So the
+>    published formula also *double-subtracted* promotions ($15,805.69 over that week).
+>
+> **And the corrected two-term version still doesn't reconcile:** `gross_sales - total_discount_amount`
+> matches `net_sales` on only **130,171 of 143,407 orders (90.8%)**. The 13,236 that don't are **not**
+> explained by `total_gift_card_amount` (0 of them) or by `rounding` (0 of them) — both tested and both
+> failed, so no benign explanation is on offer here. Open question, logged as a KB finding.
+>
+> **Practical rule until it's resolved: `net_sales` is a column, not a formula.** Select it. Do not
+> derive it, do not reconcile someone else's derivation against it, and if a report needs the
+> decomposition, say that the components don't currently sum to the total for ~9% of orders.
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
 
@@ -514,14 +547,16 @@ Read from `INFORMATION_SCHEMA.VIEWS.view_definition`, not from documentation:
 
 | Object | Excludes |
 |---|---|
-| `claude.order_customer` | `store_id not in (1111, 999)` ✅ both |
-| `claude.order_lines` | `store_id not in (1111,999)` ✅ both |
-| `claude.order_payment_tender` | `store_id <> 1111` only — **999 not excluded** |
-| `claude.order_line_discount_detail` | **nothing** — neither store excluded |
+| `claude.order_customer` | `store_id not in (1111, 999)` ✅ |
+| `claude.order_lines` | `store_id not in (1111,999)` ✅ |
+| `claude.order_payment_tender` | `store_id not in (1111, 999)` ✅ (fixed 2026-08-20; was `<> 1111` only) |
+| `claude.order_line_discount_detail` | `store_id not in (1111,999)` ✅ (fixed 2026-08-20; previously relied on its base build) |
 | `claude.store_info` | `store_id not in (0, 901, 9001)` — a different list for a different purpose (non-store dimension rows) |
 | every `sales_ops.*` table | **nothing** — the filter is entirely yours |
 
-**Write the predicate every time anyway.** It costs nothing on a view that already applies it, and the rule above is *not uniform* — a user who learns "the `claude` layer handles it" from `order_customer` is then wrong on `order_line_discount_detail`. Making it uniform is a steward decision on the board (Asana 1217684901778249); until it lands, the predicate is your responsibility on all five.
+**✅ As of 2026-08-20 the four order views are uniform** — all exclude both stores, verified against `INFORMATION_SCHEMA.VIEWS.view_definition`. The earlier asymmetry (payment_tender excluded only 1111; discount_detail carried no predicate of its own) is closed, and the `$13.49` tie-out floor it created is gone.
+
+**Write the predicate on `claude` objects anyway.** It costs nothing where the view already applies it, it is *required* on every `sales_ops` table, and uniformity today is not a guarantee about tomorrow — this table was asymmetric for five days without anything failing. Re-read `view_definition` rather than trusting this table if a number depends on it.
 
 > **Store 1111 is not dormant, so this still matters.** On `sales_ops.order_customer`, 2026-07-01 → 2026-08-19: **626 orders / $17,325.14 net / 223 of them `customer_type = 'person'`**. Store 999 had **zero** orders in the same window — it is `order_lines`-only and tiny, which is exactly why it went unnoticed until 2026-07-30.
 >

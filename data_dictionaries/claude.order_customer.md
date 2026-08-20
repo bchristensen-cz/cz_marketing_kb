@@ -73,6 +73,16 @@ The deployed view filters the test store out entirely — a standard user **cann
 
 ## Columns
 
+> **⚠️ Renamed 2026-08-20 — `order_datetime` is exposed here as `order_datetime_local`.** The view is
+> `oc.* except(brink_net_sales, order_datetime), oc.order_datetime as order_datetime_local`. Value and
+> type are unchanged (DATETIME, store-local); `sales_ops.order_customer` still calls it
+> `order_datetime`. Selecting `oc.order_datetime` on this view now errors. The rename exists because
+> the old name gave no hint that the value was local, and `timestamp(order_datetime)` — a bare cast
+> that assumes UTC — appeared in 73 of one analyst's 160 queries on 2026-08-19. Use
+> `order_timestamp_utc` for anything cross-source; see the `sales-ops-orders` and `braze-campaigns`
+> skills. Same rename applied to `claude.order_lines`, which has **no** UTC column at all — join to
+> `order_customer` if you need UTC at line grain.
+
 ### Passthrough columns (43)
 
 Identical to `sales_ops.order_customer` — **see [`sales_ops.order_customer.md`](sales_ops.order_customer.md) for full descriptions**, deliberately not duplicated here so the two can't drift:

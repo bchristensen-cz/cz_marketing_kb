@@ -146,13 +146,25 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
-- **⚠️ OPEN 2026-08-19 — `order_timestamp_utc` is NULL for stores missing a `timezone_name`,
-  which silently drops newly-opened stores from every UTC-based analysis**
+- **✅ RESOLVED 2026-08-20 — `order_timestamp_utc` was NULL for stores missing a `timezone_name`**
   (Asana 1217684772713570). Built as `timestamp(order_datetime, s.timezone_name)`; BigQuery's
-  `timestamp()` returns NULL on a NULL timezone instead of erroring. Six stores have no
-  timezone today (191, 192, 196, 197, 198, 199) and two of them are trading — **8,230 orders
-  over 2026-08-01 → 08-16** carry a NULL `order_timestamp_utc`. Details and the store list are
-  in [`sales_ops.store_info.md`](sales_ops.store_info.md).
+  `timestamp()` returns NULL on a NULL timezone instead of erroring, so newly-opened stores
+  dropped silently out of every UTC-based analysis. The dimension is fixed and guarded, and the
+  **10,771 already-materialized orders ($211,336.89) were repaired in place** with
+  `set order_timestamp_utc = timestamp(order_datetime, timezone_name)` — the build formula
+  verbatim — rather than by a 17-day mart reload, which would have exposed this table's
+  untransacted delete+insert to concurrent readers and dragged
+  `order_line_discount_detail` along with it.
+  **Lesson: fixing the dimension did not fix this column.** It is materialized, and the daily
+  reload restates only 8 days. Any fact column derived from a dimension attribute needs its own
+  backfill decision.
+- **`order_timestamp_utc` and `order_datetime` are NULL together on unclosed orders, and that
+  floor is permanent.** When `ClosedTime` is NULL the CASE falls through to it, so neither column
+  gets a value. Measured 2026-08-20 after the repair: **1,374 NULLs over 2026-08-01 → 08-20, all
+  1,374 with a NULL `order_datetime`**, overwhelmingly the current day's still-open orders. So the
+  correct health check is
+  `countif(order_timestamp_utc is null and order_datetime is not null) = 0` — plain
+  `order_timestamp_utc is null` will always return rows and is not a defect signal.
 - **⚠️ Never rebuild a UTC timestamp from `order_datetime` yourself.** `order_datetime` is
   **store-local**, so `timestamp(oc.order_datetime)` — the bare cast, which assumes UTC — is
   wrong by the store's offset, and the chain spans **four** live offsets (Ohio 4 h;

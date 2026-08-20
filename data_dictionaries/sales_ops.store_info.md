@@ -41,6 +41,12 @@ this table is derived in [`sql/sales_ops.store_info.sql`](../sql/sales_ops.store
 | `weather_cluster_id` | nearest metro cluster centroid, step 5 | ✅ yes, is-null only |
 | `latitude`, `longitude` | **human geocode — BigQuery cannot derive it** | ❌ no |
 
+`store_phone` is fed, but **transformed**: staging holds it formatted (`801-613-3380`) and the
+column is INT64, so the INSERT strips non-digits before casting. A bare
+`safe_cast(store_phone as int64)` returns NULL on that format — measured 2026-08-20, it would
+have blanked the phone on **82 of 100** staging rows while leaving every older row intact. Same
+failure signature as the timezone hole: correct on history, NULL on everything new, no error.
+
 **The general rule this table teaches: a derived column absent from the build script is a
 column that is NULL forever on every new store.** That is exactly how `timezone_name` went
 missing on six stores and silently NULLed `order_timestamp_utc`.

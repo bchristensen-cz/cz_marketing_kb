@@ -95,8 +95,27 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 ### Dates
 | Column | Type | Description |
 |---|---|---|
-| `first_order_datetime` | DATETIME | Earliest `order_datetime` (store-local). |
-| `last_order_datetime` | DATETIME | Latest `order_datetime`. |
+| `first_order_datetime` | DATETIME | Earliest `order_datetime_local` (store-local). |
+| `last_order_datetime` | DATETIME | Latest `order_datetime_local`. |
+
+> **⚠️ `days_since_last_order` is a customer-level constant, not a per-order gap** (measured 2026-08-21).
+> It is "days since this customer's most recent order, as of the build" and repeats **identically on
+> every row** of that customer. The per-order interval is **`days_since_prev_order`**. Verified on
+> `claude.order_customer` for `mapped_cust_id` 6357228 over 2026-08-01 → 08-18:
+>
+> | business_date | `customer_order_count` | `days_since_prev_order` | `days_since_last_order` |
+> |---|---|---|---|
+> | 2026-08-07 | 233 | 7 | 2 |
+> | 2026-08-10 | 234 | 3 | 2 |
+> | 2026-08-13 | 235 | 3 | 2 |
+> | 2026-08-15 | 236 | 2 | 2 |
+> | 2026-08-18 | 237 | 3 | 2 |
+>
+> So **`avg(days_since_last_order)` over a customer's orders returns that constant**, not their
+> cadence — averaging a repeated value is a no-op that looks like an aggregate. Found live in
+> `braze.cdi_order_attributes`, whose `l90_avg_days_btwn_orders` publishes "days since last order"
+> under an average-gap name. Use `avg(days_since_prev_order)`, and exclude rather than zero-fill the
+> NULL on a customer's first-ever order.
 | `first_order_date` | DATE | Earliest `business_date`. |
 | `last_order_date` | DATE | Latest `business_date`. |
 | `days_since_last_order` | INT64 | `attribute_asof_date - last_order_date`. Recency driver. |

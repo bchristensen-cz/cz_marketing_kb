@@ -1238,7 +1238,7 @@ Same pending decision, same Asana task.
 > The legacy column name is `mapped_domain` on `sales_ops.OrderCustomer`; on the current
 > `order_customer` / `claude.order_customer` it is **`mapped_email_domain`**.
 
-## SQL style (steward rule 2026-07-23, extended 2026-07-29 and 2026-08-20 — MANDATORY)
+## SQL style (steward rule 2026-07-23, extended 2026-07-29, 2026-08-20 and 2026-08-21 — MANDATORY)
 
 All SQL — shown to users or executed — follows the steward's format so he can diagnose any query quickly. The rules below are the source of truth. **Do not copy layout from `sql/`** — those build scripts predate the 2026-08-20 first-field and alias-padding rules and are deliberately left unreformatted so the repo stays diffable against the deployed scheduled-query text; each one gets reformatted the next time it is actually deployed.
 
@@ -1255,17 +1255,22 @@ All SQL — shown to users or executed — follows the steward's format so he ca
    - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
    - **the first field is flush with `select` — do not indent it** (steward rule 2026-08-20). `group by` and `order by` lists follow the same rule: first field flush with the keyword, then `, field` lines beneath it. A leading-comma list has no reason to be indented; indenting the first field alone just makes it fail to line up with everything under it
    - **exactly one space before `as` — never pad or column-align aliases** (steward rule 2026-08-20). `oc.net_sales as net_sales`, not `oc.net_sales                 as net_sales`. Alignment padding survives exactly one edit before it's wrong, and it turns a one-column change into a whole-block diff
+   - **no alignment padding inside `case` expressions either** (steward rule 2026-08-21). `, case when oc.is_catering then 'Catering' else 'Retail' end as channel` — single spaces throughout; never line up the `then`s, `else`s or `end`s. If the expression is too long for one line, break before each `when` at **zero** indent and still use single spaces. Same reasoning as the alias rule: padding is wrong after the next edit and turns a one-branch change into a whole-block diff
+   - **the ONLY indentation in a query is a `join` and its `on` line** (steward restatement 2026-08-21). Nothing else is ever indented — not the select list (inside a CTE or out), not the `and` lines under `where`, not `group by` / `order by` lists, not `case` branches. If a line is indented, it is a join or an on
    - CTEs: `with name as (` … `)`, chained as `, next_name as (`
    - **`where 1=1` is always the first condition**, then each real condition on its own `and ...` line — so conditions can be added, removed, or commented out without touching the rest
    - each join on its own line with `on ...` on the line directly beneath it, **lined up with the `join`**
    - **indent one additional level for each successive join**, so nesting depth is readable at a glance
 
-Wrong — indented first field, padded aliases:
+Wrong — indented first field, padded aliases, aligned `case`:
 
 ```sql
 select
   oc.business_date                        as business_date
 , oc.store_id                             as store_id
+, case when oc.is_catering then 'Catering'
+       else                     'Retail'
+  end                                     as channel
 , count(distinct oc.brink_order_id)       as orders
 ```
 
@@ -1275,6 +1280,7 @@ Right:
 select
 oc.business_date as business_date
 , oc.store_id as store_id
+, case when oc.is_catering then 'Catering' else 'Retail' end as channel
 , count(distinct oc.brink_order_id) as orders
 ```
 

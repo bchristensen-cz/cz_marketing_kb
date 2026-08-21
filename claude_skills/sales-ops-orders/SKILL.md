@@ -493,23 +493,45 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 >
 > **(b) 🔻 RETRACTED — my "9.2% don't reconcile" finding was mostly my own sign error.** **The discount columns are stored NEGATIVE.** `discount_amount` and `promotions_amount` come from `sum(amount) * -1` in the build, so net is `gross_sales` **+** `total_discount_amount`, not minus. Subtracting a negative added the discount back, and the 130,171 "matches" I reported were simply the orders with no discount at all. The lesson, and it is the same one this KB keeps relearning: **check the sign of a column before reporting a reconciliation gap** — a plausible-looking mismatch percentage was an artifact of my arithmetic, not of the data.
 >
-> **(c) CONFIRMED BUG: `net_sales` deducts discounts but not promotions.** The build computes
-> `bo.GrossSales + coalesce(d.total_discount_amount,0)` — the *discount* CTE only — while its own
-> comment claims *"gross sales - discounts - promotions"*. `promotions_amount` is computed, exposed,
-> rolled into the `total_discount_amount` column, and never subtracted.
+> **(c) ✅ FIXED 2026-08-21 — `net_sales` now deducts promotions, and it ties to Brink.** The build
+> had computed `bo.GrossSales + coalesce(d.total_discount_amount,0)` — the *discount* CTE only —
+> while its own comment claimed *"gross sales - discounts - promotions"*. `promotions_amount` was
+> computed, exposed, rolled into `total_discount_amount`, and never subtracted, overstating net
+> sales by exactly the promotions total on every promotion order (+$15,805.69 in the week measured;
+> Brink agreed with the corrected version on **1,287 of 1,287** and with the shipped version on
+> **none**). The steward added the term and full-refreshed all history.
 >
-> **Verified against `brink_net_sales`** — Brink is the financial source of truth and that column
-> exists for exactly this check. 2026-08-11 → 08-16, stores 1111/999 excluded:
+> **Post-fix tie-out against `brink_net_sales`, full history, stores 1111/999 excluded
+> (measured 2026-08-21):**
 >
-> | | Orders | Current `net_sales` = Brink | `gross + total_discount_amount` = Brink | Current Δ vs Brink |
+> | Year | Orders | Mismatches | Rate | Δ vs Brink |
 > |---|---|---|---|---|
-> | Has a promotion | 1,287 | **0** | **1,287** | **+$15,805.69** |
-> | No promotion | 142,120 | 142,113 | 142,113 | −$5.52 |
+> | 2026 | 5,478,780 | 945 | 0.02% | −$2,021.52 |
+> | 2025 | 8,274,702 | 1,326 | 0.02% | −$5,730.79 |
+> | 2024 | 7,283,853 | 1,609 | 0.02% | −$7,749.95 |
+> | 2023 | 6,545,708 | 3,229 | 0.05% | −$5,597.29 |
+> | 2022 | 6,705,386 | 3,615 | 0.05% | +$5,904.59 |
+> | 2021 | 6,640,100 | 28,009 | 0.42% | +$63,705.94 |
+> | 2020 | 5,116,887 | **83,387** | 1.63% | **+$370,960.84** |
+> | 2019 | 4,542,502 | 41,512 | 0.91% | **+$557,764.08** |
+> | 2018 | 234,314 | 16,818 | **7.18%** | +$167,649.73 |
 >
-> Brink agrees to the cent on **all** promotion orders once promotions are deducted, and on **none**
-> of them as built. The overstatement equals the promotions total exactly. Fix is one term in the
-> build plus a full-history rebuild (Asana 1217700106208956). A residual 7 orders / −$5.52
-> reconcile under neither formula — separate, unexplained, not promotions.
+> **From 2022 forward the calculated net ties to Brink to within 0.05% of orders. Before that it
+> does not, and the cause is NOT discounts or promotions.** In 2019 **40,721 of 41,512** mismatches
+> (98.1%, $543,811 of $557,764) sit on orders with **zero discount and zero promotion** — i.e.
+> where `net_sales` is simply `gross_sales`, and Brink's own `NetSales` disagrees with Brink's own
+> `GrossSales`. 2020 is the same shape (92.5%).
+>
+> The mismatched population is heavily skewed to large orders: average `gross_sales` **$151.92**
+> against a typical ticket nearer $13, average Δ $13.35. Three explanations were tested on the 2019
+> population and **all three failed** — `brink_net_sales = subtotal` (152 of 40,721),
+> `= gross_sales - tax` (39), `= item_gross_sales` (8,044). **Cause unknown; do not repeat a guess
+> as fact.**
+>
+> **Practical rules.** Net sales is reconciled to Brink **2022-01-01 forward** — quote it freely
+> there. For earlier years, say the figure is the calculated net and that it does not tie to Brink,
+> with the gap concentrated in large orders. Standard users are unaffected either way: the `claude`
+> views floor at 2023-01-01, so only steward queries on `sales_ops` reach the unreconciled era.
 >
 > **🧰 Method note, because the first version of this write-up was bad.** I originally "proved" the
 > gap with three tests comparing `net_sales` to `gross_sales + discount_amount` and to

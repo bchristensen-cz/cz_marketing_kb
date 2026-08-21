@@ -336,7 +336,7 @@ bo.Id as brink_order_id
 , coalesce(boi.total_delivery_tip_amount, 0) as total_delivery_tip_amount
 , coalesce(boi.total_other_tip_amount, 0) as total_other_tip_amount
 , bo.NetSales as brink_net_sales  -- **for vaidation only**  '2026-07-24' net sales will now be a calc of gross sales - discounts - promotions
-, bo.GrossSales + coalesce(d.total_discount_amount,0) as net_sales  -- ⚠️ '2026-08-20' promotions NOT deducted; Asana 1217700106208956
+, bo.GrossSales + coalesce(d.total_discount_amount,0) + coalesce(bp.total_promotions_amount,0) as net_sales  -- '2026-08-21' promotions added; ties to brink_net_sales
 -- , boi.item_netsales_with_mods
 -- , boi.item_net_sales
 -- , boim.mods_net_sales

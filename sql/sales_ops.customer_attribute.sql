@@ -5,16 +5,7 @@
 -- Purpose: customer base table holding lifetime + trailing-window aggregates. Feeds
 -- (a) analyst segmentation in BigQuery and (b) a daily custom_attributes push to Braze.
 --
--- ⚠️ STATUS COMMENT BELOW IS STALE - see the 2026-08-21 note.
--- STATUS 2026-07-28: DRAFT - NOT DEPLOYED. No scheduled query exists yet.
---
--- '2026-08-21' RECONCILE THIS: the table is live and is a HARD DEPENDENCY of
--- claude.order_customer (which left-joins it for lifetime_* / first_order_date /
--- days_since_last_order / customer_tenure_days). Verified 2026-08-21 00:29 MT: 1,403,655
--- rows, attribute_asof_date = 2026-08-20. Either it is scheduled and this header is three
--- weeks out of date, or it is being run by hand - which would explain why the dictionary
--- tells readers to check attribute_asof_date before trusting the window columns. Settle
--- which, and fix whichever is wrong (Asana 1217721476888035).
+-- STATUS 2026-07-30: DEPLOYED. Refreshed daily at 5am
 --
 -- Design decisions (steward, 2026-07-28):
 --   * FULL create-or-replace every run, not a MERGE. Measured cost is ~1.4 GB / run

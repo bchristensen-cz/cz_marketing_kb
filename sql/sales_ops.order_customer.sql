@@ -336,11 +336,7 @@ bo.Id as brink_order_id
 , coalesce(boi.total_delivery_tip_amount, 0) as total_delivery_tip_amount
 , coalesce(boi.total_other_tip_amount, 0) as total_other_tip_amount
 , bo.NetSales as brink_net_sales  -- **for vaidation only**  '2026-07-24' net sales will now be a calc of gross sales - discounts - promotions
-, bo.GrossSales + coalesce(d.total_discount_amount,0) as net_sales
--- ⚠️ '2026-08-20' KNOWN GAP: the comment above says net sales = gross - discounts - promotions, but this
--- expression only subtracts discounts. promotions_amount is NOT deducted, so net_sales does not equal
--- gross_sales + total_discount_amount on the 1,287 orders per week that carry a promotion
--- ($15,805.69 over 2026-08-11..08-16). Steward decision pending - see Asana 1217700106208956.
+, bo.GrossSales + coalesce(d.total_discount_amount,0) as net_sales  -- ⚠️ '2026-08-20' promotions NOT deducted; Asana 1217700106208956
 -- , boi.item_netsales_with_mods
 -- , boi.item_net_sales
 -- , boim.mods_net_sales

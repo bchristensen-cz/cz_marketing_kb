@@ -51,6 +51,37 @@ failure signature as the timezone hole: correct on history, NULL on everything n
 column that is NULL forever on every new store.** That is exactly how `timezone_name` went
 missing on six stores and silently NULLed `order_timestamp_utc`.
 
+### Build behaviours that aren't obvious from reading the SQL
+
+- **`store_name`, `store_address`, `store_city`, `store_state`, `store_zip` are insert-once.**
+  Nothing re-syncs them from staging, which is what makes the 2026-08-20 cleanup stick — 8
+  normalised addresses and the store 191 rename. **The staging feed is still dirty**, so adding
+  an address sync would overwrite the corrections. Only `is_comp_store` is kept in sync.
+- **Guards run last, deliberately.** A failing `assert` marks the scheduled run failed but must
+  not prevent the maintenance statements from completing, so all three sit at the end.
+- **The `store_open_date` statement is bounded to 400 days** (1.14 GiB → 0.21 GiB per run,
+  dry-run measured 2026-08-20). Safe because a store missing an open date is by definition new:
+  of the 10 NULLs on that date, only store 192 had any orders in 400 days (12 orders, max
+  11/day), and Corporate 101 plus kiosks 113/114 had zero, so the >150-order threshold can never
+  fire for them. **If a long-open store ever appears with a NULL open date, this bound would
+  stamp it with the window edge instead of its real first day** — re-check before widening.
+- **Split-timezone states are deliberately absent from the step-4 map.** North Idaho is Pacific,
+  El Paso is Mountain, and Oregon, the Dakotas, Kansas, Nebraska, Florida, Michigan, Indiana,
+  Kentucky and Tennessee are all split. A store in one of those stays NULL and trips the guard
+  rather than being guessed an hour wrong — a wrong-but-populated timezone is worse than a NULL,
+  because `order_timestamp_utc` then looks fine.
+- **Cluster 12 (`Unassigned (53005)`) is excluded as a candidate in step 5.** It is a hand-made
+  cluster of one at Brookfield WI whose centroid sits inside the Milwaukee suburbs, so
+  nearest-centroid pulls its neighbours in: Menomonee Falls is 10.3 mi from it vs 55.7 mi from
+  its real cluster, Greenfield 7.4 vs 39.9. With the exclusion, the derivation reproduces **87 of
+  87** existing assignments. Remove the exclusion once 53005 is folded into cluster 4
+  (Asana 1217699704979785).
+- **Known weakness of the cluster derivation:** cluster 4 spans Illinois *and* Wisconsin, so its
+  centroid sits near Chicago and nothing in Milwaukee's outskirts is close to it. Store 194
+  Oconomowoc would derive to cluster 8 `Madison` at 47.9 mi; it keeps its hand-assigned cluster 4
+  only because step 5 is is-null-only. A future Milwaukee-area store **will** auto-land in Madison
+  until that corridor cluster is split.
+
 > **✅ RESOLVED 2026-08-20 — the `timezone_name` hole, and what it cost.** Six stores (191, 192,
 > 196, 197, 198, 199) had no `timezone_name`, and both order marts build
 > `order_timestamp_utc = timestamp(order_datetime, s.timezone_name)` — BigQuery's `timestamp()`

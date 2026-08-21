@@ -493,15 +493,33 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 >
 > **(b) 🔻 RETRACTED — my "9.2% don't reconcile" finding was mostly my own sign error.** **The discount columns are stored NEGATIVE.** `discount_amount` and `promotions_amount` come from `sum(amount) * -1` in the build, so net is `gross_sales` **+** `total_discount_amount`, not minus. Subtracting a negative added the discount back, and the 130,171 "matches" I reported were simply the orders with no discount at all. The lesson, and it is the same one this KB keeps relearning: **check the sign of a column before reporting a reconciliation gap** — a plausible-looking mismatch percentage was an artifact of my arithmetic, not of the data.
 >
-> **(c) The real gap is small, specific, and a genuine build bug.** Measured on `sales_ops.order_customer`, 2026-08-11 → 08-16, 143,407 orders, stores 1111/999 excluded:
+> **(c) CONFIRMED BUG: `net_sales` deducts discounts but not promotions.** The build computes
+> `bo.GrossSales + coalesce(d.total_discount_amount,0)` — the *discount* CTE only — while its own
+> comment claims *"gross sales - discounts - promotions"*. `promotions_amount` is computed, exposed,
+> rolled into the `total_discount_amount` column, and never subtracted.
 >
-> | Test | Matches |
-> |---|---|
-> | `net_sales = gross_sales + discount_amount` | **143,407 / 143,407** (100%) |
-> | `net_sales = gross_sales + total_discount_amount` | 142,120 / 143,407 (99.1%) |
-> | orders with `promotions_amount <> 0` | **1,287** |
+> **Verified against `brink_net_sales`** — Brink is the financial source of truth and that column
+> exists for exactly this check. 2026-08-11 → 08-16, stores 1111/999 excluded:
 >
-> So **`net_sales` deducts discounts but NOT promotions** — the 1,287 exceptions are exactly the promotion orders, worth **$15,805.69** that week. And this is a bug rather than a definition, because the build script's own comment says the opposite: *"net sales will now be a calc of gross sales - discounts - promotions"*, while the expression is `bo.GrossSales + coalesce(d.total_discount_amount,0)` — discounts only. Intent and implementation disagree; steward decision pending (Asana 1217700106208956).
+> | | Orders | Current `net_sales` = Brink | `gross + total_discount_amount` = Brink | Current Δ vs Brink |
+> |---|---|---|---|---|
+> | Has a promotion | 1,287 | **0** | **1,287** | **+$15,805.69** |
+> | No promotion | 142,120 | 142,113 | 142,113 | −$5.52 |
+>
+> Brink agrees to the cent on **all** promotion orders once promotions are deducted, and on **none**
+> of them as built. The overstatement equals the promotions total exactly. Fix is one term in the
+> build plus a full-history rebuild (Asana 1217700106208956). A residual 7 orders / −$5.52
+> reconcile under neither formula — separate, unexplained, not promotions.
+>
+> **🧰 Method note, because the first version of this write-up was bad.** I originally "proved" the
+> gap with three tests comparing `net_sales` to `gross_sales + discount_amount` and to
+> `gross_sales + total_discount_amount`. Those are **algebraically implied by the build script** —
+> `net_sales` *is* `gross + discount_amount`, so the 143,407/143,407 result was a tautology, and the
+> second test necessarily fails exactly where `promotions_amount <> 0`. It confirmed the table
+> matches its own SQL and nothing more, while being presented as evidence about correctness.
+> **A derived column can only be validated against an INDEPENDENT source** — here `brink_net_sales`.
+> If a reconciliation test's inputs all come from the same build expression, it cannot fail for an
+> interesting reason.
 >
 > **Practical rule: `net_sales` is a column, not a formula — select it.** If you must decompose, use `gross_sales + discount_amount` (plus, because the column is negative) and state that promotions are not netted out.
 

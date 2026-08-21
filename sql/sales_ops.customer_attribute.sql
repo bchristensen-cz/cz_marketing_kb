@@ -5,10 +5,16 @@
 -- Purpose: customer base table holding lifetime + trailing-window aggregates. Feeds
 -- (a) analyst segmentation in BigQuery and (b) a daily custom_attributes push to Braze.
 --
--- STATUS 2026-07-29: LIVE. Deployed as a scheduled query running daily at 5am MT.
--- 5am is deliberate: order_customer's 4am job is delete-then-insert, so a build landing
--- inside that window would aggregate a partially-deleted table and undercount silently.
--- Do not move this earlier.
+-- ⚠️ STATUS COMMENT BELOW IS STALE - see the 2026-08-21 note.
+-- STATUS 2026-07-28: DRAFT - NOT DEPLOYED. No scheduled query exists yet.
+--
+-- '2026-08-21' RECONCILE THIS: the table is live and is a HARD DEPENDENCY of
+-- claude.order_customer (which left-joins it for lifetime_* / first_order_date /
+-- days_since_last_order / customer_tenure_days). Verified 2026-08-21 00:29 MT: 1,403,655
+-- rows, attribute_asof_date = 2026-08-20. Either it is scheduled and this header is three
+-- weeks out of date, or it is being run by hand - which would explain why the dictionary
+-- tells readers to check attribute_asof_date before trusting the window columns. Settle
+-- which, and fix whichever is wrong (Asana 1217721476888035).
 --
 -- Design decisions (steward, 2026-07-28):
 --   * FULL create-or-replace every run, not a MERGE. Measured cost is ~1.4 GB / run
@@ -30,7 +36,7 @@
 --     wrong for the ~30 mixed ids. count(*) over the person-filtered set is correct by
 --     construction and costs nothing extra. Verified 2026-07-28: zero person customers have
 --     a first order before order_sequence's 2023-03-06 history start, so nothing is lost.
---   * Store 1111 excluded (standing steward rule).
+--   * Stores 1111 and 999 excluded (standing steward rule).
 --   * Catering orders are INCLUDED in the lifetime totals, with
 --     lifetime_catering_order_count carried alongside so downstream can net it out.
 
@@ -56,8 +62,7 @@ select
   oc.mapped_cust_id
 , oc.brink_order_id
 , oc.business_date
-, oc.order_datetime_local as order_datetime  -- '2026-08-20' base column renamed to order_datetime_local; aliased back so the
-                                            -- CTE and the public first_order_datetime / last_order_datetime columns are unchanged
+, oc.order_datetime_local
 , oc.store_id
 , oc.store_name
 , oc.revenue_category
@@ -71,8 +76,8 @@ select
 from `marketing-data-442316`.sales_ops.order_customer oc
 where 1=1
 and oc.business_date between history_start and asof_date
-and oc.store_id <> 1111
-and oc.mapped_cust_id is not null
+and oc.store_id not in (1111, 999)
+and oc.mapped_cust_id is not null  -- '2026-07-29' redundant, you can't have a customer_type without a mapped_cust_id
 and oc.customer_type = 'person'
 )
 
@@ -114,10 +119,6 @@ select
 -- lifetime volume
 , count(*) as lifetime_order_count
 , countif(po.is_catering) as lifetime_catering_order_count
--- Guest = first-party digital order placed without a loyalty account. Because person_orders
--- is already filtered to customer_type = 'person' and store_id <> 1111, this count will NOT
--- match a naive countif(is_guest_order) taken over the unfiltered mart — see the
--- reconciliation note in data_dictionaries/sales_ops.customer_attribute.md.
 , countif(po.is_guest_order) as lifetime_guest_order_count
 
 -- lifetime value
@@ -126,12 +127,12 @@ select
 , round(safe_divide(sum(po.net_sales), count(*)), 2) as lifetime_avg_check
 
 -- first / last order timestamps
-, min(po.order_datetime) as first_order_datetime
-, max(po.order_datetime) as last_order_datetime
+, min(po.order_datetime_local) as first_order_datetime
+, max(po.order_datetime_local) as last_order_datetime
 , min(po.business_date) as first_order_date
 , max(po.business_date) as last_order_date
 
--- first order attributes: earliest by order_datetime, tie-broken by brink_order_id
+-- first order attributes: earliest by order_datetime_local, tie-broken by brink_order_id
 -- (same ordering convention as order_sequence)
 , array_agg(
     struct(
@@ -140,7 +141,7 @@ select
     , po.store_name as store_name
     , po.order_source as order_source
     )
-    order by po.order_datetime asc, po.brink_order_id asc
+    order by po.order_datetime_local asc, po.brink_order_id asc
     limit 1
   )[offset(0)] as first_order
 
@@ -151,19 +152,19 @@ select
     , po.store_name as store_name
     , po.order_source as order_source
     )
-    order by po.order_datetime desc, po.brink_order_id desc
+    order by po.order_datetime_local desc, po.brink_order_id desc
     limit 1
   )[offset(0)] as last_order
 
 -- most recent non-null email wins
 , array_agg(
     struct(po.mapped_email as mapped_email, po.mapped_email_domain as mapped_email_domain)
-    order by case when po.mapped_email is null then 1 else 0 end, po.order_datetime desc
+    order by case when po.mapped_email is null then 1 else 0 end, po.order_datetime_local desc
     limit 1
   )[offset(0)] as email_rec
 
 -- trailing windows, anchored on asof_date. Inclusive of asof_date, so l30 is the 30 days
--- ending today: business_date > asof_date - 30.
+-- ending on asof_date (i.e. YESTERDAY, not today): business_date > asof_date - 30.
 , countif(po.business_date > date_sub(asof_date, interval 30 day)) as orders_l30
 , countif(po.business_date > date_sub(asof_date, interval 90 day)) as orders_l90
 , countif(po.business_date > date_sub(asof_date, interval 365 day)) as orders_l365
@@ -248,7 +249,7 @@ select
 , asof_date as attribute_asof_date
 -- Change-detection key for the Braze export: only push customers whose hash moved since
 -- the last successful send. Deliberately EXCLUDES days_since_last_order and the asof date,
--- which change every single day for everyone and would force a full 1.37M-profile push.
+-- which change every single day for everyone and would force a full 1.4M-profile push.
 , farm_fingerprint(to_json_string(struct(
     ca.lifetime_order_count
   , ca.lifetime_net_sales

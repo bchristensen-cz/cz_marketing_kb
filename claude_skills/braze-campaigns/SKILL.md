@@ -222,6 +222,30 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   > The chain spans **four** live offsets, so `timestamp(oc.order_datetime, 'America/Denver')` — which an earlier revision of this file recommended as the explicit fallback, and which is now **retracted** — is wrong for 187,779 of those 355,700 orders (52.8%). There is no single timezone literal that is correct for Cafe Zupas. The bias is also one-directional: every order looks earlier than it happened, so an *order-after-exposure* test **under-attributes** and a *pre-exposure* test over-counts.
   >
   > **Rule: never build a UTC order timestamp yourself.** `order_timestamp_utc` already applies each store's own `timezone_name`. If a `timestamp(` wrapping `order_datetime` appears anywhere in a cross-source query, that query's attribution is wrong.
+  >
+  > **Why the bad version passes review: the two casts look symmetric and only one is a no-op.** The pattern in the log is
+  >
+  > ```sql
+  > -- ANTI-PATTERN, do not copy
+  > , timestamp(order_datetime) as odt                              -- order side
+  > ...
+  > and timestamp(e.event_timestamp) between c.first_dt              -- Braze side
+  >     and timestamp_add(c.first_dt, interval 14 day)
+  > ```
+  >
+  > Identical syntax on both sides, which reads as consistent. But `event_timestamp` **is** UTC, so wrapping it is a pure relabel; `order_datetime` is store-local, so wrapping it silently asserts that a local wall-clock reading is UTC. Same function, one harmless, one a 4–7 hour error. Look for the *asymmetry of meaning*, not the symmetry of syntax.
+  >
+  > **Measured damage on the shape that actually runs here** — a per-customer relative window anchored on the first order (`first_dt` → `first_dt + 14 days`) used for onboarding-engagement reporting. The bad anchor is 4–7 h early, so the window is **displaced, not widened**: it imports events from just before the first order and drops an equal slice off day 14. Measured 2026-08-20 on the 2026-07-01 → 07-14 first-order cohort (person, non-catering) against `braze.email_send`:
+  >
+  > | Relative to the TRUE first-order instant | Email sends | Customers |
+  > |---|---|---|
+  > | 7 h **before** (imported by the bad anchor) | **2,584** | 2,467 |
+  > | first 7 h after | 108 | 108 |
+  > | rest of the 14 days | 42,164 | 10,945 |
+  >
+  > So the displaced window inflates in-window sends by up to **2,584 / 42,272 = +6.1%**, touching **~22% of the cohort**. And the imported events are the worst possible ones for this metric: they are **pre-first-order acquisition sends** — quite plausibly the email that caused the order — being counted as post-first-order onboarding engagement. The number is modest; the attribution is backwards.
+  >
+  > ⚠️ **A finding inside the finding, and it inverts the obvious guess.** The 7 hours *after* a first order are nearly empty (108 sends) while the 7 hours *before* are ~24x denser. Welcome-series sends do **not** cluster immediately after the first order — these customers were already being emailed before they first ordered. Either they are long-standing subscribers who only just converted, or identity is attaching late (guest checkout / `mapped_cust_id` churn) and the "first order" is not their first. Worth a look on its own; do not assume the welcome flow fires on order.
 
   > **✅ RESOLVED 2026-08-20 — `order_timestamp_utc` was NULL for stores whose `store_info.timezone_name` was missing, and new stores failed silently** (Asana 1217684772713570). It is built as `timestamp(order_datetime, s.timezone_name)`, and `timestamp()` returns NULL on a NULL timezone rather than erroring — so a newly-opened store was **invisible in every Braze attribution and UTC-windowed analysis** instead of throwing.
   >

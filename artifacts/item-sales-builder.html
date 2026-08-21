@@ -204,11 +204,11 @@ const COMBO_RC=['Sandwiches','Soups','Salads'];
 //   'Promotion' after the second build pass that day.
 // ---------------------------------------------------------------------------
 const SHAPE=`case
-    when ol.composite_item_id is not null then 'In combo (paid)'
-    when ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo' then 'In combo (free slot)'
-    when ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '') then 'Sold alone'
-    else 'Inside another parent item'
-  end`;
+	when ol.composite_item_id is not null then 'In combo (paid)'
+	when ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo' then 'In combo (free slot)'
+	when ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, '') then 'Sold alone'
+	else 'Inside another parent item'
+end`;
 const F_SOLO="(ol.composite_item_id is null and ifnull(ol.parent_rev_center_name, '') = ifnull(ol.rev_center_name, ''))";
 const F_COMBO="(ol.composite_item_id is not null or ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo')";
 
@@ -397,8 +397,8 @@ function buildSql(){
   groupKeys.forEach(k=>{ const a=attr(k); if(a) dims.push({sql:a.sql, as:a.as}); });
 
   const selDims=dims.length
-    ? dims.map((d,i)=>`${i?', ':'  '}${d.sql} as ${d.as}`).join('\n')
-    : "  'All' as scope";
+    ? dims.map((d,i)=>`${i?', ':''}${d.sql} as ${d.as}`).join('\n')
+    : "'All' as scope";
   const ms=MEAS.filter(m=>measOn.has(m.k));
   const selMeas=ms.map(m=>`, ${m.sql} as ${m.as}`).join('\n');
 
@@ -409,12 +409,12 @@ function buildSql(){
   if(shapef==='solo')  wants.push(`and ${F_SOLO}`);
   if(shapef==='combo') wants.push(`and ${F_COMBO}`);
 
-  const grpBy = dims.length ? dims.map((d,i)=>`${i?', ':'  '}${d.as}`).join('\n') : null;
+  const grpBy = dims.length ? dims.map(d=>d.as).join(', ') : null;
   const primary = ms.find(m=>m.k==='units') || ms[0];
   const ordBy = dims.length
-    ? (grain ? `  ${grain.as}\n${dims.length>1?dims.slice(1).map(d=>`, ${d.as}`).join('\n')+'\n':''}, ${primary.as} desc`
-             : `  ${primary.as} desc`)
-    : `  1`;
+    ? (grain ? [grain.as, ...dims.slice(1).map(d=>d.as), `${primary.as} desc`].join(', ')
+             : `${primary.as} desc`)
+    : '1';
 
   const sql=`select
 ${selDims}
@@ -427,8 +427,7 @@ and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 ${wants.join('\n')}
-${grpBy?`group by\n${grpBy}\n`:''}order by
-${ordBy}
+${grpBy?`group by ${grpBy}\n`:''}order by ${ordBy}
 limit ${ROW_CAP}`;
   pre.textContent=sql;
 
@@ -465,10 +464,10 @@ $('find').onclick=async()=>{
   const msg=$('findmsg');
   if(!frags.length){ msg.textContent='type at least one item name'; return; }
   msg.textContent=`searching ${frags.length} name${frags.length>1?'s':''}…`;
-  const likes=frags.map(f=>`lower(ol.item_name) like '%${esc(f.toLowerCase())}%'`).join('\n   or ');
+  const likes=frags.map(f=>`lower(ol.item_name) like '%${esc(f.toLowerCase())}%'`).join(' or ');
   try{
     const {rows}=await bq(`select
-  ol.item_name
+ol.item_name
 , ol.rev_center_name
 , ol.item_type
 , count(*) as lines
@@ -481,12 +480,8 @@ and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 and (${likes})
-group by
-  ol.item_name
-, ol.rev_center_name
-, ol.item_type
-order by
-  lines desc
+group by ol.item_name, ol.rev_center_name, ol.item_type
+order by lines desc
 limit 60`);
     candRows=rows;
     msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click the ones you want`:'no matches — try a shorter fragment';

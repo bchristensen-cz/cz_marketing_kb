@@ -85,11 +85,11 @@ select
 , oc.store_id
 , oc.net_sales
 , oc.total_discount_amount
-, oc.total_promotions_amount
+--, oc.total_promotions_amount
 from `marketing-data-442316`.sales_ops.order_customer oc
 where 1=1
 and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
-and oc.store_id <> 1111
+and oc.store_id not in (1111, 999)
 )
 
 /* store_id on order_customer matches brinkOrder.FKStoreId (verified 2026-08-05,
@@ -136,7 +136,7 @@ select
 , lower(coalesce(
     pt.pulse_tender_names
   , bt.brink_tender_names
-  , case when ifnull(b.total_discount_amount, 0) + ifnull(b.total_promotions_amount, 0) > 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
+  , case when ifnull(b.total_discount_amount, 0) > 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
   , 'no_payment'
   )) as payment_tender
 , bt.total_payment_amount

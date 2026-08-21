@@ -57,8 +57,8 @@
 | Column | Type | Description |
 |---|---|---|
 | `business_date` | DATE | Operating day (partition column). Canonical date for all reporting. **Renamed from `businessdate` 2026-07-24.** |
-| `order_datetime` | DATETIME | Local time. Normally `ClosedTime`; if the order closed on a later day than its `business_date` (catering / advance orders), falls back to `promise_time` then `OpenedTime`. |
-| `order_timestamp_utc` | TIMESTAMP | `order_datetime` converted to UTC using the store's timezone: `timestamp(order_datetime, s.timezone_name)`. **NULL whenever `store_info.timezone_name` is NULL** — see the gotcha below. The canonical column for any comparison against a UTC source (Braze); never rebuild it with a `timestamp()` cast of your own. |
+| `order_datetime_local` | DATETIME | Store-local time. Normally `ClosedTime`; if the order closed on a later day than its `business_date` (catering / advance orders), falls back to `promise_time` then `OpenedTime`. **Renamed from `order_datetime` 2026-08-20/21 — the rename went base-table-wide, so `oc.order_datetime` now errors here too, not just on the `claude` view.** Verified against deployed `INFORMATION_SCHEMA.COLUMNS` 2026-08-21. |
+| `order_timestamp_utc` | TIMESTAMP | `order_datetime_local` converted to UTC using the store's timezone: `timestamp(order_datetime_local, s.timezone_name)`. **NULL whenever `store_info.timezone_name` is NULL** — see the gotcha below. The canonical column for any comparison against a UTC source (Braze); never rebuild it with a `timestamp()` cast of your own. |
 | `opened_time` | DATETIME | Raw POS opened time. |
 | `loyalty_signup_date` | DATE | Customer's loyalty enrollment date (NULL for guests). |
 

@@ -39,13 +39,38 @@ and validation. Tips and change are **not** on this view — read `total_tip_amo
 
 1. **Pulse names win** (they carry digital-wallet detail): `coalesce(digital_payment_medium_name, network, tenders.name)` per payment, from settled pulse payments only.
 2. Else **Brink tender names**, normalized: `american express` → `amex`; any `TenderType = 'Cash'` quick-button (`exact $ amount`, `next $ amount`) → `cash`; `house account` → `house_account` (pulse spelling).
-3. Else `'discount'` when `total_discount_amount + total_promotions_amount > 0` and `net_sales < 1` (fully-discounted orders).
+3. Else `'discount'` when `total_discount_amount > 0` and `net_sales < 1` (fully-discounted orders). **Corrected 2026-08-21** — the earlier wording here (`total_discount_amount + total_promotions_amount > 0`) named a column that does not exist on `sales_ops.order_customer`; the deployed view has it commented out, and the repo script has been synced to the deployed text.
 4. Else `'no_payment'`.
 
 Typical week (2026-07-29 → 2026-08-04): visa ~47%, doordash ~11%, mastercard ~10%,
 apple pay ~7.5%, cash ~5.4%, amex ~5.3%, ubereats ~3.2%, discount ~1.9%, discover ~1.8%,
 google pay, grubhub, postmates, gift card, givex, house_account, no_payment, unknown, and
 a long tail of comma-joined split tenders (~0.3% of orders).
+
+> ### 🚨 The `'discount'` branch is dead code as of 2026-08-17 — every fully-discounted order now reads `'no_payment'`
+>
+> Found 2026-08-21 (query-log review). The branch tests `total_discount_amount > 0`, but the
+> 2026-08-17 `order_customer` build change (`sum(p.amount) * -1`, added so discounts could be summed
+> with `gross_sales`) made the discount columns **negative**. A `> 0` test on a column that is now
+> never positive can never fire. Measured on `sales_ops.order_customer`, stores 1111/999 excluded:
+>
+> | business_date | orders | `total_discount_amount > 0` | `< 0` | branch fires | would fire with the correct sign |
+> |---|---|---|---|---|---|
+> | 2026-08-01 | 23,765 | **0** | 1,712 | **0** | 546 |
+> | 2026-08-18 | 27,690 | **0** | 2,284 | **0** | 658 |
+>
+> Range of `total_discount_amount` on both days: **−425.31 → 0.00**, never above zero. So ~2.4% of
+> orders (658 of 27,690 on 2026-08-18) are labelled `'no_payment'` when they are fully-discounted
+> orders. Note the `discount ~1.9%` figure in the distribution above was measured **2026-07-29 →
+> 08-04, before the sign flip** — it was true then and is not now. Fix is one character
+> (`> 0` → `< 0`, or wrap in `abs()`), but it needs a **deploy + repo commit together**, so it is
+> logged rather than pre-applied (Asana 1217737763361273).
+>
+> **The generalisable lesson, and this KB keeps meeting it from both directions:** a sign change in a
+> build is not a cosmetic change. It silently rewrites the truth value of every downstream comparison
+> that reads the column. `> 0` became unreachable, `< 0` became universal, and nothing errored. When a
+> build changes a column's **sign, nullability, or type**, grep every reader before calling it done —
+> the same rule already written up for "a build starts populating a formerly-NULL column".
 
 **Settled-payments-in semantics:** pulse rows must be processed and not
 cancelled/failed/refunded/removed/deleted; stripe detail only from `status = 'succeeded'`;

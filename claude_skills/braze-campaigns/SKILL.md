@@ -223,6 +223,17 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   >
   > **Rule: never build a UTC order timestamp yourself.** `order_timestamp_utc` already applies each store's own `timezone_name`. If a `timestamp(` wrapping `order_datetime` appears anywhere in a cross-source query, that query's attribution is wrong.
   >
+  > **✅ Update 2026-08-21 — the bare cast now fails loudly on every canonical object, and that closes this hole by construction.** The base-table-wide `order_datetime` → `order_datetime_local` rename (overnight 2026-08-20 → 08-21) means `timestamp(oc.order_datetime)` no longer compiles on `sales_ops.order_customer`, `sales_ops.order_lines`, `claude.order_customer` or `claude.order_lines`. A rename shipped for naming clarity retired a silent-wrong-answer bug as a side effect — worth remembering the next time a rename looks like churn.
+  >
+  > **🚨 But it survives in one place, and there the cast rule does not even apply.** On the retired `sales_ops.OrderCustomer`, `order_datetime` is a **TIMESTAMP that holds store-local wall-clock time**. Measured 2026-08-21 on BusinessDate 2026-08-15, 26,412 orders, store 1111 excluded: it equals `order_timestamp_utc` on **0** of them, and `timestamp_diff(order_timestamp_utc, order_datetime, hour)` spans **4 to 7 hours** — the same four offsets. So the anti-pattern on that table has **no cast to spot**:
+  >
+  > ```sql
+  > -- ANTI-PATTERN on the legacy table, and there is nothing to grep for
+  > and o.order_datetime > timestamp(l.ts)   -- TIMESTAMP vs TIMESTAMP: compiles, runs, off by 4-7 h
+  > ```
+  >
+  > Braze `event_timestamp` cast to TIMESTAMP compared against a TIMESTAMP-typed local clock type-checks perfectly. Observed in 40 queries across two analysts on 2026-08-20. The legacy table carries a correct `order_timestamp_utc` right beside it, used in none of them. **On a cross-source time comparison the review question is "which table?" before "which cast?"** — and the answer for the legacy table is: don't (Asana 1217553975515537).
+  >
   > **Why the bad version passes review: the two casts look symmetric and only one is a no-op.** The pattern in the log is
   >
   > ```sql

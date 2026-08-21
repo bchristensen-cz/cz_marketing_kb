@@ -75,8 +75,14 @@ The deployed view filters the test store out entirely — a standard user **cann
 
 > **⚠️ Renamed 2026-08-20 — `order_datetime` is exposed here as `order_datetime_local`.** The view is
 > `oc.* except(brink_net_sales, order_datetime), oc.order_datetime as order_datetime_local`. Value and
-> type are unchanged (DATETIME, store-local); `sales_ops.order_customer` still calls it
-> `order_datetime`. Selecting `oc.order_datetime` on this view now errors. The rename exists because
+> type are unchanged (DATETIME, store-local). ⚠️ **Updated 2026-08-21 — the sentence that used to sit
+> here ("`sales_ops.order_customer` still calls it `order_datetime`") is no longer true.** The rename
+> went **base-table-wide** overnight 2026-08-20 → 08-21 with the order-mart chaining rebuild:
+> `sales_ops.order_customer`, `sales_ops.order_lines` and both `claude` views now expose
+> `order_datetime_local` and **nothing** exposes `order_datetime`. Verified against deployed
+> `INFORMATION_SCHEMA.COLUMNS` 2026-08-21. The one object that still has `order_datetime` is the
+> retired `sales_ops.OrderCustomer`, where it is a **TIMESTAMP holding local time** — see the
+> `sales-ops-orders` skill. Selecting `oc.order_datetime` anywhere else now errors. The rename exists because
 > the old name gave no hint that the value was local, and `timestamp(order_datetime)` — a bare cast
 > that assumes UTC — appeared in 73 of one analyst's 160 queries on 2026-08-19. Use
 > `order_timestamp_utc` for anything cross-source; see the `sales-ops-orders` and `braze-campaigns`
@@ -87,7 +93,15 @@ The deployed view filters the test store out entirely — a standard user **cann
 
 Identical to `sales_ops.order_customer` — **see [`sales_ops.order_customer.md`](sales_ops.order_customer.md) for full descriptions**, deliberately not duplicated here so the two can't drift:
 
-`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `total_discount_amount`, `total_promotions_amount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `brink_net_sales`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime_local`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `discount_amount`, `promotions_amount`, `total_discount_amount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+
+⚠️ **Corrected 2026-08-21 against the deployed 57-column view.** Three names in the list above were wrong, all in the direction that makes a query look valid until it runs:
+
+- `order_datetime` → **`order_datetime_local`** (rename, see above).
+- **`brink_net_sales` was never here** — the view `except()`s it by steward rule. It had been listed as a passthrough since the file was written.
+- **`total_promotions_amount` does not exist**; the deployed view carries **`discount_amount`** and **`promotions_amount`** alongside `total_discount_amount`. Any formula still written as `gross_sales − total_discount_amount − total_promotions_amount` fails with `Unrecognized name` — and is doubly wrong, because promotions are already inside `total_discount_amount` and **both discount columns are stored negative**, so the settled expression is `gross_sales + discount_amount + promotions_amount` (see `sales_ops.order_customer.md`). In practice: **read the precomputed `net_sales` column and don't re-derive it** (Asana 1217614170649235 tracks the remaining stale copies of the old formula).
+
+The durable lesson: this list is a hand-maintained copy of a deployed schema, and every drift found so far has been silent. Regenerate it from `claude.INFORMATION_SCHEMA.COLUMNS` rather than editing it by hand.
 
 (Updated 2026-08-13: `state` renamed to `store_state` 2026-07-30; `destination_id` and `has_order_items` added to the base table and now advertised here after a metadata-refresh redeploy — new base columns flow through `oc.*` at query time but stay invisible in `INFORMATION_SCHEMA.COLUMNS` until the view is redeployed, same trap as the rename.)
 

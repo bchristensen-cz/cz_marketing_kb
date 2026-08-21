@@ -62,9 +62,36 @@ a long tail of comma-joined split tenders (~0.3% of orders).
 > Range of `total_discount_amount` on both days: **−425.31 → 0.00**, never above zero. So ~2.4% of
 > orders (658 of 27,690 on 2026-08-18) are labelled `'no_payment'` when they are fully-discounted
 > orders. Note the `discount ~1.9%` figure in the distribution above was measured **2026-07-29 →
-> 08-04, before the sign flip** — it was true then and is not now. Fix is one character
-> (`> 0` → `< 0`, or wrap in `abs()`), but it needs a **deploy + repo commit together**, so it is
-> logged rather than pre-applied (Asana 1217737763361273).
+> 08-04, before the sign flip** — it was true then and is not now (Asana 1217737763361273).
+>
+> ### ⚠️ Still dead after the 2026-08-21 fix — the sign moved and the boundary moved with it
+>
+> Deployed the same day as `... total_discount_amount <> 0 and net_sales < 0 then 'discount'`.
+> `<> 0` is the right call on the discount side and is **sign-agnostic**, which is the durable choice
+> for a column that has already flipped once. But `net_sales < 1` became `net_sales < 0`, and a
+> fully-discounted order lands on net **exactly 0** (`gross + (−gross) = 0`), so it fails a strict
+> `< 0`. Re-measured immediately after deploy, same two days:
+>
+> | business_date | orders | `net_sales < 0` (deployed) | `net_sales = 0` | `net_sales < 1` |
+> |---|---|---|---|---|
+> | 2026-08-01 | 23,765 | **2** | 518 | 546 |
+> | 2026-08-18 | 27,690 | **0** | 633 | 658 |
+>
+> So the branch still fires on ~0 orders. Correct predicate — keep `<> 0`, restore the `< 1` bound:
+>
+> ```sql
+> , case when ifnull(b.total_discount_amount, 0) <> 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
+> ```
+>
+> `< 1` is the right bound for both cases: net is 0 on a clean full discount, and *slightly negative*
+> when a discount exceeds gross (2 such orders on 2026-08-01, min net −0.80). It is also safe to
+> leave loose, because this branch is only reached when **both** the pulse and brink tender names are
+> NULL — it is a fallback, not a primary filter, so it cannot capture a genuine 50¢ paid order.
+>
+> **Lesson worth more than the fix: two things were wrong in one predicate, and fixing the one that
+> was diagnosed re-broke the other.** The reported defect was the sign; the `< 1` bound was load-
+> bearing and undiscussed, so it got rewritten to "match" the sign change. When correcting a
+> comparison, re-measure the *whole* predicate, not the clause that was named.
 >
 > **The generalisable lesson, and this KB keeps meeting it from both directions:** a sign change in a
 > build is not a cosmetic change. It silently rewrites the truth value of every downstream comparison

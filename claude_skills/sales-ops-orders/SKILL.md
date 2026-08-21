@@ -1721,7 +1721,30 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **Year-over-year offset is 364 days, not 1 year** — `date_sub(d, interval 364 day)` (52 × 7) keeps the day-of-week aligned, which matters because the week is Mon–Sat and Sundays are zero. `date_sub(d, interval 1 year)` shifts the weekday and drags a Sunday into the comparison window. Convention observed in analyst SQL 2026-07-24.
 - Timezone: business runs on `America/Denver` for schedule logic; each store's local time is in `order_datetime_local` (DATETIME — **renamed from `order_datetime` base-table-wide 2026-08-20/21**, the old name no longer exists on `sales_ops.order_customer`, `sales_ops.order_lines`, or either `claude` view), UTC in `order_customer.order_timestamp_utc`.
 - There is **no `order_id` column** on any of these tables — the order key is `brink_order_id` (multiple users have hit this error).
-- A legacy table `sales_ops.OrderCustomer` also exists (different schema: `netsales`, `iscatering`, `storeid`, `lifetime_order_cnt`, `first_order_datetime`, `order_count`, `mapped_domain`, `source`, …). **Do not use it** — it predates this mart and gives different answers. `sales_ops.order_customer` (lowercase) is the only canonical order table.
+- ### ⚰️ `sales_ops.OrderCustomer` was DROPPED 2026-08-21 09:52 MT. If a query names it, the answer is the migration table below — not a workaround.
+
+  The legacy table (schema: `netsales`, `iscatering`, `storeid`, `lifetime_order_cnt`, `first_order_datetime`, `order_count`, `mapped_domain`, `order_trans_or_cust_id`, `state`, `source`, …) is gone. `sales_ops.order_customer` (lowercase) is the only order table. Any query against the old name now fails with `Not found: Table ... OrderCustomer` — which is the point: five documented days of "do not use it" changed nothing, and the drop retired it in one.
+
+  **Translate, don't re-point-and-hope.** Verified against deployed `INFORMATION_SCHEMA.COLUMNS` 2026-08-21:
+
+  | Legacy column | Canonical replacement |
+  |---|---|
+  | `businessdate` / `BusinessDate` | `business_date` |
+  | `storeid` | `store_id` |
+  | `state` | `store_state` |
+  | `iscatering = 0` | `is_catering = false` (INT64 → BOOL) |
+  | `order_datetime` | `order_datetime_local` |
+  | `mapped_domain` | `mapped_email_domain` |
+  | `order_count` | `customer_order_count` (`claude.order_customer` or `order_sequence`) |
+  | `lifetime_order_cnt` | `lifetime_order_count` (`claude.order_customer` or `customer_attribute`) |
+  | `first_order_datetime` / `last_order_datetime` | `customer_attribute.first_order_datetime` / `.last_order_datetime` |
+  | `order_trans_or_cust_id` | **No equivalent — it exists nowhere on the canonical marts.** Use the `in_store_scan` column, which is the same idea the legacy builds computed inline as `case when pulse_order_id is null and mapped_cust_id is not null then 1 else 0 end` |
+  | `netsales` | **A decision, not a rename** — see below |
+  | `storeid <> 1111` | `store_id not in (1111, 999)` (999 was excluded nowhere in the legacy queries) |
+
+  ⚠️ **`netsales` is the one non-mechanical mapping.** It is the Brink-**given** net sales, whose counterpart is `brink_net_sales` — a validation field the steward rule keeps out of published output. The canonical quotable net is the calculated `net_sales`. The two differ, so mapping `netsales → net_sales` **moves every historical number** on any report that used to read the legacy column (the YoY sales dashboard among them). State which one you used.
+
+  💡 **What the drop cost, and the process lesson.** Zero views depended on it (checked `view_definition` across all 14 datasets that have views) — the 2026-07-30 "renaming a base table drops its view" failure did not repeat. But **15 daily scheduled builds read it in live SQL** and were found only after the drop: 8 `shared_datasets` QuickSight sources including `google_offline_conversions` (which uploads to Google Ads), `sales_ops.cs_comp_points` / `cust_info` / `rfm` / `store_info`, and three `braze.*` customer-attribute builds. The dependency sweep is cheap — one `regexp_contains` over `JOBS_BY_PROJECT` for non-`SELECT` statement types, plus `view_definition` per dataset — so **run it before the drop, not after** (Asana 1217722726180551).
   - **It is now also going stale**: on 2026-07-27 its `max(business_date)` was **2026-07-25** while `order_customer` had loaded through 2026-07-27. Answers from it are silently 1–2 days short of current. Three separate users queried it during 2026-07-24 → 2026-07-26.
   - **🛑 If you are working from a saved query or a shared template, assume it targets this legacy table and rewrite it before running.** Query-log review counted **188 non-steward runs against `OrderCustomer` in the five business days 2026-07-24 → 2026-07-29**, and every one of the 115 raw-`pulse.*` wall breaches in that window came through it. The pattern is a *shared workbook* — byte-identical query text ran under two different users' accounts hours apart on 2026-07-28, eight of them inside a single minute (batch execution). Legacy schema is the tell: `businessdate`, `storeid`, `iscatering = 0`, `source`, `lifetime_order_cnt`, `first_order_datetime`. Translate to `business_date`, `store_id`, `is_catering = false`, `order_source`, and `order_sequence.lifetime_customer_order_count` — and if the template reached into `pulse.*` for identity, stop and say the mart can't answer it (Asana 1216992461499656).
   - `iscatering` on the legacy table is **INT64** (`iscatering = 0`); `is_catering` on the canonical mart is **BOOL** (`is_catering = false`). Writing `is_catering = 0` fails with `No matching signature for operator = for argument types: BOOL, INT64` (observed 2026-07-24) — a reliable sign a query was written against the legacy schema.

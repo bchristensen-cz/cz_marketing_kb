@@ -468,7 +468,7 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 
 | Metric | Definition |
 |---|---|
-| Net sales | `sum(net_sales)` from `order_customer` — **read the column, never rebuild it.** Do NOT use `brink_net_sales` (validation only, and not exposed on the `claude` view) |
+| Net sales | `sum(net_sales)` from `order_customer` — **read the column, never rebuild it.** Do NOT use `brink_net_sales`: it is the steward's own cross-check, **not an accuracy reference**, and not exposed on the `claude` view. Do not report it, and do not measure `net_sales` against it (steward ruling 2026-08-21) |
 | Gross sales | `sum(gross_sales)` from `order_customer` |
 | Order count | `count(*)` from `order_customer` (or `count(distinct brink_order_id)` — see the grain defect note) |
 | Average check | `sum(net_sales) / count(*)` from `order_customer` |
@@ -493,55 +493,61 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 >
 > **(b) 🔻 RETRACTED — my "9.2% don't reconcile" finding was mostly my own sign error.** **The discount columns are stored NEGATIVE.** `discount_amount` and `promotions_amount` come from `sum(amount) * -1` in the build, so net is `gross_sales` **+** `total_discount_amount`, not minus. Subtracting a negative added the discount back, and the 130,171 "matches" I reported were simply the orders with no discount at all. The lesson, and it is the same one this KB keeps relearning: **check the sign of a column before reporting a reconciliation gap** — a plausible-looking mismatch percentage was an artifact of my arithmetic, not of the data.
 >
-> **(c) ✅ FIXED 2026-08-21 — `net_sales` now deducts promotions, and it ties to Brink.** The build
-> had computed `bo.GrossSales + coalesce(d.total_discount_amount,0)` — the *discount* CTE only —
-> while its own comment claimed *"gross sales - discounts - promotions"*. `promotions_amount` was
-> computed, exposed, rolled into `total_discount_amount`, and never subtracted, overstating net
-> sales by exactly the promotions total on every promotion order (+$15,805.69 in the week measured;
-> Brink agreed with the corrected version on **1,287 of 1,287** and with the shipped version on
-> **none**). The steward added the term and full-refreshed all history.
+> **(c) ✅ FIXED 2026-08-21 — `net_sales` now deducts promotions.** The build had computed
+> `bo.GrossSales + coalesce(d.total_discount_amount,0)` — the *discount* CTE only — while its own
+> comment defined net sales as *"gross sales - discounts - promotions"*. `promotions_amount` was
+> computed, exposed, rolled into `total_discount_amount`, and never subtracted, so net sales was
+> overstated by exactly the promotions total on every promotion order (1,287 orders / $15,805.69 in
+> the week measured). The steward added the term and full-refreshed all history:
 >
-> **Post-fix tie-out against `brink_net_sales`, full history, stores 1111/999 excluded
-> (measured 2026-08-21):**
+> ```sql
+> , bo.GrossSales + coalesce(d.total_discount_amount,0) + coalesce(bp.total_promotions_amount,0) as net_sales
+> ```
 >
-> | Year | Orders | Mismatches | Rate | Δ vs Brink |
-> |---|---|---|---|---|
-> | 2026 | 5,478,780 | 945 | 0.02% | −$2,021.52 |
-> | 2025 | 8,274,702 | 1,326 | 0.02% | −$5,730.79 |
-> | 2024 | 7,283,853 | 1,609 | 0.02% | −$7,749.95 |
-> | 2023 | 6,545,708 | 3,229 | 0.05% | −$5,597.29 |
-> | 2022 | 6,705,386 | 3,615 | 0.05% | +$5,904.59 |
-> | 2021 | 6,640,100 | 28,009 | 0.42% | +$63,705.94 |
-> | 2020 | 5,116,887 | **83,387** | 1.63% | **+$370,960.84** |
-> | 2019 | 4,542,502 | 41,512 | 0.91% | **+$557,764.08** |
-> | 2018 | 234,314 | 16,818 | **7.18%** | +$167,649.73 |
+> **The basis for calling it fixed is definitional, not a tie-out**: the steward's stated definition
+> of net sales is gross less discounts less promotions, and the expression now matches it. That is
+> the whole claim, and it is enough.
 >
-> **From 2022 forward the calculated net ties to Brink to within 0.05% of orders. Before that it
-> does not, and the cause is NOT discounts or promotions.** In 2019 **40,721 of 41,512** mismatches
-> (98.1%, $543,811 of $557,764) sit on orders with **zero discount and zero promotion** — i.e.
-> where `net_sales` is simply `gross_sales`, and Brink's own `NetSales` disagrees with Brink's own
-> `GrossSales`. 2020 is the same shape (92.5%).
+> **🔻 RETRACTED 2026-08-21 — do NOT validate `net_sales` against `brink_net_sales`.** An earlier
+> version of this section published a year-by-year "tie-out" against that column and concluded net
+> sales was "reconciled to Brink from 2022 forward" with ~$1.15M unexplained before that.
+> **Steward ruling: `brink_net_sales` exists for his own purposes and is not an accuracy
+> reference.** Every conclusion that rested on it is withdrawn — the per-year mismatch table, the
+> 2022 reconciliation boundary, and the pre-2022 "$1.15M discrepancy," which was never a finding
+> about our data at all. Do not reintroduce it, and do not quote net sales as "reconciled" on that
+> basis.
 >
-> The mismatched population is heavily skewed to large orders: average `gross_sales` **$151.92**
-> against a typical ticket nearer $13, average Δ $13.35. Three explanations were tested on the 2019
-> population and **all three failed** — `brink_net_sales = subtotal` (152 of 40,721),
-> `= gross_sales - tax` (39), `= item_gross_sales` (8,044). **Cause unknown; do not repeat a guess
-> as fact.**
+> **What remains true and is worth knowing: there is currently NO independent validation source for
+> `net_sales`.** `gross_sales`, `discount_amount` and `promotions_amount` all come from the same
+> build, so any check among them is self-referential (see the method note below). A real check has
+> to come from outside `order_customer` — finance's own reported figures, or an
+> independent recomputation from `claude.order_line_discount_detail` at order grain. Until one
+> exists, `net_sales` is correct **by definition and construction**, which is a weaker claim than
+> "validated" and should be worded as such when a number is being compared to someone else's.
 >
-> **Practical rules.** Net sales is reconciled to Brink **2022-01-01 forward** — quote it freely
-> there. For earlier years, say the figure is the calculated net and that it does not tie to Brink,
-> with the gap concentrated in large orders. Standard users are unaffected either way: the `claude`
-> views floor at 2023-01-01, so only steward queries on `sales_ops` reach the unreconciled era.
+> **🧰 Method note — this write-up was wrong twice, in opposite directions, and both are instructive.**
 >
-> **🧰 Method note, because the first version of this write-up was bad.** I originally "proved" the
-> gap with three tests comparing `net_sales` to `gross_sales + discount_amount` and to
-> `gross_sales + total_discount_amount`. Those are **algebraically implied by the build script** —
-> `net_sales` *is* `gross + discount_amount`, so the 143,407/143,407 result was a tautology, and the
-> second test necessarily fails exactly where `promotions_amount <> 0`. It confirmed the table
-> matches its own SQL and nothing more, while being presented as evidence about correctness.
-> **A derived column can only be validated against an INDEPENDENT source** — here `brink_net_sales`.
-> If a reconciliation test's inputs all come from the same build expression, it cannot fail for an
-> interesting reason.
+> **First error, circular evidence.** I "proved" the promotions gap with tests comparing `net_sales`
+> to `gross_sales + discount_amount` and to `gross_sales + total_discount_amount`. Both are
+> **algebraically implied by the build script** — `net_sales` *is* `gross + discount_amount`, so the
+> 143,407/143,407 result was a tautology, and the second necessarily fails exactly where
+> `promotions_amount <> 0`. It confirmed the table matches its own SQL and nothing more, while being
+> presented as evidence about correctness. **If a reconciliation test's inputs all come from the same
+> build expression, it cannot fail for an interesting reason.**
+>
+> **Second error, and it is the subtler one: I picked a reference column without confirming it WAS a
+> reference.** Corrected, I reached for `brink_net_sales` — which this skill and the build script
+> both label "for validation only" — and treated that phrase as authority. The steward's meaning was
+> narrower: it is *his* cross-check, not a source of truth, and explicitly **not** to be used for
+> accuracy. On that false footing I published a per-year tie-out, a "reconciled from 2022 forward"
+> rule, and a ~$1.15M pre-2022 discrepancy — a confident, precise, plausible finding about nothing.
+>
+> The generalisable lesson is sharper than "use an independent source": **an independent source has
+> to be independent *and* sanctioned as authoritative, and only the steward can confer that.** A
+> column sitting in the same table, populated by the same upstream vendor, described by an ambiguous
+> comment, is not automatically ground truth. Ask whose definition a column encodes before you
+> measure anything against it — and note the failure mode, which is that the wrong reference
+> produces answers that look *more* rigorous, not less.
 >
 > **Practical rule: `net_sales` is a column, not a formula — select it.** If you must decompose, use `gross_sales + discount_amount` (plus, because the column is negative) and state that promotions are not netted out.
 
@@ -1586,7 +1592,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   | In combo, free slot | 37,623 | $386 | $371 | **3.83%** |
 
   The spread is **not constant across sale shapes**, so it is not a flat rate and the difference between gross and net cannot be described as "the discount" without evidence. Order-level discounts and promotions are still *not* allocated per item, so **`order_customer.net_sales` remains the only net figure to quote or tie out** — say that whenever you hand over `item_net_sales`. Still open: what the 2.3–3.8% actually represents, and why it is wider on combo components than on standalone lines (Asana: `KB finding: item_net_sales gross-to-net spread varies by sale shape`).
-- **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24). `brink_net_sales` is Brink-given and validation-only; it runs ~0.0025% above calculated net ($479 on $18.9M in June 2026). There is no per-item or per-modifier net in the mart any more.
+- **Net sales is the `net_sales` column** — read it directly (calculated at build since 2026-07-24; promotions term added 2026-08-21). `brink_net_sales` is the Brink-given value kept as the **steward's own cross-check — not an accuracy reference, not for reporting, and not something to measure `net_sales` against** (ruling 2026-08-21; an earlier version of this bullet quoted a 0.0025% variance against it, which was never a meaningful comparison). There is no per-item or per-modifier net in the mart any more.
 - **`is_catering = false` does not exclude catering-only items** (verified 2026-07-28). `Ultimate Grilled Cheese Box` — the catering box SKU — is flagged `is_catering = false` on `order_lines`. The flag describes the *order's* catering destination, not the *item's* nature, so catering-specific SKUs leak into non-catering item mix. Check the resolved item-name list for `Box` / `Tray` / `Party` variants explicitly.
 - **🚨 `order_customer` and `order_lines` disagree on catering again, since 2026-08-17.** Finance's
   definition added **store 50 (Middleton Mobile)** to `order_customer.is_catering` and to

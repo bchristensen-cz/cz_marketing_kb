@@ -4,7 +4,7 @@
 
 > **Rebuilt 2026-07-24** (full history). Breaking changes — update any saved query:
 > - `businessdate` → **`business_date`** (partition column)
-> - `net_sales` is now the **calculated** net (`gross_sales - total_discount_amount - total_promotions_amount`); the Brink-given value moved to **`brink_net_sales`** (validation only)
+> - `net_sales` is now the **calculated** net; the Brink-given value moved to **`brink_net_sales`** (steward's cross-check, not an accuracy reference). As built 2026-08-21 the expression is `gross_sales + discount_amount + promotions_amount` — **plus**, because both discount columns are stored negative. There is no `total_promotions_amount` column; an earlier revision of this line named one.
 > - **dropped**: `item_net_sales`, `item_netsales_with_mods`, `mods_net_sales`
 > - **`is_catering` redefined** — destination-based catering is now flagged (was silently false)
 > - **new `customer_type`** — required filter for customer metrics
@@ -122,7 +122,7 @@ Practical consequences:
 |---|---|
 | `gross_sales` | Order gross sales from Brink (`brinkOrder.GrossSales`). |
 | `net_sales` | **Canonical net sales.** Calculated at build: `gross_sales - total_discount_amount - total_promotions_amount`. |
-| `brink_net_sales` | Brink-given net (`brinkOrder.NetSales`). **Validation only — do NOT use for reporting.** Reconciliation June 2026: calculated net runs $479 below Brink net on $18.9M (0.0025%), concentrated in Catering (−$346) and In-Store (−$124). |
+| `brink_net_sales` | Brink-given net (`brinkOrder.NetSales`). **The steward's own cross-check — NOT an accuracy reference** (ruling 2026-08-21). Do not report it, and do not measure `net_sales` against it: a "reconciliation" to this column is not evidence about our data. Two such comparisons have been published in this KB and both are retracted — a June 2026 0.0025% variance, and a 2026-08-21 per-year tie-out that produced a fictitious ~$1.15M pre-2022 discrepancy. Not exposed on `claude.order_customer`. |
 | `subtotal` | Brink subtotal. |
 | `tax` | Sales tax. |
 | `rounding` | Cash rounding adjustment. |

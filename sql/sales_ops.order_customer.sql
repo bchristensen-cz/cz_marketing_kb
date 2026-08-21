@@ -128,7 +128,7 @@ group by 1
 
 , brink_discounts as (
 select od.orderid as order_id
-, sum(od.amount)*-1 as total_discount_amount
+, sum(od.amount)*-1 as discount_amount  -- '2026-08-17' added the *-1 so i could sum the values with gross_sales to validate quickly
 from `marketing-data-442316`.brink.brinkOrderDiscount od
 	join brink_order bo
 	on bo.id = od.orderid
@@ -141,7 +141,7 @@ group by 1
 
 
 , brink_promotions as (
-select p.orderid, sum(p.amount)*-1 as total_promotions_amount
+select p.orderid, sum(p.amount)*-1 as promotions_amount  -- '2026-08-17' added the *-1 so i could sum the values with gross_sales to validate quickly
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
 	on bo.id = p.orderid
@@ -326,17 +326,17 @@ bo.Id as brink_order_id
 , coalesce(boim.mods_gross_sales,0) as mods_gross_sales
 , bo.subtotal as subtotal
 , coalesce(gc.total_gift_card_amount,0) as total_gift_card_amount
-, coalesce(d.total_discount_amount,0) as discount_amount
-, coalesce(bp.total_promotions_amount,0) as promotions_amount
-, coalesce(d.total_discount_amount,0) + coalesce(bp.total_promotions_amount,0) as total_discount_amount
+, coalesce(d.discount_amount,0) as discount_amount
+, coalesce(bp.promotions_amount,0) as promotions_amount
+, coalesce(d.discount_amount,0) + coalesce(bp.promotions_amount,0) as total_discount_amount
 -- , case
 -- 	when do.pos_transaction_key is not null then 1
 -- 	when d.is_employee_discount = 1 then 1 else 0 end as is_employee_discount  -- '2026-08-17' removed since we have the much better and more accurate order_line_discount_detail
 , coalesce(p.total_tip_amount,0) as total_tip_amount
 , coalesce(boi.total_delivery_tip_amount, 0) as total_delivery_tip_amount
 , coalesce(boi.total_other_tip_amount, 0) as total_other_tip_amount
-, bo.NetSales as brink_net_sales  -- **steward's own cross-check; NOT an accuracy reference** '2026-08-21'
-, bo.GrossSales + coalesce(d.total_discount_amount,0) + coalesce(bp.total_promotions_amount,0) as net_sales  -- '2026-08-21' promotions added per the stated definition
+, bo.NetSales as brink_net_sales  -- **for vaidation only**  '2026-07-24' net sales will now be a calc of gross sales + (discounts) + (promotions)
+, bo.GrossSales + coalesce(d.discount_amount,0) + coalesce(bp.promotions_amount,0) as net_sales
 -- , boi.item_netsales_with_mods
 -- , boi.item_net_sales
 -- , boim.mods_net_sales

@@ -178,9 +178,11 @@ These forks join the standard set in `ask-a-data-question`:
 
 Same as `sales-ops-orders` — read that section for the full rules. Backticks around the
 project only, alias every column, leading commas with **the first field flush with `select`
-(and flush with `group by` / `order by`), never indented**, **one space before `as` — no
-alignment padding**, **no padding inside `case` expressions either**, `where 1=1`, one extra
-indent per successive join — a join and its `on` line are the **only** things ever indented. Fixed aliases: `oc`,
+never indented**, **one space after each leading comma**, **`from` / `group by` / `order by`
+values on the keyword line**, **one space before `as` — no alignment padding**, **a `case` with
+2+ `when`s broken with its branches indented one tab (1 `when` stays inline), never padded**,
+`where 1=1`, one extra indent per successive join. Joins and multi-branch `case`es are the only
+indented lines. Fixed aliases: `oc`,
 `ol`, and **`dd`** for `date_dim`.
 
 ## Known gaps / not yet answerable

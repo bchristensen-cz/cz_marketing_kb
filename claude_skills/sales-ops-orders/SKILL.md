@@ -1252,26 +1252,31 @@ All SQL — shown to users or executed — follows the steward's format so he ca
    - `order_sequence` → `os`, `customer_attribute` → `ca`, `store_info` → `si`
 3. **Lowercase whenever possible**: keywords, functions, aliases, CTE names. Case only where the identifier or value requires it — schema column names as they actually exist (`business_date` on `order_lines`) and string literals being compared (`'Third Party'`).
 4. **Layout**:
-   - select list: one column per line, **leading commas**, first column on the line after `select`; column aliases use `as`
-   - **the first field is flush with `select` — do not indent it** (steward rule 2026-08-20). `group by` and `order by` lists follow the same rule: first field flush with the keyword, then `, field` lines beneath it. A leading-comma list has no reason to be indented; indenting the first field alone just makes it fail to line up with everything under it
+   - select list: one column per line, **leading commas with a single space after the comma** — `, oc.store_id as store_id`; column aliases use `as`
+   - **the first field is flush with `select` — do not indent it** (steward rule 2026-08-20). A leading-comma list has no reason to be indented; indenting the first field alone just makes it fail to line up with everything under it
+   - **`from`, `group by` and `order by` keep their values ON the keyword line** (steward rule 2026-08-21) — `from `marketing-data-442316`.sales_ops.order_customer oc`, `group by oc.business_date, oc.store_id, ol.item_name`, `order by oc.business_date`. Only the **select list** is stacked one-per-line; the tail clauses stay compact however many values they hold. ⚠️ This **reverses** the 2026-08-20 wording that said `group by` / `order by` follow the select-list layout with stacked leading-comma lines — that was an extrapolation from the select-list rule, never the steward's instruction
    - **exactly one space before `as` — never pad or column-align aliases** (steward rule 2026-08-20). `oc.net_sales as net_sales`, not `oc.net_sales                 as net_sales`. Alignment padding survives exactly one edit before it's wrong, and it turns a one-column change into a whole-block diff
-   - **no alignment padding inside `case` expressions either** (steward rule 2026-08-21). `, case when oc.is_catering then 'Catering' else 'Retail' end as channel` — single spaces throughout; never line up the `then`s, `else`s or `end`s. If the expression is too long for one line, break before each `when` at **zero** indent and still use single spaces. Same reasoning as the alias rule: padding is wrong after the next edit and turns a one-branch change into a whole-block diff
-   - **the ONLY indentation in a query is a `join` and its `on` line** (steward restatement 2026-08-21). Nothing else is ever indented — not the select list (inside a CTE or out), not the `and` lines under `where`, not `group by` / `order by` lists, not `case` branches. If a line is indented, it is a join or an on
+   - **`case`: one `when` stays inline, two or more break and indent** (steward rule 2026-08-21). One branch: `, case when oc.is_catering then 'Catering' else 'Retail' end as channel`. Two or more: `case` alone on its own line flush left, each `when` and the `else` indented **one tab**, then `end as alias` flush left again — see the worked example below
+   - **no alignment padding inside a `case` either** — single spaces throughout, never lined-up `then`s, `else`s or `end`s. Same reasoning as the alias rule: padding is wrong after the next edit and turns a one-branch change into a whole-block diff
    - CTEs: `with name as (` … `)`, chained as `, next_name as (`
    - **`where 1=1` is always the first condition**, then each real condition on its own `and ...` line — so conditions can be added, removed, or commented out without touching the rest
    - each join on its own line with `on ...` on the line directly beneath it, **lined up with the `join`**
    - **indent one additional level for each successive join**, so nesting depth is readable at a glance
+   - **indentation appears in exactly two places** (steward rule 2026-08-21): successive joins with their `on` lines, and the `when` / `else` branches of a multi-branch `case`. Nothing else is ever indented — not the select list (inside a CTE or out), not the `and` lines under `where`, not the tail clauses. ⚠️ Replaces the earlier 2026-08-21 line claiming a join and its `on` are the *only* indented lines; that was wrong, and it was wrong because it was written from a corrected snippet rather than from a full query the steward had actually laid out
 
-Wrong — indented first field, padded aliases, aligned `case`:
+Wrong — indented first field, padded aliases, aligned `case`, stacked `group by`:
 
 ```sql
 select
   oc.business_date                        as business_date
-, oc.store_id                             as store_id
 , case when oc.is_catering then 'Catering'
        else                     'Retail'
   end                                     as channel
 , count(distinct oc.brink_order_id)       as orders
+from `marketing-data-442316`.sales_ops.order_customer oc
+group by
+oc.business_date
+, channel
 ```
 
 Right:
@@ -1279,18 +1284,24 @@ Right:
 ```sql
 select
 oc.business_date as business_date
-, oc.store_id as store_id
 , case when oc.is_catering then 'Catering' else 'Retail' end as channel
 , count(distinct oc.brink_order_id) as orders
+from `marketing-data-442316`.sales_ops.order_customer oc
+group by oc.business_date, channel
 ```
 
-Full worked example:
+Full worked example — multi-branch `case`, nested joins, compact tail clauses:
 
 ```sql
 select
-oc.business_date
-, oc.store_id
-, ol.item_name
+oc.business_date as business_date
+, oc.store_id as store_id
+, case
+	when oc.revenue_category = 'Catering' then 'catering'
+	when oc.destination = 'Third Party' then 'third_party'
+	when oc.pulse_order_id is not null then 'digital'
+	else 'in_store'
+end as channel_group
 , count(distinct oc.brink_order_id) as orders
 , round(sum(oc.net_sales), 2) as net_sales
 from `marketing-data-442316`.sales_ops.order_customer oc
@@ -1301,14 +1312,11 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 where 1=1
 and oc.business_date between @start and @end
 and ol.business_date between @start and @end
-and oc.store_id <> 1111
-group by
-oc.business_date
-, oc.store_id
-, ol.item_name
-order by
-oc.business_date
+and oc.store_id not in (1111, 999)
+group by oc.business_date, oc.store_id, channel_group
+order by oc.business_date, oc.store_id
 ```
+
 
 ## Join patterns
 

@@ -1,36 +1,3 @@
--- Build script: `marketing-data-442316`.sales_ops.customer_attribute
--- Grain: ONE ROW PER CUSTOMER (mapped_cust_id), person only. This is a dimension, not a fact.
--- Documentation: data_dictionaries/sales_ops.customer_attribute.md
---
--- Purpose: customer base table holding lifetime + trailing-window aggregates. Feeds
--- (a) analyst segmentation in BigQuery and (b) a daily custom_attributes push to Braze.
---
--- STATUS 2026-07-30: DEPLOYED. Refreshed daily at 5am
---
--- Design decisions (steward, 2026-07-28):
---   * FULL create-or-replace every run, not a MERGE. Measured cost is ~1.4 GB / run
---     (~$0.007). An incremental merge would only touch customers who ordered, which leaves
---     the trailing-window columns (orders_l30 etc.) stale for everyone who DIDN'T order -
---     and those are exactly the customers a lapsed/win-back campaign targets. Recomputing
---     everybody daily makes "crossing a date window" a non-event. Do not convert this to a
---     MERGE to save $0.007.
---   * PERSON ONLY (customer_type = 'person'), filtered at read. Deliberately the opposite
---     of the order_sequence decision, and for a specific reason: order_sequence is a
---     per-order table where the caller can still filter, so pre-filtering there would have
---     hidden data. Here the row IS the aggregate - if aggregator id 19192 were included it
---     would land a single row with ~2.5M lifetime orders, and no downstream filter can
---     unwind that. Filtering after aggregation does not renumber; filtering before does.
---   * Driven from order_customer, NOT order_sequence. order_sequence is the natural first
---     guess but it carries no financials, no store, and no revenue_category, so every
---     attribute except the order count needs order_customer anyway. Its
---     lifetime_customer_order_count is also computed across ALL customer types, so it is
---     wrong for the ~30 mixed ids. count(*) over the person-filtered set is correct by
---     construction and costs nothing extra. Verified 2026-07-28: zero person customers have
---     a first order before order_sequence's 2023-03-06 history start, so nothing is lost.
---   * Stores 1111 and 999 excluded (standing steward rule).
---   * Catering orders are INCLUDED in the lifetime totals, with
---     lifetime_catering_order_count carried alongside so downstream can net it out.
-
 declare run_dt datetime default current_datetime('America/Denver');
 declare run_date date default date(run_dt);
 -- Anchored to YESTERDAY, not the run date (steward decision 2026-07-28). The job runs at
@@ -123,7 +90,7 @@ select
 , min(po.business_date) as first_order_date
 , max(po.business_date) as last_order_date
 
--- first order attributes: earliest by order_datetime_local, tie-broken by brink_order_id
+-- first order attributes: earliest by order_datetime, tie-broken by brink_order_id
 -- (same ordering convention as order_sequence)
 , array_agg(
     struct(
@@ -155,7 +122,7 @@ select
   )[offset(0)] as email_rec
 
 -- trailing windows, anchored on asof_date. Inclusive of asof_date, so l30 is the 30 days
--- ending on asof_date (i.e. YESTERDAY, not today): business_date > asof_date - 30.
+-- ending today: business_date > asof_date - 30.
 , countif(po.business_date > date_sub(asof_date, interval 30 day)) as orders_l30
 , countif(po.business_date > date_sub(asof_date, interval 90 day)) as orders_l90
 , countif(po.business_date > date_sub(asof_date, interval 365 day)) as orders_l365
@@ -240,7 +207,7 @@ select
 , asof_date as attribute_asof_date
 -- Change-detection key for the Braze export: only push customers whose hash moved since
 -- the last successful send. Deliberately EXCLUDES days_since_last_order and the asof date,
--- which change every single day for everyone and would force a full 1.4M-profile push.
+-- which change every single day for everyone and would force a full 1.37M-profile push.
 , farm_fingerprint(to_json_string(struct(
     ca.lifetime_order_count
   , ca.lifetime_net_sales

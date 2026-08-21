@@ -131,7 +131,7 @@ create temp table cur_ids as
 select
   oc.mapped_cust_id as cust_id,
   array_agg(lower(trim(oc.mapped_email)) ignore nulls
-            order by oc.order_datetime desc, oc.brink_order_id desc limit 1)[safe_offset(0)] as match_email,
+            order by oc.order_datetime_local desc, oc.brink_order_id desc limit 1)[safe_offset(0)] as match_email,  -- '2026-08-20' renamed
   min(oc.business_date) as first_order_date,
   max(oc.business_date) as last_order_date,
   count(distinct oc.brink_order_id) as lifetime_orders

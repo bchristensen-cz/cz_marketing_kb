@@ -56,7 +56,8 @@ select
   oc.mapped_cust_id
 , oc.brink_order_id
 , oc.business_date
-, oc.order_datetime
+, oc.order_datetime_local as order_datetime  -- '2026-08-20' base column renamed to order_datetime_local; aliased back so the
+                                            -- CTE and the public first_order_datetime / last_order_datetime columns are unchanged
 , oc.store_id
 , oc.store_name
 , oc.revenue_category

@@ -9,7 +9,9 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 
 > **⚠️ Breaking changes 2026-07-24** — `order_customer` was rebuilt across all history. `businessdate` is now **`business_date`**; `net_sales` is now the **calculated** net (read it directly); `item_net_sales` / `item_netsales_with_mods` / `mods_net_sales` are **gone**; `is_catering` was redefined; a **`customer_type`** column was added and is now **required for customer metrics**; `order_count` / `days_since_prev_order` moved to the new **`sales_ops.order_sequence`** table. Any saved query written before this date needs updating.
 
-> **⚠️ Breaking change 2026-08-20 — on the `claude` views, `order_datetime` is now `order_datetime_local`.** `claude.order_customer` and `claude.order_lines` no longer expose `order_datetime`; selecting it fails with `Name order_datetime not found inside oc`. The column is unchanged in value and type (DATETIME, store-local); only the name moved, and only on the `claude` layer — `sales_ops.*` still says `order_datetime`.
+> **⚠️ Breaking change 2026-08-20 — `order_datetime` is now `order_datetime_local` EVERYWHERE.** The rename went to the base tables the same day, followed by a full-history refresh of both marts: `sales_ops.order_customer`, `sales_ops.order_lines`, `claude.order_customer` and `claude.order_lines` all say `order_datetime_local`. Selecting `order_datetime` fails on every one of them. Value and type unchanged (DATETIME, store-local).
+>
+> Two knock-ons worth knowing. **(1)** `claude.order_customer` and `claude.order_lines` were *broken* for a window between the base rename and their redeploy — a `select *`-style view naming the old column in `except(...)` fails to parse entirely (`Column order_datetime in SELECT * EXCEPT list does not exist; failed to parse view`), so the whole view was unqueryable rather than merely missing a column. Redeploying every view over a renamed column is not optional cleanup. **(2)** `sales_ops.customer_attribute` and `customer_id_map` read the column and needed their own edits — `customer_attribute` aliases it back (`oc.order_datetime_local as order_datetime`) so its public `first_order_datetime` / `last_order_datetime` columns are unchanged.
 >
 > **Why:** on 2026-08-19, **73 of one analyst's 160 queries** contained `timestamp(order_datetime)` and **zero** used `order_timestamp_utc`. That bare cast assumes the value is UTC. It isn't — it is store-local, across **four** live UTC offsets (Ohio 4 h, IL/MN/TX/WI 5 h, ID/UT 6 h, AZ/NV 7 h), so every affected order read 4–7 hours early with no constant offset available to correct it downstream. The name `order_datetime` gave no hint of that; `timestamp(order_datetime_local)` reads obviously wrong at the call site, and the rename fails loudly on saved queries rather than silently returning a plausible number.
 >
@@ -484,25 +486,24 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 | Item net sales | `sum(item_net_sales)` from `order_lines` — live, fully populated, safe to report **when asked**. Runs 2.3–3.8% under gross depending on sale shape, and does **not** reconcile to order-level `net_sales`; say so in the same breath. See the gotcha below |
 | Menu mix name | `item_name` (size-normalized) + `item_size`; menu category via `rev_center_name` (`item_type` is only the closed 7-value rollup Entree / Kids Meals / Beverage / Discount / Promotion / Surcharge / Other as of 2026-08-12 — category values like `Desserts` return zero rows there) |
 
-> **🚩 CORRECTION 2026-08-20 — the net-sales formula this skill used to publish was wrong twice over.** It read
-> `net_sales = gross_sales - total_discount_amount - total_promotions_amount`. Two problems, both measured on
-> `sales_ops.order_customer` over 2026-08-11 → 08-16 (143,407 orders, stores 1111/999 excluded):
+> **🚩 CORRECTION 2026-08-20 — the net-sales decomposition, in three parts. Read all three; the middle one is my own error.**
 >
-> 1. **`total_promotions_amount` does not exist.** The discount columns are `discount_amount`,
->    `promotions_amount` and `total_discount_amount`. Anyone copying the formula gets
->    `Unrecognized name`.
-> 2. **Promotions are already inside `total_discount_amount`** — `total_discount_amount =
->    discount_amount + promotions_amount` on **143,407 of 143,407** orders, exactly. So the
->    published formula also *double-subtracted* promotions ($15,805.69 over that week).
+> **(a) The formula this skill published was unusable.** It read
+> `net_sales = gross_sales - total_discount_amount - total_promotions_amount`. **`total_promotions_amount` does not exist** on the table — the discount columns are `discount_amount`, `promotions_amount`, `total_discount_amount` — so anyone copying it got `Unrecognized name`. And promotions are already inside `total_discount_amount`, so the formula double-counted them as well.
 >
-> **And the corrected two-term version still doesn't reconcile:** `gross_sales - total_discount_amount`
-> matches `net_sales` on only **130,171 of 143,407 orders (90.8%)**. The 13,236 that don't are **not**
-> explained by `total_gift_card_amount` (0 of them) or by `rounding` (0 of them) — both tested and both
-> failed, so no benign explanation is on offer here. Open question, logged as a KB finding.
+> **(b) 🔻 RETRACTED — my "9.2% don't reconcile" finding was mostly my own sign error.** **The discount columns are stored NEGATIVE.** `discount_amount` and `promotions_amount` come from `sum(amount) * -1` in the build, so net is `gross_sales` **+** `total_discount_amount`, not minus. Subtracting a negative added the discount back, and the 130,171 "matches" I reported were simply the orders with no discount at all. The lesson, and it is the same one this KB keeps relearning: **check the sign of a column before reporting a reconciliation gap** — a plausible-looking mismatch percentage was an artifact of my arithmetic, not of the data.
 >
-> **Practical rule until it's resolved: `net_sales` is a column, not a formula.** Select it. Do not
-> derive it, do not reconcile someone else's derivation against it, and if a report needs the
-> decomposition, say that the components don't currently sum to the total for ~9% of orders.
+> **(c) The real gap is small, specific, and a genuine build bug.** Measured on `sales_ops.order_customer`, 2026-08-11 → 08-16, 143,407 orders, stores 1111/999 excluded:
+>
+> | Test | Matches |
+> |---|---|
+> | `net_sales = gross_sales + discount_amount` | **143,407 / 143,407** (100%) |
+> | `net_sales = gross_sales + total_discount_amount` | 142,120 / 143,407 (99.1%) |
+> | orders with `promotions_amount <> 0` | **1,287** |
+>
+> So **`net_sales` deducts discounts but NOT promotions** — the 1,287 exceptions are exactly the promotion orders, worth **$15,805.69** that week. And this is a bug rather than a definition, because the build script's own comment says the opposite: *"net sales will now be a calc of gross sales - discounts - promotions"*, while the expression is `bo.GrossSales + coalesce(d.total_discount_amount,0)` — discounts only. Intent and implementation disagree; steward decision pending (Asana 1217700106208956).
+>
+> **Practical rule: `net_sales` is a column, not a formula — select it.** If you must decompose, use `gross_sales + discount_amount` (plus, because the column is negative) and state that promotions are not netted out.
 
 ### Canonical `order_source` and `revenue_category` values (verified 2026-07-27)
 

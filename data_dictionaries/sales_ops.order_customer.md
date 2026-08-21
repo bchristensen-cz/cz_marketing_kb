@@ -158,13 +158,18 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
   **Lesson: fixing the dimension did not fix this column.** It is materialized, and the daily
   reload restates only 8 days. Any fact column derived from a dimension attribute needs its own
   backfill decision.
-- **`order_timestamp_utc` and `order_datetime` are NULL together on unclosed orders, and that
-  floor is permanent.** When `ClosedTime` is NULL the CASE falls through to it, so neither column
-  gets a value. Measured 2026-08-20 after the repair: **1,374 NULLs over 2026-08-01 → 08-20, all
-  1,374 with a NULL `order_datetime`**, overwhelmingly the current day's still-open orders. So the
-  correct health check is
-  `countif(order_timestamp_utc is null and order_datetime is not null) = 0` — plain
-  `order_timestamp_utc is null` will always return rows and is not a defect signal.
+- **🔻 RETRACTED same day — the "permanent NULL floor" on unclosed orders is gone, and it was
+  never permanent.** Earlier on 2026-08-20 this entry said `order_timestamp_utc` and
+  `order_datetime` are NULL together whenever `ClosedTime` is NULL (1,374 such orders over
+  2026-08-01 → 08-20) and called that an irreducible floor. It wasn't a floor, it was a missing
+  `coalesce`. The same-day rebuild changed the expression to
+  `coalesce(bo.ClosedTime, bo.OpenedTime)` with a final `datetime(bo.businessdate)` fallback, and
+  the full refresh brought both columns to **0 NULLs across 439,473 orders** (2026-08-01 → 08-19,
+  stores 1111/999 excluded). **So `countif(order_timestamp_utc is null) = 0` IS now a valid health
+  check** — no carve-out needed.
+  Lesson worth keeping: I described a defect as a property of the data one hour and it was fixed
+  the next. Date every measured claim, and prefer "as of <timestamp>, N rows" to "this can never
+  be zero."
 - **⚠️ Never rebuild a UTC timestamp from `order_datetime` yourself.** `order_datetime` is
   **store-local**, so `timestamp(oc.order_datetime)` — the bare cast, which assumes UTC — is
   wrong by the store's offset, and the chain spans **four** live offsets (Ohio 4 h;

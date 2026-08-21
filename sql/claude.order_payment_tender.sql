@@ -136,7 +136,7 @@ select
 , lower(coalesce(
     pt.pulse_tender_names
   , bt.brink_tender_names
-  , case when ifnull(b.total_discount_amount, 0) <> 0 and ifnull(b.net_sales, 0) < 0 then 'discount' end
+  , case when ifnull(b.total_discount_amount, 0) <> 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
   , 'no_payment'
   )) as payment_tender
 , bt.total_payment_amount

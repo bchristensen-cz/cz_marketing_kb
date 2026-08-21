@@ -64,34 +64,42 @@ a long tail of comma-joined split tenders (~0.3% of orders).
 > orders. Note the `discount ~1.9%` figure in the distribution above was measured **2026-07-29 →
 > 08-04, before the sign flip** — it was true then and is not now (Asana 1217737763361273).
 >
-> ### ⚠️ Still dead after the 2026-08-21 fix — the sign moved and the boundary moved with it
->
-> Deployed the same day as `... total_discount_amount <> 0 and net_sales < 0 then 'discount'`.
-> `<> 0` is the right call on the discount side and is **sign-agnostic**, which is the durable choice
-> for a column that has already flipped once. But `net_sales < 1` became `net_sales < 0`, and a
-> fully-discounted order lands on net **exactly 0** (`gross + (−gross) = 0`), so it fails a strict
-> `< 0`. Re-measured immediately after deploy, same two days:
->
-> | business_date | orders | `net_sales < 0` (deployed) | `net_sales = 0` | `net_sales < 1` |
-> |---|---|---|---|---|
-> | 2026-08-01 | 23,765 | **2** | 518 | 546 |
-> | 2026-08-18 | 27,690 | **0** | 633 | 658 |
->
-> So the branch still fires on ~0 orders. Correct predicate — keep `<> 0`, restore the `< 1` bound:
+> ### ✅ RESOLVED 2026-08-21 — deployed predicate is now
 >
 > ```sql
 > , case when ifnull(b.total_discount_amount, 0) <> 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
 > ```
 >
-> `< 1` is the right bound for both cases: net is 0 on a clean full discount, and *slightly negative*
-> when a discount exceeds gross (2 such orders on 2026-08-01, min net −0.80). It is also safe to
-> leave loose, because this branch is only reached when **both** the pulse and brink tender names are
-> NULL — it is a fallback, not a primary filter, so it cannot capture a genuine 50¢ paid order.
+> `<> 0` on the discount side is deliberately **sign-agnostic** — the durable choice for a column
+> whose sign has already flipped once. `< 1` is the correct bound because a clean full discount lands
+> on net **exactly 0** (`gross + (−gross) = 0`), and net goes *slightly negative* when a discount
+> exceeds gross (2 such orders on 2026-08-01, min net −0.80). Leaving it loose is safe: the branch is
+> only reached when **both** the pulse and brink tender names are NULL, so it is a fallback, not a
+> primary filter, and cannot capture a genuine 50¢ paid order.
 >
-> **Lesson worth more than the fix: two things were wrong in one predicate, and fixing the one that
-> was diagnosed re-broke the other.** The reported defect was the sign; the `< 1` bound was load-
-> bearing and undiscussed, so it got rewritten to "match" the sign change. When correcting a
-> comparison, re-measure the *whole* predicate, not the clause that was named.
+> **Verified through the view, not just the predicate:**
+>
+> | business_date | orders | `payment_tender = 'discount'` | share | `'no_payment'` |
+> |---|---|---|---|---|
+> | 2026-08-01 | 23,765 | 451 | **1.90%** | 343 |
+> | 2026-08-18 | 27,690 | 515 | **1.86%** | 381 |
+>
+> That lands on the **1.9%** share this dictionary recorded for 2026-07-29 → 08-04, *before* the sign
+> flip — an independent confirmation the label is back to its historical level rather than merely
+> non-zero.
+>
+> ⚠️ **Don't "fix" the remaining gap.** The predicate matches more orders than the label does (546 vs
+> 451 on 2026-08-01; 658 vs 515 on 2026-08-18). That is correct: those 95 / 143 orders were fully
+> discounted **and** still carry a real tender row (gift card, partial payment), so they resolve to
+> their actual tender higher up the `coalesce` and never reach the fallback. Predicate-level counts
+> are an upper bound on this label by construction.
+>
+> **The lesson that outlived the bug: two things were wrong in one predicate, and fixing the one that
+> was diagnosed re-broke the other.** The reported defect was the sign; the `< 1` bound was
+> load-bearing and undiscussed, so it was rewritten to "match" the sign change and the branch stayed
+> dead through a second deploy. When correcting a comparison, re-measure the *whole* predicate, not
+> the clause that was named — and confirm the fix through the object users query, because a correct
+> predicate can still be unreachable downstream.
 >
 > **The generalisable lesson, and this KB keeps meeting it from both directions:** a sign change in a
 > build is not a cosmetic change. It silently rewrites the truth value of every downstream comparison

@@ -3,6 +3,8 @@
 **One row per calendar date.** Pass-through authorized view (`select *`) over
 `sales_ops.date_dim`, a static clustered table built by the steward (created 2025-07-02).
 Build script: [`sql/claude.date_dim.sql`](../sql/claude.date_dim.sql). Deployed 2026-08-05.
+Parent altered **2026-08-24** to add `week_beginning_ly` / `week_ending_ly`; the view is a
+`select *`, so it picked them up with no redeploy (verified through `claude.date_dim`).
 
 Coverage: **2001-01-01 → 2057-10-31**, 20,758 rows, verified no gaps and no duplicate
 dates (2026-08-05). The end date is mid-fiscal-period (FY2057 P11 W2), not a calendar
@@ -36,6 +38,8 @@ Everything verified against the live view 2026-08-05.
 | `week_num` | INTEGER | Week of the **calendar year**. Resets to 1 on Jan 1 (mid-week!), increments each Monday. See gotchas |
 | `week_beginning` | DATE | Monday of the Mon–Sun week containing this date |
 | `week_ending` | DATE | **Sunday** of that week — one day *after* the CZ "week ending" Saturday. See gotchas |
+| `week_beginning_ly` | DATE | `week_beginning` minus **364 days** — the Monday of the prior-year comparison week. Day-of-week preserved. Added 2026-08-24 |
+| `week_ending_ly` | DATE | `week_ending` minus **364 days** — the **Sunday** of that same prior-year week. Added 2026-08-24 |
 | `week_of_month` | INTEGER | Resets to 1 on the 1st of the month, increments each Monday |
 | `month` | INTEGER | 1–12 |
 | `day_of_month` | INTEGER | 1–31 |
@@ -123,4 +127,18 @@ Quirks:
 - **53-week fiscal years break naive fiscal YoY.** `fsc_week_of_year = 53` (FY2023,
   FY2028) has no prior-year counterpart, and `run_week - 52` misaligns across a 53-week
   boundary. The 364-day day-level offset rule in `sales-ops-orders` is unaffected.
-- **Don't `select *` into a report.** 28 columns; pick the grouping columns you need.
+- **⚠️ The `_ly` columns are a flat 364-day offset, not a fiscal-week lookup.** They
+  preserve day-of-week and match `fsc_week_of_year` in ordinary years, but a **53-week year
+  breaks the alignment for the two years around it**. Joining `ly.cal_date =
+  dd.week_beginning_ly` shifts the fiscal week by +1 for **all 364 days of FY2024 and
+  FY2029** (the years after 53-week FY2023 / FY2028), and for the 7 days of week 53 itself
+  it lands 52 weeks off. Example: 2024-06-03 is FY2024 W23, but its `week_beginning_ly`
+  (2023-06-05) is FY2023 **W24**. For fiscal week-over-week comparison keep the
+  `fsc_week_of_year` + `fsc_year - 1` rule; use `_ly` for calendar/day-of-week-aligned
+  comparison. Both are correct — they answer different questions, so say which you used.
+- **`week_beginning_ly` runs off the front of the table.** It reaches back to 2000-01-03,
+  but the table starts 2001-01-01 — so **364 rows (2001-01-01 → 2001-12-30) have no
+  self-join match**. `join dd2 on dd2.cal_date = dd.week_beginning_ly` silently drops them.
+  No impact on order data (starts 2018-08-28), but don't use an inner self-join as a row-count
+  check. The tail is safe: max `week_ending_ly` is 2056-11-05, inside the range.
+- **Don't `select *` into a report.** 30 columns; pick the grouping columns you need.

@@ -23,6 +23,7 @@ table. Column docs: [`data_dictionaries/claude.date_dim.md`](../../data_dictiona
 | Fiscal calendar (**4-4-5**) | `fsc_year`, `fsc_qtr` (3 periods each), `fsc_period` (1–12; P3/6/9/12 are 5-week), `fsc_week`, `fsc_week_of_year`, `fsc_day_of_period`, `fsc_day_of_year` |
 | Rolling windows without year-boundary logic | `run_period`, `run_week` — continuous counters, never reset, verified gap-free |
 | Mon–Sun week buckets | `week_beginning` (Mon), `week_ending` (Sun — **not** the CZ Saturday label, see below) |
+| Prior-year week anchors | `week_beginning_ly`, `week_ending_ly` — the same week **364 days** back (day-of-week preserved). New 2026-08-24; see the 53-week caveat under Year-over-year |
 | Pretty labels | `day_of_week_full`, `month_full`, `year_month`, `year_quarter` |
 | Holiday flags | `holiday` — 25 labels incl. the C5 Thanksgiving span, **populated 2001–2050 only** |
 | Mountain-time UTC offset | `mtn_dst`, `mtn_to_utc` (post-2007 rule applied to all years — wrong pre-2007, harmless: order data starts 2018) |
@@ -75,9 +76,17 @@ Sunday rows are in scope; don't substitute it silently. Snap-to-whole-weeks and 
 - **Period-level YoY:** same `fsc_period`, `fsc_year - 1`. This is what "P8 vs P8 last
   year" means and is exact even across the 53-week boundary (periods keep their identity;
   only P12 changes length).
-- **Week-level YoY:** same `fsc_week_of_year`, `fsc_year - 1`. Week 53 (FY2023, FY2028)
-  has **no prior-year counterpart** — report it unmatched, don't force a pair. Avoid
+- **Week-level YoY (fiscal):** same `fsc_week_of_year`, `fsc_year - 1`. Week 53 (FY2023,
+  FY2028) has **no prior-year counterpart** — report it unmatched, don't force a pair. Avoid
   `run_week - 52` across a 53-week boundary.
+- **Week-level YoY (calendar / day-of-week aligned):** `week_beginning_ly` /
+  `week_ending_ly` are the 364-day offset precomputed, so the LY week anchor is a column
+  instead of arithmetic. **They are not a fiscal-week lookup.** In a year following a
+  53-week year they land one fiscal week early for the *entire* year — FY2024 and FY2029 are
+  off by +1 on all 364 days (2024-06-03 is FY2024 W23; its `week_beginning_ly` 2023-06-05 is
+  FY2023 W24). Pick deliberately: `_ly` when the comparison should preserve day-of-week and
+  calendar position, `fsc_week_of_year` when it should preserve fiscal week identity. State
+  which one the answer used.
 
 ## Pattern: fiscal window → explicit dates → fact query
 

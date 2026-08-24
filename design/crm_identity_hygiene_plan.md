@@ -111,6 +111,25 @@ introducing a new surrogate key — we are choosing *which existing id wins*.
 - It links **99%+** of the guest-checkout duplicates by construction (that is how they were
   detected).
 - Only **4,304 ids (0.3%)** have ever carried more than one email, so email is stable per id.
+
+> **⚠️ Amended 2026-08-24 — say *which* email.** The steward's rule: `order_customer.email` is the
+> **order** email (a guest may give any address for order updates); the canonical customer email is
+> **`pulse.customers.email`**. The match key is the canonical one. This matters because
+> `mapped_email` — the column this plan actually reads — is canonical only when the customer row
+> has an email, which in July 2026 was **117,485 of 136,653 `person` orders (86.0%)**. On the other
+> **19,168 (14.0%)**, spanning **17,842 customers in one month**, `mapped_email` is a *typed*
+> order/booking address.
+>
+> Measured blast radius for those 17,842: **7,315 have an order email that equals some
+> `pulse.customers.email`**, and **143** of those addresses are owned by more than one customer id.
+> Matching on them is not the intended "merge the guest-checkout duplicate back onto its account" —
+> it is merging on an address the surviving account never claimed, and §7.4's phone-review
+> reasoning ("a wrong merge is unrecoverable in Braze") applies with equal force.
+>
+> **Open before any merge runs:** decide whether a cluster whose only evidence is a *typed order
+> email against an email-less pulse account* auto-merges, or goes to the §7.4 review queue. Not yet
+> decided. Also note `primary_email` exists on `pulse.customers` and was ruled **not** canonical
+> the same day — do not quietly widen the key to `coalesce(primary_email, email)`.
 - The obvious alternatives were tested and rejected:
   - **Loyalty id (`sm_external_user_id`)** — useless here. Of 5,752 July duplicate ids, only 418
     carry any loyalty id and exactly **1** shares one with the surviving id. Guest checkout means

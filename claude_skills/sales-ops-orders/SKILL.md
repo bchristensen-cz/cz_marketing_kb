@@ -270,6 +270,18 @@ recurring defect (2026-08-11, -12, -13). Email is not the canonical identity key
 the CRM hygiene project exists to resolve. Emails are now lowercased at build, so the old
 `lower()` justification for keying on email no longer applies either.
 
+**And there is a second, sharper reason (steward 2026-08-24): `oc.email` is the ORDER email, not
+the customer's email.** A guest may give us any address at checkout so we can send updates about
+*that order*; the canonical customer email is `pulse.customers.email`, which reaches the mart only
+as the first fallback of `mapped_email`. So `email` is *always* user-typed, and `mapped_email` is
+canonical only when the customer row has one — on **19,168 of 136,653 July 2026 `person` orders
+(14.0%)** it does not, and `mapped_email` is a typed order/booking address instead. Of the 17,842
+customers behind that 14%, **7,315 have an order email equal to some `pulse.customers.email`** and
+**143** of those addresses are owned by more than one id. An email-keyed cohort does not merely
+merge known duplicates — it can merge strangers on an address the account never claimed. Use
+`mapped_cust_id`. Full measurement in `data_dictionaries/sales_ops.order_customer.md` →
+"Order email vs canonical email".
+
 ### 3. Customer cohorts require `customer_type = 'person'`
 
 Every metric in this section is customer-level, so hard rule 6 applies without exception. A
@@ -1648,6 +1660,15 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 - **`order_lines` has no `order_id`** — this now leads the gotcha list because it is the single most-repeated error in the query log: `Name order_id not found inside ol`, hit three more times on 2026-07-27/28 and **again on 2026-07-28 at 09:12** by the same analyst. The order key is `brink_order_id` on every one of these tables. The 2026-07-28 instance selected `ol.order_id` in a CTE and then joined `oc.brink_order_id = ol.order_id` — i.e. the correct column name was already in the query, on the other side of the join. Read your own join predicate before selecting.
 - **Customer metrics need `customer_type = 'person'`**; sales metrics must NOT filter it. See the rule above.
 - **`order_customer` emails are now lowercased at build** (fix deployed 2026-07-29 with the full-history rebuild; verified 2026-08-13: 0 non-lowercase `mapped_email` / `email` values in 365 days). `lower()` on them is a harmless no-op — keep it defensively, but the old "~17,900 overstated distinct emails" caveat no longer applies to current data. The SessionM fallback email also strips the leading `cater_` prefix, so catering logins resolve to the individual's address in `mapped_email` — when comparing to `claude.loyalty_user`, compare against `email_normalized`, not `email` (which keeps the prefix). Raw `pulse.*` / `braze.*` emails outside the marts still need `lower()`.
+- **`oc.email` is the ORDER email; `pulse.customers.email` is canonical** (steward 2026-08-24).
+  Per-order, user-supplied, fine for "which address got this receipt" and for reading the
+  aggregator brand (`email like '%doordash%'` → 75,010 July orders; `mapped_email like
+  '%doordash%'` → **none**, because the canonical there is `checkmate_user@cafezupas.com`).
+  Never an identity, join, dedup or cohort key. `mapped_email` inherits the canonical when one
+  exists (86.0% of July `person` orders) and is user-typed on the rest.
+- **`pulse.customers.primary_email` is not canonical** (steward ruling 2026-08-24) even though it
+  is populated on *more* rows than `email` (1,962,081 vs 1,817,870) and fills 173,717 gaps. `email`
+  is the field of record; do not substitute.
 - **`order_customer` gained two columns, synced 2026-08-13**: `destination_id` (INT64, raw Brink destination id alongside `destination`) and `has_order_items` (BOOL, added 2026-08-04 — FALSE means no qualifying item rows survived the build's item filters, so `item_gross_sales` and friends are NULL on ~2.4% of rows; an audit flag, not a reporting filter). `phone` is now STRING. Both new columns flow through to `claude.order_customer`.
 - **`claude.order_customer` excludes stores 1111 AND 999 at the view level** (deployed filter `and oc.store_id not in (1111, 999)` — **corrected 2026-08-17**; the 2026-08-13 entry and the repo script both said `<> 1111`, while the deployed view had always excluded both). Standard users cannot see either unnamed store; `sales_ops` tables still contain them, so the exclusion remains load-bearing there. Writing `store_id not in (1111, 999)` against the `claude` view stays correct — just expect `claude`-vs-`sales_ops` totals to differ by those stores even when neither query filters them.
 - **Per-customer questions should use `sales_ops.customer_attribute`, not a hand-rolled `group by mapped_cust_id`** (new 2026-07-29). Lifetime orders, spend, AOV, recency, tenure, store affinity and trailing 30/90/365-day activity are all precomputed there — that's the whole point, so two sessions can't produce two different LTV numbers. It is already person-only (adding `customer_type = 'person'` errors), it has **no partition column**, and you must check `attribute_asof_date = yesterday` before trusting the window columns. See its section above.

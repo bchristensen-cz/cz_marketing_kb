@@ -26,6 +26,12 @@
 > - **`is_catering` widened**: store 50 (Middleton Mobile) is now unconditionally catering, per finance's definition
 > - **`revenue_category` aligned to `is_catering`**: pulse-flagged catering and store 50 both resolve to `'Catering'` in the base table. The two are now **equivalent sets** in `sales_ops` — they were not before
 > - **`destination` / `destination_id` overridden for store 50 only**: `'Middleton Mobile Catering'` / `999999999`. Every other store keeps its raw Brink id and name
+>
+> **Steward clarification 2026-08-24 — `email` is the ORDER email, not the customer's email.**
+> A guest may give us any address at checkout so we can send updates about *that order*, so
+> `email` is a per-order contact field and is **never** an identity key. The canonical customer
+> email is **`pulse.customers.email`**, which reaches this mart only as the *first* fallback of
+> `mapped_email`. Measurements and consequences: "Order email vs canonical email" under Gotchas.
 
 ## Table facts
 
@@ -49,9 +55,10 @@
 | `pulse_customer_id` | INTEGER | Customer id from the digital ordering platform (Pulse). May be an **orphan** — present on the order but absent from `pulse.customers` (see `customer_type = 'aggregator'`). |
 | `sm_external_user_id` | INTEGER | Loyalty (SessionM) user mapped to a cafezupas external id. Captures in-store loyalty scans. |
 | `mapped_cust_id` | INTEGER | **Canonical customer key** = `coalesce(pulse_customer_id, sm_external_user_id)`. ~53% of orders in the last year have one. Use this for customer counts, frequency, retention — **always together with `customer_type = 'person'`**. |
-| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **Lowercased at build** since the 2026-07-29 fix (verified 2026-08-13: 0 non-lowercase values in 365 days). The SessionM fallback also strips the leading `cater_` prefix, so a catering login resolves to the same address as the individual account — compare against `loyalty_user.email_normalized`, not `email`. |
+| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **Lowercased at build** since the 2026-07-29 fix (verified 2026-08-13: 0 non-lowercase values in 365 days). The SessionM fallback also strips the leading `cater_` prefix, so a catering login resolves to the same address as the individual account — compare against `loyalty_user.email_normalized`, not `email`. **⚠️ Canonical only when a canonical exists (2026-08-24):** the chain starts at `pulse.customers.email`, so `mapped_email` is the customer's real address on 117,485 of 136,653 July 2026 `person` orders (86.0%) — and on the other **19,168 (14.0%)** the pulse customer row carries no email and `mapped_email` is a **user-typed order/booking address**. Safe as best-available contact; unsafe as identity. |
 | `mapped_email_domain` | STRING | **New 2026-07-27.** Domain portion of `mapped_email`. Closes the old `mapped_domain` gap that only existed on the legacy table — internal-order exclusion can now be done on this mart. |
-| `email`, `phone` | STRING | Raw contact info captured on the order (pulse order_customers). `email` is lowercased at build (since 2026-07-29); `phone` is cast to STRING (2026-08-13 sync). |
+| `email` | STRING | **The ORDER email — the address the guest gave for updates on *that order*, not the customer's email** (steward, 2026-08-24). Source is `pulse.order_customers.email`; we accept whatever they type and nothing forces it to match the account. Lowercased at build (since 2026-07-29). **Never use it as an identity, join, dedup or cohort key** — that is `mapped_cust_id`. It *is* the right column for order-level contact questions ("which address got this receipt") and for reading the aggregator brand on third-party orders. |
+| `phone` | STRING | Contact phone captured on the order (`pulse.order_customers.phone`), cast to STRING (2026-08-13 sync). Same caveat as `email` — per-order and user-supplied, not a customer attribute. |
 
 ### Dates & times
 | Column | Type | Description |
@@ -102,7 +109,21 @@ Orders from non-person ids are **still real sales** — keep them in sales, orde
 
 #### `customer_type` is order-level, not customer-level (steward decision 2026-07-27)
 
-The classification describes **the customer on that order**, so the same `mapped_cust_id` can carry different values across its orders. June 2026: **30 ids / 108,313 orders** have mixed types — `19192` is 107,807 `aggregator` + 196 `person` (third-party orders that happened to capture a real guest email), and 29 real people are split `person` / `internal` from occasionally ordering with a work address.
+The classification describes **the customer on that order**, so the same `mapped_cust_id` can carry different values across its orders. June 2026: **30 ids / 108,313 orders** have mixed types — `19192` is 107,807 `aggregator` + 196 `person` (third-party orders that happened to capture a real guest email), plus 29 staff ids split `person` / `internal`.
+
+> **⚠️ Corrected 2026-08-24 — the staff split is NOT "occasionally ordering with a work address."**
+> An earlier revision of this line said exactly that, and the build makes it impossible: the
+> classifier reads `coalesce(c.email, ocs.booking_customer_email, ocs.email, '')`, and `c.email`
+> is a *customer-level* attribute, so a canonical `@cafezupas.com` address wins on every order
+> that has one. Typing a personal address at checkout cannot flip an employee to `person`.
+>
+> Measured July 2026 (stores 1111/999 excluded): **24 mixed ids / 286 orders, all `internal` +
+> `person`, and all 24 have a canonical email.** The split is 100% clean along the order route —
+> **215 `internal` orders all arrived through Pulse** (`pulse_customer_id` present, so `c` joins
+> and the `@cafezupas.com` canonical wins) and **71 `person` orders were all in-store SessionM
+> scans** with `pulse_customer_id` NULL, so `c` never joins, the canonical is unavailable *for
+> that row*, and the chain falls through to the loyalty/order address. **The mechanism is a
+> missing join, not a typed address.** (`19192` no longer appears mixed in July.)
 
 This is deliberate. Pulse customer id `19192` **does not exist in `pulse.customers`** — it should, and there is an open ticket with the dev team. Until that record exists there is no trustworthy customer-level attribute to classify on, so collapsing to one type per id would be confidently wrong rather than visibly incomplete.
 
@@ -145,6 +166,75 @@ Practical consequences:
 Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `brink_order_id` + `business_date`). See `data_dictionaries/sales_ops.order_sequence.md`. The sequence is now computed over full history every run, so the old "reload-window-scoped, treat as approximate" caveat no longer applies — but as of 2026-07-27 the table is **not** filtered to `customer_type = 'person'`, so filter it yourself.
 
 ## Gotchas
+
+### Order email vs canonical email — `email` is not who the customer is (steward 2026-08-24)
+
+**Rule.** `sales_ops.order_customer.email` is the address the guest supplied *on that order* so we
+can send order-related updates. We accept whatever they type. The **canonical** customer email
+lives in **`pulse.customers.email`**. Two fields, two jobs — and the mart carries the order one
+under the plainer name, which is why it keeps getting mistaken for identity.
+
+The build chain (`sql/sales_ops.order_customer.sql`, quoted as-is — this is documentation, not a
+change request):
+
+```
+, lower(ocs.email) as email                                                -- pulse.order_customers = ORDER email
+, lower(coalesce(c.email, ocs.booking_customer_email, ocs.email, t.email)) -- c = pulse.customers = CANONICAL, first
+    as mapped_email
+```
+
+So `email` is **always** user-typed, and `mapped_email` is canonical-when-available and user-typed
+otherwise.
+
+**Measured — July 2026, stores 1111/999 excluded, orders carrying a `pulse_customer_id`:**
+
+| `customer_type` | orders | both emails present | order ≠ canonical | no canonical at all → `mapped_email` is user-typed |
+|---|---|---|---|---|
+| `person` | 136,653 | 117,485 | **1,952** (1.66%) · 1,660 ids | **19,168 (14.0%)** |
+| `aggregator` | 104,684 | 104,684 | **103,337 (98.7%)** | 0 |
+| `kiosk` | 34,388 | 34,388 | 0 | 0 |
+| `internal` | 707 | 704 | 9 | 3 |
+
+Those 19,168 are 18,450 orders where the `pulse.customers` row exists with `email` NULL plus 718
+where it is the literal string `'nan'` — **17,842 distinct customers in a single month**. Zero
+person orders had a `pulse_customer_id` missing from `pulse.customers` entirely, so this is an
+empty-column problem, not an orphan-id problem.
+
+**Why the aggregator row is 98.7%.** The order email is the *courier's* and the canonical is the
+*integration account's*: 75,010 July orders carry `support@doordash.com` as the order email
+against a canonical of `checkmate_user@cafezupas.com`. Both are right for their own job. The
+practical consequence is worth knowing: `oc.email like '%doordash%'` finds 75,010 orders and
+`oc.mapped_email like '%doordash%'` finds **none**. To read the aggregator *brand*, use `email`;
+to classify the customer, use `customer_type`.
+
+**What the 1,952 `person` divergences actually are** (top pairs, order email → canonical):
+
+- **Apple private relay, inverted** — `jared.liebesny@gmail.com` → `srqmv8tshh@privaterelay.appleid.com`.
+  The *canonical* is the relay and the *order* email is the real deliverable address.
+- **Work vs personal** — `rchavez@urgencyroom.com` → `khall@urgencyroom.com`,
+  `sarah.shafer40@gmail.com` → `sarah.shafer@fraser.org`.
+- **Household sharing** — `marasandrabibro@gmail.com` → `kbibro1@gmail.com`.
+- **Near-miss typos** — `sns1987@gmail.com` → `sna1987@gmail.com`.
+
+Four different situations; only the last is an error. A divergence count on its own tells you
+nothing about which address is "right".
+
+**Consequences to hold onto:**
+
+1. **Never key a cohort, dedup, retention or LTV calculation on `email`.** `mapped_cust_id` is the
+   canonical key — that was already the rule, and this is the reason for it.
+2. **`mapped_email` is safe as contact, unsafe as identity.** On 14% of person orders it is a typed
+   address. Of the 17,842 customers with no canonical email, **7,315 have an order email equal to
+   *some* `pulse.customers.email`**, and **143** of those addresses are owned by more than one
+   customer id — an email-keyed merge would fuse those clusters on an address the account never
+   claimed. See `design/crm_identity_hygiene_plan.md` §3.
+3. **`primary_email` is NOT canonical** (steward ruling 2026-08-24). `pulse.customers` carries both:
+   `primary_email` is populated on 1,962,081 rows vs `email`'s 1,817,870, differs from `email` on
+   91,108 rows, and fills 173,717 rows where `email` is NULL. Tempting, and still not the field of
+   record. Do not substitute it; `email` is canonical.
+4. `pulse.customers` also carries **4,919 soft-deleted rows** (`deleted_at is not null`) that the
+   build's `pulse_customer` CTE does not filter. Not yet measured for order impact — noted, not
+   claimed.
 
 - **✅ RESOLVED 2026-08-20 — `order_timestamp_utc` was NULL for stores missing a `timezone_name`**
   (Asana 1217684772713570). Built as `timestamp(order_datetime, s.timezone_name)`; BigQuery's

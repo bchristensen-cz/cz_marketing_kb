@@ -116,7 +116,11 @@ redeployed** — after any base-table add, rename *or* drop.
 
 Plus `revenue_category`, which is present but **redefined** — see difference #2 above.
 
-All the usual rules still apply to these: `net_sales` is the canonical calculated net (`brink_net_sales` is validation only), `is_catering` and `is_guest_order` are BOOLEAN, and customer metrics require `customer_type = 'person'`. Emails are lowercased at build since 2026-07-29, so `lower()` is defensive rather than required; store 1111 is already excluded by the view itself (difference #4).
+All the usual rules still apply to these: `net_sales` is the canonical calculated net (`brink_net_sales` is validation only), `is_catering` and `is_guest_order` are BOOLEAN, and customer metrics require `customer_type = 'person'`. Emails are lowercased at build since 2026-07-29, so `lower()` is defensive rather than required; store 1111 is already excluded by the view itself (difference #4). **`email` is the ORDER email**
+— the address the guest gave for updates on that order, not the customer's — while the canonical
+customer email is `pulse.customers.email`, reaching this view only as the first fallback of
+`mapped_email` (steward 2026-08-24). Neither is an identity key; `mapped_cust_id` is. See
+`sales_ops.order_customer.md` → "Order email vs canonical email".
 
 ### Added columns (13)
 

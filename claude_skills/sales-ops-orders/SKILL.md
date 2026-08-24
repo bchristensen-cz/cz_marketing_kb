@@ -458,7 +458,7 @@ Three lessons, and the middle one is the reason to read this section rather than
 | `mraza@` (console) | 12 | 0 | 0 | 0 | 2.68 |
 | `social-capis-job@` (service acct) | 6 | **2** | 2 | 0 | 0.08 |
 
-Four lessons, and the last two are the ones that generalise beyond this project.
+Five lessons, and the last two are the ones that generalise beyond this project.
 
 1. **The `2026-09-13` cohort template is dead, and nobody fixed it — the rename killed it.** Documented three times (08-13, 08-17, 08-18) and edited zero times. On 08-21 it ran **four more times** (bursts at 10:22:57, 13:54:59, 13:55:06, 13:59:15, ~10 variants each) and every execution failed on `Unrecognized name: order_datetime`. **41 hard failures, 0 bytes billed, 0 wrong answers published.** Compare the same template's prior week: 460 GiB of plausible, censored, email-keyed, timezone-shifted output. This is the 08-18 prescription working verbatim — *ship the rule as something that errors, not as documentation* — and it is now proven twice, after `BusinessDate` in one day and `order_datetime` in one day. **Stop writing findings about saved templates. Break the column they depend on.**
 
@@ -478,7 +478,18 @@ Four lessons, and the last two are the ones that generalise beyond this project.
 
    **Rule: a column-semantics audit must cover machine readers, not just human ones.** Scheduled queries, service accounts and application SQL are the highest-consequence consumers of a mis-named column and the only ones that never complain. Sweep `JOBS_BY_PROJECT` by `user_email like '%gserviceaccount%'` for the old name before declaring a rename complete.
 
-4. **And that sweep is exactly what this review's own inclusion rules forbid.** The rules say *exclude all `*.gserviceaccount.com`* — sensible for judging user behaviour, and precisely why a production dependency on a table the steward was about to drop stayed invisible until it broke. The pre-drop warning (Asana 1217722726180551, filed 08-21 15:56) had to be assembled by hand. **Harness fix: keep service accounts out of the behaviour report, but always include them in a dependency sweep before any drop or rename.** Two harness defects now share this shape — the `statement_type = 'SELECT'` filter (Asana 1217494247853173) hides DDL/DML *and* hides every failed job, because a query that cannot resolve its table never gets a `statement_type`. Both filters were narrowing for tidiness and both hid failures.
+4. **✅ The wall breach went with the templates — because it was riding inside them.** This is the strongest version of the day's lesson and the one to quote. Raw-dataset references in the query text, both MCP analysts, 2026-08-21 → 08-23:
+
+   | Outcome | Jobs | GiB | Objects |
+   |---|---|---|---|
+   | **Executed** | **3** | **11.73** | `sessionm.users` (1), `pulse.customers` (2) |
+   | Failed | 17 | 0 | `pulse.order_customers` (12), `sessionm.users` (3), `pulse.customers` (1), `staging.leads_meta` (1) |
+
+   Every one of the 17 failures died on `OrderCustomer` not found or `order_datetime` unrecognized — the `pulse.*` reads were **clauses inside the same saved cohort and attribution templates**, not separate deliberate acts. Killing the two objects those templates depended on killed the breach they carried, for free. Compare late July: 115 `pulse.*` MCP queries across 5 days from these same two accounts (Asana 1216992461499656). **Three executed raw jobs in three days is the lowest figure in the log's history.**
+
+   Two cautions against over-reading it. **(a)** The motive hasn't changed — 12 of the 17 failures wanted `pulse.order_customers`, still recovering the guest-supplied email that no mart column carries (Asana 1217645882648277). The moment either template is repaired, the breach returns unless that column ships first. **(b)** One compliant window is not a trend; the 08-14 clean day was recorded as progress and 08-18 came in with 34 `pulse.*` queries. Don't close the systemic finding on this.
+
+5. **And the machine-reader sweep is exactly what this review's own inclusion rules forbid.** The rules say *exclude all `*.gserviceaccount.com`* — sensible for judging user behaviour, and precisely why a production dependency on a table the steward was about to drop stayed invisible until it broke. The pre-drop warning (Asana 1217722726180551, filed 08-21 15:56) had to be assembled by hand. **Harness fix: keep service accounts out of the behaviour report, but always include them in a dependency sweep before any drop or rename.** Two harness defects now share this shape — the `statement_type = 'SELECT'` filter (Asana 1217494247853173) hides DDL/DML *and* hides every failed job, because a query that cannot resolve its table never gets a `statement_type`. Both filters were narrowing for tidiness and both hid failures.
 
 ### 🕳️ MART GAP: there is no order-*placement* timestamp anywhere in the marts (measured 2026-08-24)
 

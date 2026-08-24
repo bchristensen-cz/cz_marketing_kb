@@ -115,7 +115,7 @@ and dd.business_date <= date_sub(current_date('America/Denver'), interval 1 day)
 - **Order grain, not date grain.** At date grain a compensating pair on the same day cancels out
   and reads as a match.
 
-### Why they disagreed before 2026-08-15 — a join-key bug worth remembering
+### Why they disagreed before 2026-08-15 — and why `order_customer`'s zeros were RIGHT
 
 The two tables differed by **$753.68 over 90 days across 80 orders**, always in the same
 direction (this table high). `sales_ops.order_customer` joins its discount and promotion CTEs on

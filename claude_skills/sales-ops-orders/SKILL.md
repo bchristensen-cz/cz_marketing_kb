@@ -1155,10 +1155,12 @@ It reads like a bug in `order_customer`, and the obvious fix — repoint the joi
 other one match it.** Here the fix went into `order_lines` (a `sellable_orders` guard suppressing
 discount and promotion lines on those orders), not into the mart that looked broken.
 
-⚠️ `has_order_items = false` orders also have **wrong `net_sales`**, since it is derived as
-`gross − discount − promotion`. `gross_sales` and payments on those rows are real. An earlier
-revision of the `order_customer` dictionary claimed all order-level financials were real on these
-rows — corrected 2026-08-15.
+`has_order_items = false` orders read `net_sales` = **$0.00, and that is correct**.
+`gross_sales` is 0 on every one of them — 12,327 of 12,327 over 2026-07-20 → 08-22 — so
+`0 - 0 - 0 = 0`. Nothing was sold and nothing was given away. Payments on those rows are real.
+**Retracted 2026-08-24 (steward ruling):** an earlier revision called this net figure "wrong"
+and the zeroed discounts a join-key bug. Orders without valid lines cannot carry discounts or
+promotions, so they are excluded by design.
 
 ## ⚠️ In an incremental build, never window a DIMENSION by the fact window (general rule, 2026-08-15)
 

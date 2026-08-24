@@ -449,6 +449,71 @@ Three lessons, and the middle one is the reason to read this section rather than
 
 > **✅ The positive control, same day.** A second MCP account (`dgetz@`) ran 26 jobs / 13.5 GiB with **zero** raw-dataset queries and zero legacy-table queries, diagnosing a guest-checkout-recovery canvas: `claude.order_customer` with `customer_type = 'person'`, `is_catering = false`, a real partition filter, the folded `customer_order_count` / `days_since_prev_order` columns, **`order_timestamp_utc`** for the Braze comparison, `date_trunc(business_date, week(monday))` for the Mon–Sat business week, and intermediate cohorts materialized in `scratch` per hard rule 7 rather than re-scanned per query. Cheapest single query in the day's log was 0.01 GiB. Two analysts, same board, same day, a **32x** cost difference — worth quoting when the compliant path needs an advocate.
 
+**Ninth business day, 2026-08-21 — both loud failures fired on the same day, and they closed the two findings that eight write-ups could not.** `sales_ops.OrderCustomer` was dropped and `order_datetime` was renamed. Measured on `JOBS_BY_PROJECT` for 2026-08-21 → 08-23 (Denver), all jobs, error rows included:
+
+| Account | Jobs | Errors | of which `OrderCustomer` not found | of which `order_datetime` unrecognized | GiB |
+|---|---|---|---|---|---|
+| `jelgie@` (MCP) | 247 | 71 | 18 | **41** | 304.10 |
+| `dgetz@` (MCP) | 25 | **10** | 10 | 0 | 38.48 |
+| `mraza@` (console) | 12 | 0 | 0 | 0 | 2.68 |
+| `social-capis-job@` (service acct) | 6 | **2** | 2 | 0 | 0.08 |
+
+Four lessons, and the last two are the ones that generalise beyond this project.
+
+1. **The `2026-09-13` cohort template is dead, and nobody fixed it — the rename killed it.** Documented three times (08-13, 08-17, 08-18) and edited zero times. On 08-21 it ran **four more times** (bursts at 10:22:57, 13:54:59, 13:55:06, 13:59:15, ~10 variants each) and every execution failed on `Unrecognized name: order_datetime`. **41 hard failures, 0 bytes billed, 0 wrong answers published.** Compare the same template's prior week: 460 GiB of plausible, censored, email-keyed, timezone-shifted output. This is the 08-18 prescription working verbatim — *ship the rule as something that errors, not as documentation* — and it is now proven twice, after `BusinessDate` in one day and `order_datetime` in one day. **Stop writing findings about saved templates. Break the column they depend on.**
+
+2. **The same analyst's *new* work migrated cleanly.** The 16:25–16:27 Braze attribution set (9 queries, 47.26 / 47.22 GiB on the two heaviest) now runs on `claude.order_customer` and joins Braze on **`order_timestamp_utc`** — the 08-19 silent-timezone defect does not appear anywhere in the day. Residue: still keyed on `lower(coalesce(mapped_email, email))` rather than `mapped_cust_id`, and still the `cohort`/`fwd` self-join shape at ~47 GiB apiece. Routing fixed, semantics fixed, **grain still wrong** — see the order-email rule above.
+
+3. **🚨 The timezone defect was also live in a production outbound feed, and no audit had looked there.** The `social-capis-job@` service account ships purchase conversions to social platforms. Its last run on the legacy table (2026-08-21 09:02) read:
+
+   ```sql
+   -- ANTI-PATTERN, retired 2026-08-22
+   oc.netsales      AS transaction_value,
+   oc.order_datetime AS event_time          -- store-local, sent as if UTC
+   FROM `marketing-data-442316.sales_ops.OrderCustomer` oc
+   WHERE oc.BusinessDate = @target_date AND oc.iscatering = 0 AND oc.storeid <> 1111
+   ```
+
+   Every conversion event this feed has ever sent carried an `event_time` **4–7 hours early**, across four offsets, to an external attribution platform — the exact defect the 08-19 review measured on analyst queries, in the one place where nobody can sanity-check the number and the consequence is misattributed ad spend. It was found only because the table it read got dropped: 2 failed runs on 08-22 (09:01, 09:03), rewritten and verified the same evening (22:19, 22:22), clean scheduled run 08-23 09:01. The fixed version reads `sales_ops.order_customer`, `net_sales`, **`order_timestamp_utc`**, `is_catering = FALSE`, `store_id <> 1111`, plus a `CAST(i.Phone AS STRING)`.
+
+   **Rule: a column-semantics audit must cover machine readers, not just human ones.** Scheduled queries, service accounts and application SQL are the highest-consequence consumers of a mis-named column and the only ones that never complain. Sweep `JOBS_BY_PROJECT` by `user_email like '%gserviceaccount%'` for the old name before declaring a rename complete.
+
+4. **And that sweep is exactly what this review's own inclusion rules forbid.** The rules say *exclude all `*.gserviceaccount.com`* — sensible for judging user behaviour, and precisely why a production dependency on a table the steward was about to drop stayed invisible until it broke. The pre-drop warning (Asana 1217722726180551, filed 08-21 15:56) had to be assembled by hand. **Harness fix: keep service accounts out of the behaviour report, but always include them in a dependency sweep before any drop or rename.** Two harness defects now share this shape — the `statement_type = 'SELECT'` filter (Asana 1217494247853173) hides DDL/DML *and* hides every failed job, because a query that cannot resolve its table never gets a `statement_type`. Both filters were narrowing for tidiness and both hid failures.
+
+### 🕳️ MART GAP: there is no order-*placement* timestamp anywhere in the marts (measured 2026-08-24)
+
+**Catering lead time — "was this ordered the same day it was served, or booked in advance?" — cannot be answered from the `claude` or `sales_ops` marts.** This is a real gap, not a routing problem, and it is worth stating precisely because the obvious column looks like it should work and doesn't.
+
+`order_datetime_local` is a **fulfillment**-side timestamp, not a placement time. Measured on `claude.order_customer`, 2026-07-27 → 08-20, stores 1111/999 excluded:
+
+| Population | Orders | `date(order_datetime_local) = business_date` | max lead days |
+|---|---|---|---|
+| Non-catering | 596,215 | 596,211 (99.999%) | 5 |
+| **Catering** | 7,407 | **7,378 (99.6%)** | **0** |
+
+A catering order booked three weeks out still carries an `order_datetime_local` on its *service* date. So `date_diff(business_date, date(order_datetime_local))` is structurally ~0 and any "advance vs same-day" split built on it returns "100% same-day" — a confident, plausible, entirely wrong answer.
+
+The only source of placement time is **`pulse.orders.place_time`**, which is behind the wall. That makes this the third instance of the same shape (after the guest-supplied email, Asana 1217645882648277): **a wall breach whose cause is a missing mart column, where repeating the rule accomplishes nothing and exposing the column removes the motive.** Observed driving it, 2026-08-21/23, `mraza@` direct console, 12 queries: a weekly `catering_same_day_sales_pct` by store built on `pulse.orders` joined to `pulse.locations`, with `DATE(o.place_time) = o.business_date` as the same-day test — then, on 08-23, wrapped in a `FORMAT(...)` generator emitting `INSERT INTO web_systems.catering_same_day_sales_pct ...` statements for a downstream MySQL application.
+
+Two things to say about it, in this order:
+
+1. **The question is legitimate and the marts cannot answer it.** Log it as a gap; don't send the author back to a mart that will silently tell them everything is same-day.
+2. **The financials in that pipeline are not canonical, and that part is fixable today.** It measures catering sales as `sum(o.sub_total)` from `pulse.orders` — **Pulse financials, which hard rule 5 forbids outright** ("Brink is the sole financial source of truth; Pulse is a helper for digital order/customer metadata only"). It also uses Pulse's own `o.is_catering` rather than the finance definition on `order_customer`, and carries no `store_id not in (1111, 999)`. A production MySQL table is being populated from it. **Even before the placement-time column exists, the denominator and the sales measure must come from `claude.order_customer` (`net_sales` / `gross_sales`, `is_catering`);** only the same-day *flag* genuinely requires Pulse. Splitting the query that way shrinks the breach to one column and makes the number quotable.
+
+### ⚠️ Legacy schemas survive outside the walls — `stella_cafezupas.OrderCustomer_test` (found 2026-08-24)
+
+Dropping `sales_ops.OrderCustomer` did **not** retire the legacy vocabulary. A full copy of its schema lives in an undocumented dataset that no skill, dictionary or wall mentions:
+
+`marketing-data-442316.stella_cafezupas.OrderCustomer_test` — the only table in its dataset, created 2026-04-01, **not partitioned and not clustered**, carrying the entire retired column set: `BusinessDate`, `order_datetime`, `storeid`, `state`, `netsales`, `iscatering INT64`, `lifetime_order_cnt`, `order_count`.
+
+Three things make it worth knowing about:
+
+1. **It is frozen at a single business date.** 29,552 rows, `min(BusinessDate) = max(BusinessDate) = 2026-03-26`, `max(update_datetime)` 2026-04-01. Yet `stella-bigquery@` has read it **15 times since 2026-08-17**, most recently 2026-08-24 06:10 MT, with `WHERE brink_order_id > ?` — an incremental-sync loop that can never advance because the source never changes. Whatever "Stella" is, it believes it is syncing orders and has received nothing since March. Cost is trivial (~0.10 GiB/run); the silence is the problem.
+2. **Both time columns are typed `TIMESTAMP`.** On the mart, local is `DATETIME` and UTC is `TIMESTAMP`, so a type error catches the confusion (that is what happened on 08-17). Here `order_datetime` and `order_timestamp_utc` are *both* `TIMESTAMP` — the store-local wall clock has been cast into a UTC-bearing type and persisted. Nothing errors, and the only signal left is the column name.
+3. **It independently confirms the 4–7 hour claim.** `timestamp_diff(order_timestamp_utc, order_datetime, hour)` ranges **min 4, max 7** over its 29,530 dual-populated rows — a separate table, built by a separate process, reproducing the four live offsets the KB measured on the mart. A number that survives an independent build is worth more than one measured twice the same way.
+
+**Rule: `select *`-shaped copies of a mart into a vendor-facing dataset are a second, unwalled interface.** They inherit the schema at copy time and then diverge silently. When you rename or drop a column, grep `INFORMATION_SCHEMA.COLUMNS` across **every** dataset in the project, not just `sales_ops` and `claude` (Asana task filed 2026-08-24).
+
 ### ⚠️ Commenting out the date filter is not "widening the search" — an id predicate prunes nothing (measured 2026-08-18)
 
 The most expensive authoring mistake in the log to date, and it isn't about this project's marts — it will bite anyone doing single-order lookups on a raw Brink table. Observed from a new direct-console account: **20 full-table scans / 224.08 GiB in one day, 99.9% of that account's entire spend.** The shape, verbatim:
@@ -1571,6 +1636,66 @@ and ol.parent_rev_center_name = 'Try 2 Combo'
 group by 1
 order by 2 desc
 ```
+
+### Identify VTO / limited-time items by first appearance (steward pattern, mined 2026-08-22)
+
+There is no `is_limited_time` / `is_vto` flag on any item table, so a "which items are seasonal
+rotations vs core menu?" question has to be answered from **when an item first appears in
+`order_lines`**. The steward iterated this shape ~10 times on 2026-08-22 while building a
+`sales_ops.vto_items` dimension (the `create or replace table` header is still commented out —
+**not deployed**, so don't reference the table yet; use the pattern inline).
+
+```sql
+with items as (
+	select
+	ol.business_date
+	, ol.item_id
+	, ol.item_name
+	, count(distinct ol.brink_order_id) as order_cnt
+	from `marketing-data-442316`.claude.order_lines ol
+	where 1=1
+	and ol.business_date >= '2024-11-01'
+	and ol.is_catering = false
+	and ol.item_type = 'Entree'
+	group by 1,2,3
+	having count(distinct ol.brink_order_id) > 25
+)
+, vto_items as (
+	select
+	i.item_id
+	, i.item_name
+	, min(i.business_date) as min_date
+	, max(i.business_date) as max_date
+	, case when min(i.business_date) > current_date('America/Denver') - 91 then 1 else 0 end as is_current_vto
+	from items i
+	group by 1,2
+	having min(i.business_date) > '2025-01-15'
+)
+select * from vto_items order by min_date desc
+```
+
+Four things in it are deliberate and worth reusing:
+
+1. **First appearance is the discriminator.** `having min(business_date) > <cutoff>` where the
+   cutoff sits comfortably after the history floor: an item whose first-ever line is *after* the
+   window opened is a new or rotating item, whereas a core-menu item appears on day one. The
+   cutoff must be later than the scan start (`2024-11-01` scan, `2025-01-15` cutoff) or every item
+   qualifies.
+2. **Group by `business_date` first, then roll up.** The inner CTE keeps the partition column in the
+   `group by` so pruning still applies, and the outer CTE collapses to `min`/`max`. It looks
+   redundant and isn't — flattening it into one `group by item_id` costs the same read but loses
+   the per-day counts that make step 3 work.
+3. **`having count(distinct brink_order_id) > 25` is a per-day noise floor**, not a popularity
+   filter. It removes test SKUs, one-off POS mistakes and single-store experiments that would
+   otherwise each present as a "new item" with a first-appearance date.
+4. **Key on `item_id`, carry `item_name`.** Names get re-used and re-cased across rotations; the id
+   is what makes "first seen" meaningful.
+
+Scope notes: `item_type = 'Entree'` reflects that VTOs are entrees — widen it deliberately, and
+remember `item_type` is the closed 7-value domain (menu categories live in `rev_center_name`).
+`is_catering = false` keeps catering-only SKUs out. And `select *` on `order_lines` for this is
+expensive — the steward's own `select *` variant billed **27.12 GiB** against **3.43 GiB** for the
+column-projected equivalent over the same window.
 
 ## Guest checkout (launched 2026-06-25) — known gap
 

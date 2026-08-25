@@ -6,7 +6,38 @@
 >
 > **`max(business_date) = 2026-08-15`. There are ZERO rows for 2026-08-16 → 2026-08-25 (10 business days), and 2026-08-09 is also missing.** Verified on the full table (381,383,908 rows): 0 rows in that window, 0 NULL `business_date`, 0 future dates. `claude.order_lines` is a view over this table, so it is equally empty.
 >
-> **The build reports success the entire time.** `sql/sales_ops.order_lines.sql` ran 24 times a day every day through 2026-08-25 with **zero errors**, inserting 1.5M rows at the 4am reload and ~0.3–2.1M across the intraday runs — all of which land on partitions **on or before 2026-08-15**. The Monday 35-day reloads (08-17, 08-24) each rewrote ~6.2M rows and still produced nothing after 08-15. Root cause is in the build's source query, not in the schedule; it needs the steward (Asana filed 2026-08-25).
+> **The build reports success the entire time.** `sql/sales_ops.order_lines.sql` ran 24 times a day every day through 2026-08-25 with **zero errors**, inserting 1.5M rows at the 4am reload and ~0.3–2.1M across the intraday runs — all of which land on partitions **on or before 2026-08-15**.
+>
+> ## ✅ ROOT CAUSE FOUND 2026-08-25 — `order_lines` reads `order_customer` mid-rebuild
+>
+> **It is not a Brink problem.** `brink.brinkOrder` and `brink.brinkOrderItem` hold complete data for every affected date — 126,330–147,723 item rows per business date across 08-17 → 08-25, with items on 99.3% of orders. `brinkOrder` partitions are written at **~00:57 MT**, three hours before the 4am run, and `brinkOrderItem` writes continuously. (Sunday partitions — 08-02, 08-09, 08-16, 08-23 — are near-empty or absent because the stores are closed. **The 2026-08-09 "hole" reported earlier today is not a defect; it is a closed day.**)
+>
+> **The collision is with `sales_ops.order_customer`.** This build sources its order header from the mart, not from Brink:
+>
+> ```sql
+> with brink_order as (            -- sql/sales_ops.order_lines.sql line 44
+>   select oc.brink_order_id, oc.business_date, …
+>   from `marketing-data-442316`.sales_ops.order_customer oc
+>   where oc.business_date >= start_date
+> )
+> …
+> join brink_order bo              -- line 113: INNER join
+> ```
+>
+> Both are **separate scheduled queries firing at minute :02 with identical window logic**, and `order_customer`'s `delete` + `insert` is **not wrapped in a transaction**. BigQuery gives the reader a snapshot as of query start, so `order_lines` snapshots `order_customer` with the DELETE applied and the INSERT not yet committed — the `brink_order` CTE returns the hole, and the INNER JOIN turns the hole into zero rows.
+>
+> **Measured over 23 consecutive runs (2026-08-24 → 08-25): `order_lines` began reading 5.5 to 14.8 seconds before `order_customer` committed. It lost the race 23 times out of 23.** Sample, 2026-08-25 04:02 MT:
+>
+> | Time (MT) | Event |
+> |---|---|
+> | 04:02:03.857 → 04.849 | `order_customer` DELETE removes 196,042 rows |
+> | 04:02:05.198 → 06.091 | `order_lines` DELETE removes 1,499,662 rows |
+> | 04:02:05.491 → **14.713** | `order_customer` INSERT restores 196,042 rows |
+> | 04:02:06.**326** → 13.829 | `order_lines` INSERT reads `order_customer` **8.2 s before the restore commits** |
+>
+> **This is a ratchet, not a one-off.** Damage is confined to the intersection of the two delete windows, which is why deep history is intact: the 4am run deletes 8 days (35 on Mondays), reads the hole, and reinserts almost nothing, so the recent tail is wiped nightly and never replaced. The late intraday runs sometimes win enough of the snapshot to land a day (08-24 at 15:02 / 21:02 / 22:02 / 23:02 inserted 106,734 / 198,104 / 206,521 / 208,387 rows) — and the next 4am run deletes it again.
+>
+> **Fix, in order:** (1) wrap `order_customer`'s delete+insert in `begin transaction` / `commit` — one line, and `order_line_discount_detail` already does it; note this makes the reader see the *previous* complete state rather than a hole, which understates by under a day instead of wiping eight. (2) Chain the four order-mart builds into one sequential script — the steward already owns this and the untransacted-reader hazard was named as its prerequisite (Asana 1217564375242412). (3) Full rebuild of 2026-08-16 → present. (4) Add the freshness assert below.
 >
 > **What this breaks right now:**
 >

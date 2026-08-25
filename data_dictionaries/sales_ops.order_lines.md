@@ -2,6 +2,22 @@
 
 **One row per order line element** — items, modifiers, fees, tips, discounts, gift cards, promotions, surcharges. This is the canonical table for product/menu-mix, item counts, modifier analysis, and combo composition. For order-level sales, use `sales_ops.order_customer` instead.
 
+> # 🚨 STALE — DO NOT REPORT RECENT ITEM NUMBERS FROM THIS TABLE (found 2026-08-25)
+>
+> **`max(business_date) = 2026-08-15`. There are ZERO rows for 2026-08-16 → 2026-08-25 (10 business days), and 2026-08-09 is also missing.** Verified on the full table (381,383,908 rows): 0 rows in that window, 0 NULL `business_date`, 0 future dates. `claude.order_lines` is a view over this table, so it is equally empty.
+>
+> **The build reports success the entire time.** `sql/sales_ops.order_lines.sql` ran 24 times a day every day through 2026-08-25 with **zero errors**, inserting 1.5M rows at the 4am reload and ~0.3–2.1M across the intraday runs — all of which land on partitions **on or before 2026-08-15**. The Monday 35-day reloads (08-17, 08-24) each rewrote ~6.2M rows and still produced nothing after 08-15. Root cause is in the build's source query, not in the schedule; it needs the steward (Asana filed 2026-08-25).
+>
+> **What this breaks right now:**
+>
+> - Every item / menu-mix / modifier / combo / VTO number for the last 10 days silently returns **nothing** rather than erroring — the `where business_date between …` predicate is satisfied, the partitions are just empty.
+> - `sales_ops.order_customer` **is current through 2026-08-25**, so any analysis that puts orders and items side by side shows item volume collapsing to zero against healthy order volume. That looks like a business event. It is not.
+> - The `item-sales-builder` artifact and any report keyed on item names inherit this directly.
+>
+> **Interim rule: cap every `order_lines` query at `business_date <= '2026-08-15'` and say so in the answer.** Do not describe the gap as a sales decline. If the question needs the last 10 days at item grain, the marts cannot answer it yet — say so.
+>
+> **This is a silent-zero-rows defect of exactly the class the KB has an open action for** (Asana 1216955196273978). A build that cannot fail is a build nobody checks: add a post-insert assert that `max(business_date) >= run_date - 1`, so the next occurrence errors instead of returning empty partitions. It also burns ~260–440 GiB/day: on 2026-08-24 sixteen intraday runs each scanned 14.16 GiB to insert **0** rows.
+
 > **⚠️ Changed 2026-07-31 (deployed + backfilled across full history).** Three changes, all verified live:
 > - **Promotion lines are now named.** `description` / `item_name` carry the real promotion name (`Free Drink Sign`, `Grand Opening 100%`, …) instead of NULL, and `item_type` / `parent_rev_center_name` / `parent_item_grp_name` are all `'Promotion'`. **New consequence: promotion names now collide with item names in item reports** — see the gotcha below. Any item query must exclude them.
 > - **`is_catering` now matches `order_customer`.** The destination test evaluates first, so POS-only catering is caught. June 2026: **+644 orders / +$71,586 gross** moved into catering on this table. From 2026-07-24 until this change the two marts disagreed on catering by that amount — a catering number pulled from `order_lines` in that window understates.

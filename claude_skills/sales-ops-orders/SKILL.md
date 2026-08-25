@@ -491,6 +491,90 @@ Five lessons, and the last two are the ones that generalise beyond this project.
 
 5. **And the machine-reader sweep is exactly what this review's own inclusion rules forbid.** The rules say *exclude all `*.gserviceaccount.com`* — sensible for judging user behaviour, and precisely why a production dependency on a table the steward was about to drop stayed invisible until it broke. The pre-drop warning (Asana 1217722726180551, filed 08-21 15:56) had to be assembled by hand. **Harness fix: keep service accounts out of the behaviour report, but always include them in a dependency sweep before any drop or rename.** Two harness defects now share this shape — the `statement_type = 'SELECT'` filter (Asana 1217494247853173) hides DDL/DML *and* hides every failed job, because a query that cannot resolve its table never gets a `statement_type`. Both filters were narrowing for tidiness and both hid failures.
 
+### 🚨 `sales_ops.order_lines` is STALE from 2026-08-16 — check before answering any item question (found 2026-08-25)
+
+**`max(business_date) = 2026-08-15`. Zero rows for 2026-08-16 → 2026-08-25 (10 business days), and 2026-08-09 is missing too.** Verified against the full 381,383,908-row table: 0 rows in the window, 0 NULL `business_date`, 0 future dates. `claude.order_lines` is a view over it and is equally empty. Meanwhile **`order_customer` is current through 2026-08-25** and `order_line_discount_detail` through 08-24.
+
+**The build never failed.** 24 runs/day, every day, **zero errors**, ~1.5M rows inserted at the 4am reload plus 0.3–2.1M across the intraday runs — every one landing on a partition ≤ 2026-08-15. The Monday 35-day reloads (08-17, 08-24) rewrote ~6.2M rows apiece and still produced nothing past 08-15. Cost of the no-op: on 08-24 the sixteen intraday runs each scanned **14.16 GiB to insert 0 rows** (~227 GiB that day; the 08-08 → 08-25 daily range is 226–442 GiB).
+
+**Until it is fixed:** cap `order_lines` queries at `business_date <= '2026-08-15'` and state the cap in the answer. **Never describe the gap as a sales decline** — item volume falling to zero against healthy `order_customer` volume is the defect, not a business event. If a question needs the last 10 days at item grain, say the marts cannot answer it. The `item-sales-builder` artifact inherits this directly.
+
+**Two general rules this earns:**
+
+1. **An empty partition satisfies a `between` predicate.** A missing date range is the one data-quality failure that produces neither an error nor a suspicious number — it produces a *smaller* number, which reads as a real decline. **A freshness check is part of answering, not part of maintenance:** `select max(business_date)` on every fact table an answer touches, and compare them to each other. The comparison is what caught this — `order_lines` alone looks fine.
+2. **Add the assert to the build, not the warning to the doc.** Same lesson as the `order_datetime` rename below: a build that cannot fail is a build nobody checks. `assert max(business_date) >= run_date - 1` after the insert would have made this loud on 2026-08-16 instead of silent for ten days (Asana 1216955196273978, filed 2026-07-28, still open).
+
+**Tenth business day, 2026-08-24 — the loud failure finished the job. The single heaviest account in the log went from ~650 GiB/day of plausible wrong answers to 11.51 GiB of canonical right ones, and paid for it with 406 hard failures in one day.** All jobs, error rows included, `JOBS_BY_PROJECT`, Denver dates:
+
+| Date | Jobs | Errors | `order_datetime` unrecognized | `OrderCustomer` not found | GiB |
+|---|---|---|---|---|---|
+| 08-17 | 82 | 1 | 0 | 0 | 267.18 |
+| 08-18 | 145 | 1 | 0 | 0 | **610.32** |
+| 08-19 | 30 | 1 | 0 | 0 | 23.46 |
+| 08-20 | 167 | 1 | 0 | 0 | **655.85** |
+| 08-21 | 25 | 10 | 0 | 10 | 38.48 |
+| **08-24** | **423** | **407** | **363** | **43** | **11.51** |
+| 08-25 (part) | 3 | 0 | 0 | 0 | 2.57 |
+
+Five things, and the first is the one to quote when the loud-failure strategy needs defending.
+
+1. **✅ The rewrite happened, and it adopted every prescription in this skill at once.** The 16 jobs that succeeded on 08-24 are not a partial migration — they are the canonical pattern verbatim:
+
+   ```sql
+   with cohort as (
+   	select
+   	oc.mapped_cust_id as cid                        -- id grain, not lower(email)
+   	, min(oc.order_timestamp_utc) as first_ts_utc   -- UTC column, not timestamp(local)
+   	, date_trunc(min(oc.business_date), week(monday)) as cohort_week
+   	from `marketing-data-442316`.claude.order_customer oc
+   	where 1=1
+   	and oc.business_date between date_sub(current_date(), interval 100 day) and current_date()
+   	and oc.customer_order_count = 1                 -- precomputed sequence, partition-filterable
+   	and oc.customer_type = 'person'
+   	and oc.is_catering = false
+   	and oc.store_id not in (1111, 999)
+   	group by 1
+   )
+   ```
+
+   Compare what this replaced: `lower(coalesce(mapped_email, email))` keyed, `having date(min(odt))` as the date bound (structurally unbounded — see the `2026-09-13` template notes above), `timestamp(order_datetime)` for the Braze join, `store_id <> 1111`, `sales_ops.order_customer` direct. Braze is now joined on `safe_cast(u.external_id as int64) = mapped_cust_id`. **Cost per query fell from 45–47 GiB to 0.55–1.76 GiB, and the pattern held into 08-25.** Eight write-ups changed nothing; renaming one column changed all of it in a single day. Third consecutive proof — after `BusinessDate` and `OrderCustomer` — that **the deliverable of a finding about a saved template is a break, not a paragraph.**
+
+2. **🚨 Harness defect, now measured rather than inferred: 43 of the day's 407 failures carry `statement_type = NULL`, and every one is `Not found: Table sales_ops.OrderCustomer`.** A query that cannot resolve its table never gets classified, so this review's `statement_type = 'SELECT'` filter drops it. The 08-21 write-up guessed at this shape; here is the number. **Every `OrderCustomer`-not-found count previously published in this skill is an undercount, including the ninth-business-day table above.** The two dead objects were still killing 406 jobs a day *four days* after the drop and rename, which is the opposite of the "it went quiet, we're done" reading the SELECT-only view produces. Harness fix: drop the `statement_type` filter, or add `or statement_type is null` (Asana 1217494247853173).
+
+3. **✅ The wall breach stayed dead, and for the documented reason.** 34 of dgetz@'s 08-24 jobs reference `pulse.*` in their text; **33 of them are the dead template and never executed.** One ran (0.47 GiB): a "contacts created but never ordered, by week" count off `pulse.customers`. jelgie@ ran the same shape twice (0.51 / 0.47 GiB, current-year and LY-shifted). Three accounts' worth of motive, one surviving query shape, **byte-similar text under two user accounts 27 minutes apart** — the shared-workbook signature again. This fragment survived the rename only because it never referenced `order_datetime`. It will not go away until `pulse.customers` account-creation is exposed in `claude` (Asana 1217792657112397, 1216826772600045).
+
+4. **🚨 A weekly executive scorecard is counting reward members off raw `sessionM.users` with the catering definition this KB explicitly retracted.** One MCP query, 10.71 GiB, produced ~24 board-level metrics. Its loyalty CTEs read:
+
+   ```sql
+   -- ANTI-PATTERN, observed 2026-08-24
+   join `marketing-data-442316.sessionM.users` u
+     on u.create_date <= w.we
+    and u.email not like 'cater_%'      -- prefix-as-definition
+   ```
+
+   Two faults stacked. **(a)** It is a raw-dataset read; `claude.loyalty_user` exists for exactly this and carries `created_date`, `is_catering_member`, `was_ever_catering_member`, and the 420-external-id dedupe. **(b)** `email not like 'cater_%'` is the definition the [`sessionm-loyalty`](../sessionm-loyalty/SKILL.md) skill retracted: the prefix measures *ever provisioned*, not *current member*, agrees with the tier system only 99.93%, and **all 181 tier exits keep the prefix** — so it overstates catering by 232 and cannot answer any point-in-time question. A cumulative `create_date <= week_ending` count is precisely a point-in-time question. Use `is_catering_member = false` on `claude.loyalty_user`. Also note the same query is the denominator of a published `retention_rate` (`L6M distinct customers / cumulative reward members`), so the error propagates into a rate, where it is harder to spot than in a count.
+
+5. **🕳️ The scorecard's metric definitions exist nowhere in this KB — that is the day's largest gap.** `rev_capture`, `activation_rate` (≥3 orders in a trailing 90 days), `retention_rate`, `l13w_active`, comp-store net sales, new-store sales (`store_open_date >= week_ending - 112 days`), the Digital / app / desktop / mobile-web splits, and trailing-52-week vs past-week VTO revenue are all hand-derived in one 10.71 GiB query and defined in zero dictionaries. A KB whose stated purpose is *the same question always produces the same answer* cannot leave its most senior recurring report undefined. Three concrete defects visible in that one query, pending the steward pinning the definitions:
+
+   - `store_id <> 1111` appears **six** times — the locked exclusion is `not in (1111, 999)`, and the negated form is also NULL-unsafe.
+   - The internal-traffic exclusion is `coalesce(mapped_email_domain,'') not in ('cafezupas.com','tkxel.com')` — still unratified (Asana 1217062310224330) and still copy-pasted per-CTE rather than defined once.
+   - `join sales_ops.order_lines ol on ol.brink_order_id = oc.brink_order_id` with **no `business_date` equality** — both tables are partitioned on it, so the join prunes nothing and scans `order_lines` whole. Add `and ol.business_date = oc.business_date`. This is the same omission the steward found between the repo and deployed copies of `claude.order_customer` on 2026-08-17.
+
+> **🕳️ Wholly undocumented dataset: `edi` (paid media).** Zero references in any skill, dictionary or SQL file in this repo, yet it is a live steward-maintained pipeline refreshed daily at 04:00 MT from windsor.ai: `edi.google_ads_daily`, `edi.facebook_daily`, `edi.snapchat_daily`, `edi.tiktok_daily`, `edi.spotify_daily`, the `edi.*_weekly_reach_*` family, and `edi.reach_rel_date`, all fed from `staging.edi_*`. Common column vocabulary across platforms: `date`, `datasource`, `account_name`, `campaign`, `ad_group_name`, `ad_name`, `asset_group_name`, `spend`, `impressions`, `clicks`, `conversions`, `conversion_value`, `all_conversions`, `all_conv_value`, `link_clicks`, `adds_to_cart`, `landing_page_view`. **Any spend / ROAS / channel-performance question is currently unanswerable from the KB**, which matters now that paid-media tooling is in the workspace. Related: Asana 1216803727477024.
+>
+> **✅ Reusable steward pattern mined from that pipeline — restate by observed key set, not by date window.** The order marts delete a *window* (`where business_date >= start_date`). The EDI loads instead delete exactly what the source is about to replace:
+>
+> ```sql
+> delete `marketing-data-442316`.edi.google_ads_daily g
+> where g.date in (
+>   select date from `marketing-data-442316`.staging.edi_googleads_daily
+>   union distinct
+>   select date from `marketing-data-442316`.staging.edi_googleads_daily_pmax
+> )
+> ```
+>
+> Two properties a window cannot match. It **cannot leave a hole** (only keys that are being reinserted are removed), and it **handles non-contiguous restatements** — the 08-24 run's Google Ads key set skipped 07-26, 08-02, 08-09 and 08-16, which any `>= start_date` window would have deleted and not replaced. Use this idiom whenever the upstream is a full-refresh staging table rather than an append-only log. The weekly-reach loads add a companion trick — `qualify min(reach_week) over (partition by 1) <> reach_week` drops the oldest, still-partial reach week from the restatement set.
+
 ### 🕳️ MART GAP: there is no order-*placement* timestamp anywhere in the marts (measured 2026-08-24)
 
 **Catering lead time — "was this ordered the same day it was served, or booked in advance?" — cannot be answered from the `claude` or `sales_ops` marts.** This is a real gap, not a routing problem, and it is worth stating precisely because the obvious column looks like it should work and doesn't.
@@ -1655,8 +1739,34 @@ order by 2 desc
 There is no `is_limited_time` / `is_vto` flag on any item table, so a "which items are seasonal
 rotations vs core menu?" question has to be answered from **when an item first appears in
 `order_lines`**. The steward iterated this shape ~10 times on 2026-08-22 while building a
-`sales_ops.vto_items` dimension (the `create or replace table` header is still commented out —
-**not deployed**, so don't reference the table yet; use the pattern inline).
+`sales_ops.vto_items` dimension.
+
+> **✅ `sales_ops.vto_items` is now deployed — this section's earlier "not deployed, use the pattern
+> inline" warning is retracted (verified against `INFORMATION_SCHEMA.TABLES`, 2026-08-25).** Prefer
+> the table; keep the pattern below for understanding how membership is decided and for re-deriving
+> it on a different cutoff.
+>
+> **The deployed schema is not the pattern's output shape.** It is a plain (unpartitioned,
+> unclustered) 5-column dimension:
+>
+> | Column | Type |
+> |---|---|
+> | `launch_date` | DATE |
+> | `item_id` | INT64 |
+> | `item_name` | STRING |
+> | `item_grp_name` | STRING |
+> | `rev_center_name` | STRING |
+>
+> `launch_date` is the first-appearance date the pattern computes as `min_date`. The pattern's
+> `max_date` and `is_current_vto` **are not in the table** — a "is this VTO currently running?" test
+> has to be derived at query time (`launch_date > current_date('America/Denver') - 91`, or a
+> `max(business_date)` back on `order_lines`), not selected. Join on `item_id`; it is the grain.
+>
+> Observed in use 2026-08-24 (analyst weekly scorecard): `join sales_ops.vto_items v on v.item_id =
+> ol.item_id` to sum `item_gross_sales` for trailing-52-week and past-week VTO revenue. That is the
+> intended use. See the join-pruning caution in the tenth-business-day notes below — the same query
+> joined `order_lines` to `order_customer` on `brink_order_id` alone, with no `business_date`
+> equality, and billed 10.71 GiB.
 
 ```sql
 with items as (

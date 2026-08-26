@@ -28,9 +28,37 @@ The user picks. Then you query.
 
 Not: ask → query. Not: query → apologise. The order is **resolve → ask once → answer**.
 
-Discovery is cheap (`item_name` is a cluster field; `store_info` is 99 rows). Asking
-blind is expensive — it costs the user a round trip and produces worse options, because
-you can't show the size of a choice you haven't measured.
+Discovery is cheap **if you bound it**. `store_info` is 99 rows and free. `item_name` is a
+cluster field on `order_lines`, which is *not* the same as free. Asking blind is still
+expensive — it costs the user a round trip and produces worse options, because you can't show
+the size of a choice you haven't measured.
+
+> ⚠️ **"`item_name` is a cluster field" was being read as "name discovery is free." It isn't —
+> measured 2026-08-25.** One user's name-resolution and item-profiling queries billed
+> **52.4 GB of their 62.5 GB day (84%), across 15 queries**; a second user added 11.9 GB over 8.
+> Roughly **65 GB in one day** to answer "does this item exist, what is its `item_id`, and when
+> did it start selling." Clustering prunes *within* the partitions you read — it does nothing
+> about a `business_date >= '2023-01-01'` discovery scan, and a single
+> `regexp_contains(lower(item_name), 'hot honey brisket')` over full history billed **17.7 GB**
+> on its own.
+>
+> **Bound every discovery query, then stop using the name:**
+>
+> 1. **Resolve on a narrow recent window first** — 30–90 days answers "what is this called and
+>    what is its `item_id`" for a live item. Widen only if it returns nothing.
+> 2. **Switch to `item_id` immediately** once resolved. Never carry `regexp_contains(item_name)`
+>    into the reporting query; `item_id in (…)` is exact, survives menu renames, and stops the
+>    per-query regex scan. (`item_name` is not stable — the same product can appear under
+>    several ids, and `item_id` is what the item-level marts key on.)
+> 3. **"When did this item launch?" is a full-history question — treat it as one and say so.**
+>    Run it once, on `min(business_date)` for a resolved `item_id`, not repeatedly against a
+>    name pattern. Do not fish for a launch date by re-scanning history under different
+>    spellings.
+> 4. If the item is genuinely absent from the recent window, say "no sales in the last N days"
+>    and ask before scanning history — that is a real fork, and the user usually knows.
+>
+> A `claude` item dimension that would make step 1 free is a logged **KB gap**, not something to
+> build per-session (Asana backlog). Until it exists, the bounding rules above are the fix.
 
 ### Never ask a question the data can answer
 

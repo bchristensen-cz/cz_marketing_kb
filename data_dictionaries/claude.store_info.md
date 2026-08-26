@@ -52,6 +52,32 @@ store count.
 - **`is_comp_store` is INTEGER**, not BOOL. Write `si.is_comp_store = 1`.
 - **`store_city` splits `West Valley` and `West Valley City`** — the same metro, two values.
 
+### ⚠️ "Comp store" has two competing definitions — pick `is_comp_store` and say so (2026-08-26)
+
+Observed in one analyst's queries **on a single day** (2026-08-25), used interchangeably for
+year-over-year work:
+
+1. **`si.is_comp_store = 1`** — the maintained flag, synced from the store master. This is the
+   canonical comp base. It is a **property of the store**, not of the comparison window.
+2. **A hand-rolled "active last year" base** — `select distinct store_id from order_customer
+   where business_date between <LY window>`, then `join ly_active using(store_id)`. This is a
+   *different set*: it includes any store that transacted in that particular LY window
+   (including stores the business does not treat as comp), and it silently **changes with the
+   window** you happen to pick.
+
+They will not return the same YoY number, and neither query says which one it used — the
+same-question-different-answer failure this KB exists to prevent.
+
+**Rule: for any comp / YoY / "same-store" question, use `is_comp_store = 1` and state
+"comp stores only (`is_comp_store = 1`), N stores" in the answer.** If someone genuinely
+wants "stores trading in both windows" — a valid but different question — name it that,
+never "comp".
+
+> Routing note: this view already carries `is_comp_store`, `weather_cluster_id`, `market`,
+> lat/long and `timezone_name`. There is **no reason to reach into `sales_ops.store_info`**
+> for a comp-store or geography question. Joining the `sales_ops` copy was the single most
+> common routing violation in the 2026-08-25 log.
+
 ## You usually don't need to join this view
 
 The market dimension is carried directly on both order views as **`store_state`** — the

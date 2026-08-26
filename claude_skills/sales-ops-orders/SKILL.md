@@ -245,6 +245,28 @@ Rules:
 - If someone wants recent-cohort signal, give them a **shorter window that has elapsed** (7- or
   14-day repeat) rather than a censored 90-day figure. Say which window you used.
 
+> **🚨 A year-over-year repeat rate must censor BOTH years identically (observed 2026-08-25).**
+> The live analyst template grew a YoY arm and got this exactly backwards. The LY cohort anchors
+> on `date_sub(current_date(), interval 364 day)` and its 91-day forward window has **fully
+> elapsed**; the CY cohort's forward window runs to `date_add(current_date(), interval 91 day)`
+> — **91 days into the future**. So a matured LY number is being compared against a
+> right-censored CY number.
+>
+> CY reads low *by construction*, the gap is entirely an artefact, and the output is worse than
+> a plain wrong number: it arrives pre-loaded with a story ("repeat rate is down versus last
+> year") that a reader has no way to distinguish from a real decline.
+>
+> **Rule: apply the same elapsed-days test to every year in the comparison, and truncate both to
+> the shorter one.** For a 90-day metric, if CY's newest quotable cohort is 2026-05-15, then LY's
+> cohort must be cut at the matching relative position too — not left to run to its natural,
+> fully-matured end. Then say in the answer which cohort end-dates each year used.
+>
+> Same tell as the single-year case: **if the longer window stops exceeding the shorter one in
+> either year, that year is unfinished.** Check it per year, not once for the query.
+>
+> (Padding a forward-looking CTE's window past today is harmless on its own — there are no rows
+> there. It becomes a defect the moment the two sides of a comparison are padded differently.)
+
 ### 2. Key cohorts on `mapped_cust_id`, and don't rebuild "first order" by hand
 
 `customer_order_count = 1` on `claude.order_customer` already marks a customer's first order,

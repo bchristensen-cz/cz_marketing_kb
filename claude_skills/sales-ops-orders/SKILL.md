@@ -1358,23 +1358,28 @@ Run a cheap discovery query first, show the user the list, and get confirmation:
 ```sql
 select
 ol.item_name
+, coalesce(ol.item_size, '(no size)') as item_size
+, ol.item_id
 , ol.rev_center_name
 , ol.item_type
 , count(*) as lines
+, sum(ol.qty) as units
 , round(sum(ol.item_gross_sales), 0) as gross_sales
+, round(sum(ol.item_gross_sales) / nullif(sum(ol.qty), 0), 2) as avg_unit_price
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
 and ol.business_date between @start and @end
-and ol.store_id <> 1111
+and ol.store_id not in (1111, 999)
 and lower(ol.item_name) like '%grilled cheese%'   -- broadest distinctive fragment, lowercased
-group by 1, 2, 3
-order by 4 desc
+group by 1, 2, 3, 4, 5
+order by lines desc
 ```
 
 - Match on the **shortest distinctive fragment**, lowercased on both sides. `like '%ultimate grilled cheese%'` misses `Ultimate Grilled Cheese Box`; `like '%grilled cheese%'` finds the family.
 - `item_name` is a **cluster field** — these filters are cheap. Still filter `business_date`.
-- Show the candidate names with their volumes and revenue centers so the user can see what they're choosing between, then ask which to include. Zero rows = say so and widen the fragment; never report `$0`.
-- Only after the name list is confirmed, run the metric query against the agreed `item_name in (...)` set.
+- **Group by `item_id` and `item_size`, and show the average unit price.** One `item_name` routinely covers several products; the price column is what makes a wrong pick visible to the user. See the size rule immediately below.
+- Show the candidates with their volumes, sizes, prices and revenue centers so the user can see what they're choosing between, then ask which to include. Zero rows = say so and widen the fragment; never report `$0`.
+- Only after the list is confirmed, run the metric query against the agreed **`item_id in (...)`** set (fall back to `item_name` + `item_size` only if the ids weren't resolved).
 
 **Worked example (verified 2026-07-28, 2026-05-03 → 2026-06-27, store 1111 excluded).** "Grilled cheese" resolves to **four** different items, which is exactly why this step exists:
 
@@ -1390,6 +1395,75 @@ order by 4 desc
 Note `Grilled Cheese Sandwich` is effectively a **combo-only item** — 52 standalone lines against 93K combo appearances. If a user says "grilled cheese" and you silently pick one name, you can be off by an order of magnitude or answer about the wrong sandwich entirely.
 
 **Also: `Ultimate Grilled Cheese Box` carries `is_catering = false`** despite being the catering box product. So `is_catering = false` does **not** reliably strip catering-only SKUs — the catering question (item 3) and the name question (item 5) are independent, and you need both.
+
+#### Size is a separate column — and `item_name` is not a product (steward rule 2026-08-27)
+
+**The build strips the size prefix out of `item_name` and parks it in `item_size`.** In
+`sql/sales_ops.order_lines.sql` the published `item_name` is the size-stripped
+`item_grp_name` (line 395), and the prefix regex is
+`^(REG|Mini|LG|PRTY|HALF|Kids|LARGE|Medium|Tray|QUART) `. So the name a user speaks and the
+string in the column are **not the same string**:
+
+| Predicate | Result |
+|---|---|
+| `ol.item_name = 'Mini Chocolate Strawberry Cup'` | **zero rows** — reads as "no sales" |
+| `lower(ol.item_name) like '%chocolate strawberry%'` | the family, sizes visible |
+| `ol.item_name = 'Chocolate Strawberry Cup' and ol.item_size = 'Mini'` | ✅ the product |
+
+**Never put a size word inside an `item_name` predicate.** Match the name without it, then
+filter `item_size`. A user asking about the "mini chocolate strawberry cup" is naming two
+columns, not one — and the failure mode is a silent zero, which the user reads as the item
+not existing.
+
+**Worked example — Mini Chocolate Strawberry Cup** (measured 2026-08-27, trailing 30 days
+2026-07-29 → 2026-08-26, stores 1111/999 excluded):
+
+| `item_id` | `item_name` | `item_size` | Units | Item gross | Avg unit price |
+|---|---|---|---|---|---|
+| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | $139,950 | **$9.00** |
+| 643640567 | `Chocolate Strawberry Cup` | **NULL** | 5,051 | $70,714 | **$14.00** |
+| | | *name only* | *20,601* | *$210,664* | *$10.23* |
+
+Answering on the name alone overstates the Mini by **32.5% in units / 50.5% in gross**, and
+reports a blended **$10.23** price for a product sold at $9.00 and $14.00 and never at
+$10.23. Both ids have sold since **February 2025** — not an LTO artifact, and nothing about
+the name hints that it splits.
+
+> ⚠️ **NULL `item_size` does not mean "Regular."** `Regular` is a real populated value
+> (190,934 lines / 22 names in the window) — but the full-size Chocolate Strawberry Cup is
+> **NULL**, so `item_size = 'Regular'` on it returns zero. NULL means *the build parsed no
+> prefix*, which covers genuinely unsized items **and** the default size of a sized family.
+> Always `coalesce(ol.item_size, '(no size)')` in a breakout, and never write
+> `item_size = 'Regular'` to mean "the normal one."
+
+**Size is necessary but not sufficient — `item_id` is the product key.** Same window, 373
+`item_name` values on sellable lines (discount/promotion markers excluded):
+
+| | Names | Share of names | Share of units |
+|---|---|---|---|
+| Span more than one `item_id` | **140** | 37.5% | **50.1%** |
+| …of which split by `item_size` | 49 | 13.1% | 21.0% |
+| …of which split by something **other** than size | **91** | 24.4% | — |
+
+Half the volume in the mart sits under a name that is not unique to one product, and size
+explains only a third of those splits. Resolve to `item_id`; treat size as the most common
+reason a name needs resolving, not the only one.
+
+Two more instances of the same collision, so it is a pattern and not one dessert:
+
+- **`Dubai Cup`** — identical shape: id 643640588 `Mini` **$12.00**, id 643640587 NULL
+  **$18.00**. `Mini` exists on exactly these two names in the window (30,892 lines total).
+- **`Kids Combo`** — the same collision with no size story: id 643647054 is the `Kids`
+  **$0.00** bundle slot, id 642361971 is the NULL-size **$7.27** paid combo. One name, two
+  things, and a units count on the name double-counts every kids meal.
+
+**A size word can still survive inside `item_name`** — 14 names in the window carry one,
+because the strip runs once and is case-sensitive: `PRTY TRAY Avocado Caesar Salad` loses
+`PRTY` (→ `item_size = 'Party'`) and keeps `TRAY`; `Kids Combo` is special-cased to NULL
+size; and lines that miss the item master fall back to `description`, which was never
+stripped (`Mini Chocolate Chips`, NULL size). So matching the bare name is right — but
+**the absence of a size word in a name is not evidence the item has no sizes.** Check
+`item_size` every time.
 
 ### 6. "Delivery" means CZ Delivery — never sweep in the marketplaces (steward rule 2026-08-04)
 

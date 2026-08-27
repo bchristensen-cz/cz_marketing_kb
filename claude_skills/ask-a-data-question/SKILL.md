@@ -82,7 +82,8 @@ about bowls (see below) teaches the user that the clarifications are noise.
 
 | The user said | Before asking anything, run |
 |---|---|
-| a product name | the `like` discovery query from `sales-ops-orders` (pre-query protocol item 5) |
+| a product name | the `like` discovery query from `sales-ops-orders` (pre-query protocol item 5) — grouped by `item_id` **and** `item_size`, never with a size word inside the `item_name` predicate |
+| a size ("mini", "large", "half", "kids", "party") | **a separate column, `item_size`** — it is not in `item_name`. See the size rule below |
 | "market", "region", "area" | see the market rule below — it is **`store_state`** |
 | a store by name | `select si.store_id, si.store_name, si.store_city, si.store_state from ... store_info si` |
 | "delivery" | see the delivery rule below — default is `oc.destination = 'CZ Delivery'`; the third-party marketplaces are a different question |
@@ -90,6 +91,38 @@ about bowls (see below) teaches the user that the clarifications are noise.
 | a campaign | the Braze / SessionM lookup in the relevant skill |
 | a fuzzy date ("last week", "May") | resolve to explicit dates; business week is **Mon–Sat** |
 | "period", "P8", "fiscal year/quarter", a holiday | `claude.date_dim` via the **`date-dimensions`** skill — resolve the fiscal window to explicit dates first. "Quarter"/"year" alone is a fork: calendar vs fiscal disagree near year-end |
+
+### Size lives in `item_size`, never in `item_name` (steward rule 2026-08-27)
+
+The `order_lines` build **strips the size prefix out of `item_name`**, so the phrase a user
+speaks is split across two columns. `item_name = 'Mini Chocolate Strawberry Cup'` returns
+**zero rows** — and a zero here is the worst possible failure, because it reads to the user
+as *we don't sell that*. Match the name without the size word, then filter `item_size`.
+
+Measured 2026-08-27, trailing 30 days, stores 1111/999 excluded:
+
+| `item_id` | `item_name` | `item_size` | Units | Avg unit price |
+|---|---|---|---|---|
+| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | **$9.00** |
+| 643640567 | `Chocolate Strawberry Cup` | NULL | 5,051 | **$14.00** |
+
+Answering on the name alone overstates the Mini by 32.5% in units / 50.5% in gross and
+quotes a $10.23 blended price the product is never sold at. NULL does **not** mean
+"Regular" — `Regular` is populated on 22 other names, but the full-size cup is NULL. Full
+mechanism, the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` /
+`Kids Combo` twins are in `sales-ops-orders` pre-query protocol item 5.
+
+**So on any item-specific question, size is a dimension you resolve — not a fork you ask.**
+Run the discovery query grouped by `item_id` and `item_size` with the average unit price
+shown, and present the *result*. If the item turns out to have one size, say nothing about
+size at all (asking a dead question teaches the user the protocol is noise). If it has
+more than one, the fork is clickable and its options carry the measured consequence:
+
+> **Which Chocolate Strawberry Cup?**
+> - **Mini only** — $9.00, 15,550 units in the last 30 days
+> - **Full size only** — $14.00, 5,051 units
+> - **Both, broken out by size** *(recommended)*
+> - **Both, combined** — one blended row; the $10.23 average is not a real price
 
 ### "Market" means `store_state` (steward decision 2026-07-30)
 
@@ -211,6 +244,7 @@ Rules:
 | Catering | always | — |
 | Try 2 Combo | **only** for soups, sandwiches, salads (see below) | — |
 | Which item names | whenever discovery returned >1 candidate | — |
+| **Item size** | whenever a resolved item spans more than one `item_size` — **resolve it first, then fork on what you measured**; never ask when the item has one size | breakout by size is the recommended option; a combined row blends price points |
 | Channel | only if the user hints at it | default: all channels |
 
 ### A filter and a breakout are two different questions — never one control

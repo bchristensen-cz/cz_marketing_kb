@@ -135,6 +135,8 @@ Cost is not a reason to prefer it either: the prefix scan is 45 MB vs 136 MB for
 - **Only the `cafezupas` external id type is used** (steward, 2026-07-28). `external_user_mappings` also holds ~1.33M `amperity` rows; they are deliberately not exposed.
 - `player_id` looks like a plausible join key and is not one — 48,064 of 211,541 order-mart ids match it by coincidence of range. Use `sm_external_user_id`.
 
+- **The view cannot cover users the upstream extract never sent.** **688 `user_id`s with real loyalty activity have no row in `sessionM.users`** (measured 2026-08-27), so they are absent from `loyalty_user` and from every `loyalty_*` view that joins it. Confirmed at the source: they are missing from the GCS `users` dumps themselves — the 2026-08-17→08-27 dumps loaded 30,155 of 30,155 ids with **0 drops**, and all 688 are absent from those dumps and from every daily dump over 2026-05-20→06-15. 523 have tier history and 500 have point accounts, so they are members, not test rows; 0 appear in `privacy_requests`. Because the `users` extract is delta-only with no full snapshot anywhere in the bucket, **this will not heal on its own** — it needs a SessionM re-export. Their offers still appear in `loyalty_offer_usage` with NULL identity columns.
+
 ## Open items
 
 - [ ] `loyalty_status` semantics undocumented — get the code list from SessionM.

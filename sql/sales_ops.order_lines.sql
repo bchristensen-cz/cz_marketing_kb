@@ -394,7 +394,7 @@ l.brink_order_id
 , l.item_id
 , l.item_grp_name as item_name
 , l.item_modifier
-, l.item_size
+, coalesce(l.item_size, 'Regular') as item_size  -- '2026-08-27'  added coalese so no nulls 
 , l.amount
 , l.rev_center_name
 , l.item_gross_sales

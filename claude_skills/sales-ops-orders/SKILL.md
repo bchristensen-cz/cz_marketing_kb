@@ -1421,20 +1421,39 @@ not existing.
 | `item_id` | `item_name` | `item_size` | Units | Item gross | Avg unit price |
 |---|---|---|---|---|---|
 | 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | $139,950 | **$9.00** |
-| 643640567 | `Chocolate Strawberry Cup` | **NULL** | 5,051 | $70,714 | **$14.00** |
+| 643640567 | `Chocolate Strawberry Cup` | `Regular`† | 5,051 | $70,714 | **$14.00** |
 | | | *name only* | *20,601* | *$210,664* | *$10.23* |
+
+† This row read **NULL** until the 2026-08-27 rebuild coalesced it to `Regular`. Read the
+warning below before using `Regular` as a filter.
 
 Answering on the name alone overstates the Mini by **32.5% in units / 50.5% in gross**, and
 reports a blended **$10.23** price for a product sold at $9.00 and $14.00 and never at
 $10.23. Both ids have sold since **February 2025** — not an LTO artifact, and nothing about
 the name hints that it splits.
 
-> ⚠️ **NULL `item_size` does not mean "Regular."** `Regular` is a real populated value
-> (190,934 lines / 22 names in the window) — but the full-size Chocolate Strawberry Cup is
-> **NULL**, so `item_size = 'Regular'` on it returns zero. NULL means *the build parsed no
-> prefix*, which covers genuinely unsized items **and** the default size of a sized family.
-> Always `coalesce(ol.item_size, '(no size)')` in a breakout, and never write
-> `item_size = 'Regular'` to mean "the normal one."
+> 🚨 **`item_size = 'Regular'` does not mean "the regular size" (changed 2026-08-27).**
+> The build now coalesces the unparsed case to `'Regular'`, so the column has **zero NULLs
+> across full history** (verified 2018→2026). That closed a real trap — the full-size cup
+> used to be NULL, so a user asking for the *regular* cup got zero rows. But `Regular` is now
+> the label for **both** the genuine `REG`-prefixed size **and** everything the build never
+> parsed a size for.
+>
+> Sellable lines in the window: **`Regular` = 4,019,004 of 5,269,076 (76.3%)**, of which only
+> **192,622 carry a real `REG ` prefix**. So `item_size = 'Regular'` returns **~21x** what it
+> did before the change.
+>
+> | Consequence | What to do |
+> |---|---|
+> | Any query or saved report written before 2026-08-27 filtering `item_size = 'Regular'` silently changed meaning | Re-read it before trusting it — it is now ~21x broader |
+> | A size breakout shows `Regular` as three-quarters of the business, reading as *most of what we sell is regular-sized* — which is false | Never present `Regular` as a size without saying what it contains |
+> | `Regular` is stamped on lines with **no size at all**: 100% of `discount` (55,667), `tip` (51,987), `fee` (28,568), `promotion` (3,130), `gift_card` (882); plus 81.5% of `modifier` and 72.2% of `item` | A tip now has a size. Filter line types before any size analysis |
+> | The genuine menu size is still recoverable | `description` keeps the raw prefix: `and regexp_contains(ol.description, r'^REG ')` — use it only when the question really is about Regular as a *menu* size |
+>
+> **The reusable lesson (third instance in this KB): an upstream fix creates a downstream
+> trap.** Filling a formerly-NULL column changes what every existing filter on it includes.
+> The NULL→`Regular` coalesce was the right call for the user-facing question, and it moved
+> 3.83M rows into a bucket that 22 item names already meant something specific by.
 
 **Size is necessary but not sufficient — `item_id` is the product key.** Same window, 373
 `item_name` values on sellable lines (discount/promotion markers excluded):
@@ -1451,17 +1470,18 @@ reason a name needs resolving, not the only one.
 
 Two more instances of the same collision, so it is a pattern and not one dessert:
 
-- **`Dubai Cup`** — identical shape: id 643640588 `Mini` **$12.00**, id 643640587 NULL
+- **`Dubai Cup`** — identical shape: id 643640588 `Mini` **$12.00**, id 643640587 `Regular`
   **$18.00**. `Mini` exists on exactly these two names in the window (30,892 lines total).
 - **`Kids Combo`** — the same collision with no size story: id 643647054 is the `Kids`
-  **$0.00** bundle slot, id 642361971 is the NULL-size **$7.27** paid combo. One name, two
+  **$0.00** bundle slot, id 642361971 is the `Regular` **$7.27** paid combo. One name, two
   things, and a units count on the name double-counts every kids meal.
 
 **A size word can still survive inside `item_name`** — 14 names in the window carry one,
 because the strip runs once and is case-sensitive: `PRTY TRAY Avocado Caesar Salad` loses
-`PRTY` (→ `item_size = 'Party'`) and keeps `TRAY`; `Kids Combo` is special-cased to NULL
-size; and lines that miss the item master fall back to `description`, which was never
-stripped (`Mini Chocolate Chips`, NULL size). So matching the bare name is right — but
+`PRTY` (→ `item_size = 'Party'`) and keeps `TRAY`; `Kids Combo` is special-cased to no
+parsed size; and lines that miss the item master fall back to `description`, which was never
+stripped (`Mini Chocolate Chips` — a Mini that now reads `Regular`). So matching the bare
+name is right — but
 **the absence of a size word in a name is not evidence the item has no sizes.** Check
 `item_size` every time.
 

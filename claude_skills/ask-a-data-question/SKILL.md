@@ -104,13 +104,18 @@ Measured 2026-08-27, trailing 30 days, stores 1111/999 excluded:
 | `item_id` | `item_name` | `item_size` | Units | Avg unit price |
 |---|---|---|---|---|
 | 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | **$9.00** |
-| 643640567 | `Chocolate Strawberry Cup` | NULL | 5,051 | **$14.00** |
+| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,051 | **$14.00** |
 
 Answering on the name alone overstates the Mini by 32.5% in units / 50.5% in gross and
-quotes a $10.23 blended price the product is never sold at. NULL does **not** mean
-"Regular" — `Regular` is populated on 22 other names, but the full-size cup is NULL. Full
-mechanism, the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` /
-`Kids Combo` twins are in `sales-ops-orders` pre-query protocol item 5.
+quotes a $10.23 blended price the product is never sold at.
+
+🚨 **But `Regular` is not a size you can trust as a filter.** Since 2026-08-27 the build
+coalesces every unparsed size to `'Regular'`, so it covers **76.3% of sellable lines** while
+only **192,622** of those carry a real `REG ` prefix — tips, fees, discounts and modifiers all
+read `Regular` now. Use it to *identify* the full-size cup (as above), never as a standalone
+predicate meaning "regular size", and never show it in a breakout unlabelled. Full mechanism,
+the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` / `Kids Combo` twins are in
+`sales-ops-orders` pre-query protocol item 5.
 
 **So on any item-specific question, size is a dimension you resolve — not a fork you ask.**
 Run the discovery query grouped by `item_id` and `item_size` with the average unit price
@@ -120,7 +125,7 @@ more than one, the fork is clickable and its options carry the measured conseque
 
 > **Which Chocolate Strawberry Cup?**
 > - **Mini only** — $9.00, 15,550 units in the last 30 days
-> - **Full size only** — $14.00, 5,051 units
+> - **Full size only** (`Regular`) — $14.00, 5,051 units
 > - **Both, broken out by size** *(recommended)*
 > - **Both, combined** — one blended row; the $10.23 average is not a real price
 

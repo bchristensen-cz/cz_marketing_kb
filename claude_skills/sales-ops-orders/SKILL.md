@@ -1358,7 +1358,7 @@ Run a cheap discovery query first, show the user the list, and get confirmation:
 ```sql
 select
 ol.item_name
-, coalesce(ol.item_size, '(no size)') as item_size
+, ol.item_size
 , ol.item_id
 , ol.rev_center_name
 , ol.item_type
@@ -1421,39 +1421,69 @@ not existing.
 | `item_id` | `item_name` | `item_size` | Units | Item gross | Avg unit price |
 |---|---|---|---|---|---|
 | 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | $139,950 | **$9.00** |
-| 643640567 | `Chocolate Strawberry Cup` | `Regular`† | 5,051 | $70,714 | **$14.00** |
+| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,051 | $70,714 | **$14.00** |
 | | | *name only* | *20,601* | *$210,664* | *$10.23* |
-
-† This row read **NULL** until the 2026-08-27 rebuild coalesced it to `Regular`. Read the
-warning below before using `Regular` as a filter.
 
 Answering on the name alone overstates the Mini by **32.5% in units / 50.5% in gross**, and
 reports a blended **$10.23** price for a product sold at $9.00 and $14.00 and never at
 $10.23. Both ids have sold since **February 2025** — not an LTO artifact, and nothing about
 the name hints that it splits.
 
-> 🚨 **`item_size = 'Regular'` does not mean "the regular size" (changed 2026-08-27).**
-> The build now coalesces the unparsed case to `'Regular'`, so the column has **zero NULLs
-> across full history** (verified 2018→2026). That closed a real trap — the full-size cup
-> used to be NULL, so a user asking for the *regular* cup got zero rows. But `Regular` is now
-> the label for **both** the genuine `REG`-prefixed size **and** everything the build never
-> parsed a size for.
+> ✅ **`item_size` has no NULLs and `Regular` means an actual regular size (rebuilt
+> 2026-08-27 12:35 MT).** The column is a closed 9-value domain resolved in four steps:
 >
-> Sellable lines in the window: **`Regular` = 4,019,004 of 5,269,076 (76.3%)**, of which only
-> **192,622 carry a real `REG ` prefix**. So `item_size = 'Regular'` returns **~21x** what it
-> did before the change.
+> ```sql
+> case
+> 	when l.line_item_type not in ('item', 'modifier') then 'Not Applicable'
+> 	when l.item_size is not null                      then l.item_size
+> 	when f.family_has_sizes                           then 'Regular'
+> 	else 'Not Sized'
+> end as item_size
+> ```
 >
-> | Consequence | What to do |
-> |---|---|
-> | Any query or saved report written before 2026-08-27 filtering `item_size = 'Regular'` silently changed meaning | Re-read it before trusting it — it is now ~21x broader |
-> | A size breakout shows `Regular` as three-quarters of the business, reading as *most of what we sell is regular-sized* — which is false | Never present `Regular` as a size without saying what it contains |
-> | `Regular` is stamped on lines with **no size at all**: 100% of `discount` (55,667), `tip` (51,987), `fee` (28,568), `promotion` (3,130), `gift_card` (882); plus 81.5% of `modifier` and 72.2% of `item` | A tip now has a size. Filter line types before any size analysis |
-> | The genuine menu size is still recoverable | `description` keeps the raw prefix: `and regexp_contains(ol.description, r'^REG ')` — use it only when the question really is about Regular as a *menu* size |
+> where `family_has_sizes` comes from the **item master** (`brink_items`), not from the fact
+> rows — so the value does not depend on how wide that run's reload was. Distribution,
+> 2026-08-20 → 2026-08-26, stores 1111/999 excluded:
+>
+> | `item_size` | Lines | Share | Means |
+> |---|---|---|---|
+> | `Not Sized` | 807,653 | 62.5% | a real product with no size concept (chips, bottled drink, cookie) |
+> | `Half` | 168,233 | 13.0% | |
+> | **`Regular`** | **151,034** | **11.7%** | base size of a family that *has* other sizes, or a genuine `REG` prefix |
+> | `Kids` | 66,052 | 5.1% | |
+> | `Large` | 56,593 | 4.4% | |
+> | `Not Applicable` | 33,877 | 2.6% | not a product line — tip, fee, discount, promotion, gift card, surcharge |
+> | `Mini` | 6,861 | 0.5% | only `Chocolate Strawberry Cup` and `Dubai Cup` |
+> | `Party` / `Tray` | 1,143 | 0.1% | |
+>
+> **A size breakout is now safe to present unlabelled** — `Regular` is 11.7%, not 76%, and the
+> two non-size states are named rather than hidden inside it. Filter
+> `line_item_type in ('item','modifier')` for any size analysis and `Not Applicable` disappears.
+
+> ⚠️ **Three semantics shipped for this column on 2026-08-27, hours apart.** NULL-for-unparsed
+> (until ~10:53 MT), then `coalesce(..., 'Regular')` which made `Regular` **76.3%** of lines
+> (10:53 → 12:35), then the CASE above. A query written against any earlier version still runs
+> and returns a different number, silently. In particular **`item_size is null` is dead** — it
+> returns zero rows rather than the unsized items, so it reads as "no such thing" instead of
+> erroring. If you are handed a saved query or an older report that touches `item_size`,
+> re-read it before trusting the number.
+>
+> **Why `family_has_sizes` reads the item master and not the facts** (measured before the fix):
+> deriving it from `order_lines_detail` bounds it by the run's reload window, so the same item
+> got different labels depending on which run wrote the partition — full-history CTAS most
+> generous, 8-day narrower, intraday narrowest. On a one-day window **11 of 316 names / 2,645
+> of 212,311 lines (1.25%)** flipped `Regular` → `Not Sized`: `Brisket Grilled Cheese` plus
+> most fountain and bottled beverages, i.e. families whose sized variant simply does not sell
+> every day. The item-master version misses **none** of the families the 30-day facts find and
+> adds **11** more (a Half on the menu is a size whether or not one sold). **The general rule:
+> never derive a dimension's meaning from the fact window — a dimension must not change
+> because a reload was narrower.**
 >
 > **The reusable lesson (third instance in this KB): an upstream fix creates a downstream
-> trap.** Filling a formerly-NULL column changes what every existing filter on it includes.
-> The NULL→`Regular` coalesce was the right call for the user-facing question, and it moved
-> 3.83M rows into a bucket that 22 item names already meant something specific by.
+> trap** — and the second fix can create its own. Filling a formerly-NULL column changed what
+> every existing filter included; naming the unparsed case `Regular` then overloaded a label 22
+> item names already meant something specific by. Both were improvements. Both moved millions
+> of rows into a bucket something else was already reading.
 
 **Size is necessary but not sufficient — `item_id` is the product key.** Same window, 373
 `item_name` values on sellable lines (discount/promotion markers excluded):
@@ -1480,8 +1510,8 @@ Two more instances of the same collision, so it is a pattern and not one dessert
 because the strip runs once and is case-sensitive: `PRTY TRAY Avocado Caesar Salad` loses
 `PRTY` (→ `item_size = 'Party'`) and keeps `TRAY`; `Kids Combo` is special-cased to no
 parsed size; and lines that miss the item master fall back to `description`, which was never
-stripped (`Mini Chocolate Chips` — a Mini that now reads `Regular`). So matching the bare
-name is right — but
+stripped (`Mini Chocolate Chips` — a Mini whose `item_size` is decided by its family, not by
+the word in its name). So matching the bare name is right — but
 **the absence of a size word in a name is not evidence the item has no sizes.** Check
 `item_size` every time.
 

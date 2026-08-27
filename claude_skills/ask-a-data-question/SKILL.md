@@ -109,13 +109,17 @@ Measured 2026-08-27, trailing 30 days, stores 1111/999 excluded:
 Answering on the name alone overstates the Mini by 32.5% in units / 50.5% in gross and
 quotes a $10.23 blended price the product is never sold at.
 
-🚨 **But `Regular` is not a size you can trust as a filter.** Since 2026-08-27 the build
-coalesces every unparsed size to `'Regular'`, so it covers **76.3% of sellable lines** while
-only **192,622** of those carry a real `REG ` prefix — tips, fees, discounts and modifiers all
-read `Regular` now. Use it to *identify* the full-size cup (as above), never as a standalone
-predicate meaning "regular size", and never show it in a breakout unlabelled. Full mechanism,
-the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` / `Kids Combo` twins are in
-`sales-ops-orders` pre-query protocol item 5.
+✅ **`item_size` is a clean closed domain as of 2026-08-27**: `Regular`, `Half`, `Large`,
+`Kids`, `Mini`, `Party`, `Tray`, plus `Not Sized` (a real product with no size concept) and
+`Not Applicable` (tip, fee, discount, promotion, gift card). No NULLs, and `Regular` means an
+actual regular size — 11.7% of lines, not 76%. So a size breakout is safe to show as-is; just
+filter `line_item_type in ('item','modifier')` and `Not Applicable` drops out.
+
+⚠️ **But `item_size is null` is dead** — it returns zero rows now, which reads as "no such
+thing" rather than erroring. Three different semantics shipped for this column within hours on
+2026-08-27, so treat any saved query or older report touching `item_size` as suspect until
+re-read. Full mechanism, the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` /
+`Kids Combo` twins are in `sales-ops-orders` pre-query protocol item 5.
 
 **So on any item-specific question, size is a dimension you resolve — not a fork you ask.**
 Run the discovery query grouped by `item_id` and `item_size` with the average unit price

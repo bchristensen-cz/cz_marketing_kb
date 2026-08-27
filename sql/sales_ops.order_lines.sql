@@ -376,6 +376,14 @@ from brink_order_item_lines bol
   having count(*) > 1
 )
 
+, size_families as (
+select
+	bi.item_grp_name
+	, logical_or(bi.item_size is not null) as family_has_sizes
+from brink_items bi
+group by 1
+)
+
 select
 l.brink_order_id
 , l.pulse_order_id
@@ -394,7 +402,13 @@ l.brink_order_id
 , l.item_id
 , l.item_grp_name as item_name
 , l.item_modifier
-, coalesce(l.item_size, 'Regular') as item_size  -- '2026-08-27'  added coalese so no nulls 
+--, coalesce(l.item_size, 'Regular') as item_size  -- '2026-08-27'  removed for the case below
+, case
+	when l.line_item_type not in ('item', 'modifier') then 'Not Applicable'
+	when l.item_size is not null                      then l.item_size
+	when f.family_has_sizes                           then 'Regular'
+	else 'Not Sized'
+  end as item_size  -- '2026-08-27'  added this case for better values in item_size
 , l.amount
 , l.rev_center_name
 , l.item_gross_sales
@@ -422,6 +436,8 @@ from order_lines_detail l
 		on ca.combo_order_line_item_id = l.combo_order_line_item_id
       left join `marketing-data-442316.sales_ops.store_info` si
       on si.store_id = l.store_id
+        left join size_families f
+        on f.item_grp_name = l.item_grp_name
 where 1=1
 and l.business_date >= start_date
 ;

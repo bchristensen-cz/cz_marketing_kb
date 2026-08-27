@@ -2228,6 +2228,48 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
   — bare `current_date` is UTC and evening intraday runs land on the next UTC day. Full
   writeup in the section above.
 
+- **Weather questions: the source is `marketing_ops.weather_triggers`. The four `brink.*`
+  weather tables are dead or stale, and one of them is silently EMPTY** (measured 2026-08-27
+  after an analyst hit them on 08-26).
+
+  | Table | Rows | Coverage | Verdict |
+  |---|---|---|---|
+  | `brink.weather_data` | **0** | — | **Empty. Returns no rows, never an error.** |
+  | `brink.WeatherData` | 4,201,493 | 2014-12-08 → **2026-04-25** | 4 months stale |
+  | `brink.WeatherData_Staging`, `brink.WeatherDataForSchedulerProjectionsWrtMonday` | — | — | Scheduler internals, not analysis tables |
+  | `marketing_ops.weather_triggers` | 45,408 | actuals 2025-05-29 → yesterday; forecasts to tomorrow, 90 store zips | **Use this** |
+
+  Three traps, all fired in one session:
+
+  1. **`brink.weather_data` is empty, so a weather-vs-sales query against it returns a clean,
+     plausible, entirely empty result** — the same silent-zero class as
+     [a stalled partition satisfying `BETWEEN`](#). The analyst read the blank output as
+     "no weather effect," not "no table."
+  2. **The two brink tables differ only by letter case in the table name AND in every column
+     name** — `weather_data`(`business_date`, `store_id`, `temperature`, `precipmm`, `hour`)
+     vs `WeatherData`(`BusinessDate`, `StoreId`, `Temperature`, `PrecipMM`, `Hour`). BigQuery
+     table names are case-sensitive, so both resolve. A `union all` across them fails with
+     `Unrecognized name: business_date; Did you mean BusinessDate?`, which reads like a typo
+     rather than like two different tables.
+  3. **Falling back from the empty table to the stale one is worse than either**, because
+     `WeatherData` stops at 2026-04-25: a yesterday-vs-last-year comparison returns a
+     **populated LY side and an empty CY side**, which presents as a dramatic weather change.
+
+  `marketing_ops.weather_triggers` is keyed on **`store_zip`, not `store_id`** — join via
+  `claude.store_info.store_zip`. It also carries a `record_type` of `'actual'` or
+  `'forecast'`; filter it, or a "yesterday" query can pick up a forecast row.
+  `sales_ops.store_info.weather_cluster` and `marketing_ops.zip_weather_cluster` group zips
+  into weather regions. There is **no `claude` weather view yet** — flag it as a mart gap
+  rather than routing a user to `marketing_ops` or `brink` (Asana 1217062464974534).
+
+- **The `claude` views floor at 2023-01-01, so pre-2023 questions have no standard-user
+  answer** (observed 2026-08-26: an analyst ran a 2019-01-07 → 2023-06-25 weekly net-sales
+  series against `sales_ops.order_customer` directly, because that is the only place it
+  exists). The floor is a rolling 3 years, so it moves every January. Multi-year trend,
+  COVID-baseline and pre-opening questions all cross it. **The correct response is to say the
+  range is outside the curated window and log it as a mart gap — not to fall through to
+  `sales_ops`.** See Asana 1217932458641436.
+
 ## When done
 
 If you learned something new about these tables during the session (new gotcha, new canonical definition, data quality issue), do **not** edit this skill or any local copy — only the data steward commits to the repo, and session copies are discarded. Instead, create an Asana task on the **Claude Data** board (workspace cafezupas.com, project `1216769551099591`) titled `KB finding: <short title>`, describing what you observed (include the query that surfaced it) and the proposed change. The steward reviews and merges vetted findings; the next session's fresh clone benefits automatically.

@@ -310,6 +310,40 @@ Every metric in this section is customer-level, so hard rule 6 applies without e
 cohort built without it pulls the aggregator id (~108K orders/month) and shared kiosk terminals
 into "new customers." Observed missing from all 12 cohort queries on 2026-08-13.
 
+### 4. 🚨 `net_sales between 3 and 200` is NOT a canonical filter — it is an undeclared population change (observed 2026-08-27)
+
+**32 of one analyst's 156 MCP queries on 2026-08-27** carried
+`and o.net_sales between 3 and 200` on the order CTE feeding campaign-lift and repeat-rate
+measurements. It appears nowhere in this KB, has never been ratified by the steward, and is
+never mentioned in the answers it produces. Measured on `claude.order_customer`,
+2026-08-01 → 08-26, person / non-catering / stores 1111+999 excluded (199,451 orders):
+
+| | Orders | Share |
+|---|---|---|
+| `net_sales < 3` | 7,420 | 3.72% |
+| `net_sales > 200` | 236 | 0.12% |
+| **Excluded in total** | **7,656** | **3.84% of orders, 1.32% of net sales** |
+
+Two separate problems, and the small headline percentage is what hides them:
+
+1. **It is not an outlier filter, it is a segment filter.** The `< 3` tail is 97% of what it
+   removes, and a sub-$3 order is overwhelmingly a **fully-discounted or fully-redeemed
+   order** — exactly the loyalty and offer behaviour a campaign test is trying to detect.
+   Dropping it removes the treated group's most likely response before the lift is computed.
+   The `> 200` tail is 236 orders and does essentially nothing; the bound is doing no real
+   outlier work in either direction.
+2. **It is applied asymmetrically by accident.** In the observed template the bound sits on
+   the orders CTE only, so it silently reshapes both the numerator and the denominator of a
+   rate, while the Braze-side arm definition is untouched. If one arm redeems more, that arm
+   loses more orders.
+
+**Rules:** don't add a value bound to an order population unless the question asked for one.
+If a genuine outlier concern exists, say so, bound only the tail you can justify, and **state
+the bound and its row count in the answer**. A filter that changes the population and is not
+named in the output is indistinguishable from a wrong number to whoever reads it. If someone's
+saved template carries this bound, that is a rewrite, not a caveat (same disposition as the
+`lower(email)` bridge above).
+
 ## `sales_ops.customer_attribute` — the customer-grain table (new 2026-07-29)
 
 **Reach for this before writing your own `group by mapped_cust_id`.** If a question is about
@@ -1823,6 +1857,52 @@ the mart can produce.
 
 `artifacts/item-sales-builder.html` enforces this same default, so chat answers and the
 report builder agree.
+
+#### 🚨 "Did this order contain a salad?" is NOT `line_item_type = 'item'` (observed 2026-08-27)
+
+The taxonomy above is usually read as a *revenue* rule. It is also a **presence** rule, and
+that is where campaign-lift analysis quietly breaks. Observed in a live Braze experiment
+query on 2026-08-27:
+
+```sql
+-- WRONG for a "bought a salad" test
+select distinct brink_order_id
+from `marketing-data-442316`.sales_ops.order_lines
+where business_date between '2026-08-24' and '2026-08-26'
+  and line_item_type = 'item'
+  and rev_center_name = 'Salads'
+```
+
+`line_item_type = 'item'` keeps standalone sales **and** priced combo components, but drops
+the **zero-priced combo slot** — the entrée recorded as a `modifier` selection. That third
+shape is not a rounding error: for the entrée classes it applies to, the split between priced
+components and $0 modifier lines runs roughly **56/44 across all 88 stores and both combo
+types** (documented in the taxonomy above; still an open question *why*). So a Try 2 Combo
+containing a salad can register as "did not buy a salad", and it does so **only for combo
+buyers** — a behavioural segment, not a random sample. In a lift test that is a biased
+denominator, not noise.
+
+**For "did the order contain X", ask about presence and ignore `line_item_type`:**
+
+```sql
+select distinct ol.brink_order_id
+from `marketing-data-442316`.claude.order_lines ol
+where 1=1
+and ol.business_date between @start and @end
+and ol.store_id not in (1111, 999)
+and ifnull(ol.item_type, '') not in ('Discount', 'Promotion')
+and ifnull(ol.rev_center_name, '') not in ('Discount', 'Promotion')
+and ifnull(ol.line_item_type, '') not in ('discount', 'promotion')
+and 'Salads' in (ifnull(ol.rev_center_name, ''), ifnull(ol.parent_rev_center_name, ''))
+```
+
+Testing `rev_center_name` **or** `parent_rev_center_name` catches all three shapes, because
+the combo slot carries its category on the parent. Keep the discount/promotion exclusion —
+promotion lines pass the standalone-sale test and named promotions collide with item names.
+
+**Generalisable rule: a revenue filter and a presence filter are different questions.** Same
+family as the filter-vs-breakout rule in `ask-a-data-question` — reusing one for the other is
+how a control group ends up measured differently from a treated one.
 
 #### Equivalent formulation without `line_item_type` (verified 2026-07-30)
 

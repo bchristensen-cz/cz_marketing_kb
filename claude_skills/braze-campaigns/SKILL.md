@@ -302,6 +302,20 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 
   `safe_cast` yields NULL for the non-numeric ids, which then simply don't join. If you need to know how many you dropped, count them: `countif(safe_cast(external_user_id as int64) is null)`.
 
+  > **🚨 In an experiment, that count is mandatory and it must be PER ARM — the drop is not uniform** (measured 2026-08-27, query-log review). The "count them if you need to know" wording above was too soft for lift analysis: on `canvas_experimentstep_splitentry`, 2026-06-01 → 08-27, **111,867 of 1,884,833 distinct `external_user_id` values (5.9%) are non-numeric** and vanish on the cast. Within one canvas the rate differs by leg:
+  >
+  > | Canvas | Split | Distinct ids | Dropped by `safe_cast` | % |
+  > |---|---|---|---|---|
+  > | `d:260824 \| … \| cm:fuel_your_fun_salad_&_bowl` | Control | 175,503 | 10,928 | **6.23%** |
+  > | same | Path 1 | 1,583,421 | 100,775 | **6.36%** |
+  > | same | Path 2 | 189,932 | 0 | **0.00%** |
+  > | `250926 \| … \| Points_Top_Off` | Path 1 | 110,187 | 0 | 0.00% |
+  > | same | Path 2 | 6,348 | 0 | 0.00% |
+  >
+  > Control vs Path 1 happen to drop at nearly the same rate, so a two-arm comparison of *those two* is roughly safe. **Path 2 of the same canvas drops nobody** — it is a structurally different population (UUID-keyed website-SDK profiles are absent from it entirely), so any three-arm rollup silently compares two thinned arms against one intact one. Some canvases drop nothing at all, which is exactly why you cannot reason about this from a single prior measurement.
+  >
+  > **Rule: emit `countif(safe_cast(external_user_id as int64) is null)` grouped by `experiment_split_name` alongside every lift number, and say the rates in the answer.** A silent drop is only harmless when it is symmetric, and symmetry is a per-canvas empirical fact, not a property of the cast. Observed 2026-08-27: an analyst ran arm-level lift on the salad canvas with no drop count of any kind (and, one query earlier, hit `No matching signature for operator = for argument types: INT64, STRING` — the cast was added to make it compile, not because the dropped population had been considered). Root cause of the non-numeric ids is the website SDK writing UUID-keyed profiles (Asana 1216991762039447 / 1216991653920144); until that lands, this asymmetry is permanent.
+
   > **🚨 The recurring violation is not the cast — it is bridging Braze to orders through `lower(email)` instead of the id at all** (counted 2026-08-17: **~15 of one analyst's 82 MCP queries**, every one shaped `bu as (select lower(email) em, any_value(external_id) ext from braze.users …)` then `join orders on o.em = bu.em`). Three separate defects ride along with it:
   >
   > 1. **It re-introduces the identity-fragmentation problem the KB exists to route around.** `mapped_cust_id` is the canonical person key; email is not. An email bridge silently merges the duplicate-id clusters the CRM hygiene project is chartered to resolve, and post-2026-07 guest checkout made those clusters the majority of new ids.

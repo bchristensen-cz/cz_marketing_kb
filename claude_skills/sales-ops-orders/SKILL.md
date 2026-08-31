@@ -234,8 +234,8 @@ number is real.
 > post-2026-07 cohorts.
 >
 > **⚠️ And do not go to `pulse.*` for the guest's email — that is a wall breach, not a workaround**
-> (observed again 2026-08-28: an analyst MCP session joined `pulse.order_customers` /
-> `pulse.customers` in six queries to recover guest-typed emails, because guest web orders carry
+> (observed again 2026-08-28, 10:04–10:18 MT: an analyst MCP session joined `pulse.order_customers` /
+> `pulse.customers` in five queries to recover guest-typed emails, because guest web orders carry
 > **NULL `email` and NULL `mapped_email`** on the order marts — no mart column holds the
 > guest-supplied address yet, Asana 1217645882648277). The steward has an email-based guest
 > identity mapping built and validated (full history, powers the Guest Checkout Relaunch

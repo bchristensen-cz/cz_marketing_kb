@@ -232,6 +232,17 @@ number is real.
 > took duplicate-id creation from ~28 to ~280 per business day (21.9% of new ids). Until
 > `customer_id_map` / `canonical_cust_id` lands, `mapped_cust_id` is not a stable person key for
 > post-2026-07 cohorts.
+>
+> **⚠️ And do not go to `pulse.*` for the guest's email — that is a wall breach, not a workaround**
+> (observed again 2026-08-28: an analyst MCP session joined `pulse.order_customers` /
+> `pulse.customers` in six queries to recover guest-typed emails, because guest web orders carry
+> **NULL `email` and NULL `mapped_email`** on the order marts — no mart column holds the
+> guest-supplied address yet, Asana 1217645882648277). The steward has an email-based guest
+> identity mapping built and validated (full history, powers the Guest Checkout Relaunch
+> dashboard); it is **pending deployment to the `claude` dataset** (Asana 1218000084425507).
+> Until it deploys, guest-identity questions (which email placed this guest order, guest→account
+> conversion by email, guest repeat behaviour across identities) are **unanswerable from the
+> marts — say so and log the question as a KB finding rather than crossing the wall.**
 
 Rules:
 

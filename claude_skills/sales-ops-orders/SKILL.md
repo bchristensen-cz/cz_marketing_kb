@@ -237,9 +237,12 @@ number is real.
 > (observed again 2026-08-28, 10:04–10:18 MT: an analyst MCP session joined `pulse.order_customers` /
 > `pulse.customers` in five queries to recover guest-typed emails, because guest web orders carry
 > **NULL `email` and NULL `mapped_email`** on the order marts — no mart column holds the
-> guest-supplied address yet, Asana 1217645882648277). The steward has an email-based guest
-> identity mapping built and validated (full history, powers the Guest Checkout Relaunch
-> dashboard); it is **pending deployment to the `claude` dataset** (Asana 1218000084425507).
+> guest-supplied address yet, Asana 1217645882648277). **Recurred at scale 2026-08-31**: ~25 MCP
+> queries in one analyst session ran a guest first-order cohort keyed on `lower(pulse.order_customers.email)`
+> and joined it forward to Braze push/SMS engagement for guest-conversion lift — and the workaround
+> doesn't even scale (two of the runs were killed at the 3-minute MCP timeout). The steward has an
+> email-based guest identity mapping built and validated (full history, powers the Guest Checkout
+> Relaunch dashboard); it is **pending deployment to the `claude` dataset** (Asana 1218000084425507).
 > Until it deploys, guest-identity questions (which email placed this guest order, guest→account
 > conversion by email, guest repeat behaviour across identities) are **unanswerable from the
 > marts — say so and log the question as a KB finding rather than crossing the wall.**
@@ -650,6 +653,8 @@ Five things, and the first is the one to quote when the loud-failure strategy ne
    - `join sales_ops.order_lines ol on ol.brink_order_id = oc.brink_order_id` with **no `business_date` equality** — both tables are partitioned on it, so the join prunes nothing and scans `order_lines` whole. Add `and ol.business_date = oc.business_date`. This is the same omission the steward found between the repo and deployed copies of `claude.order_customer` on 2026-08-17.
 
 > **🕳️ Wholly undocumented dataset: `edi` (paid media).** Zero references in any skill, dictionary or SQL file in this repo, yet it is a live steward-maintained pipeline refreshed daily at 04:00 MT from windsor.ai: `edi.google_ads_daily`, `edi.facebook_daily`, `edi.snapchat_daily`, `edi.tiktok_daily`, `edi.spotify_daily`, the `edi.*_weekly_reach_*` family, and `edi.reach_rel_date`, all fed from `staging.edi_*`. Common column vocabulary across platforms: `date`, `datasource`, `account_name`, `campaign`, `ad_group_name`, `ad_name`, `asset_group_name`, `spend`, `impressions`, `clicks`, `conversions`, `conversion_value`, `all_conversions`, `all_conv_value`, `link_clicks`, `adds_to_cart`, `landing_page_view`. **Any spend / ROAS / channel-performance question is currently unanswerable from the KB**, which matters now that paid-media tooling is in the workspace. Related: Asana 1216803727477024.
+>
+> **The undocumented paid-media surface is wider than `edi` (measured 2026-08-31):** one analyst MCP session also queried the native Google Ads transfer dataset (`google_ads.ads_Campaign_*`, `ads_CampaignCriterion_*`, `ads_GeoStats_*`, `ads_CampaignStats_*` — catering-campaign geo-target questions) and the GA4 export (`analytics_384132317.events_*` — device/session counts), ~30 paid-media queries in the day with six schema-guessing failures along the way (`edi.facebook_daily` has `date`, not `date_start`; `EXTRACT(DAYOFWEEK FROM date)`, not `EXTRACT(DAYOFWEEK, date)`). All three datasets answer real recurring questions and none has a dictionary, canonical metric definitions, or a skill.
 >
 > **✅ Reusable steward pattern mined from that pipeline — restate by observed key set, not by date window.** The order marts delete a *window* (`where business_date >= start_date`). The EDI loads instead delete exactly what the source is about to replace:
 >

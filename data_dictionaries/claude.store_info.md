@@ -22,7 +22,7 @@ Same as the [`sales_ops.store_info` dictionary](sales_ops.store_info.md), with t
 
 | Column | Type | Notes |
 |---|---|---|
-| `market` | STRING | **Added.** An explicit alias of `store_state`. "Market" is the word users say, so it's in the schema — the canonical mapping can't be got wrong |
+| `market` | STRING | **Added.** An explicit alias of `store_state`. "Market" is the word users say, so it's in the schema — the canonical mapping can't be got wrong. **Values are full state names (`Arizona`, `Utah`, `Texas`…), not postal codes** — `store_state = 'AZ'` returns zero rows and reads as "no Arizona stores" (observed 2026-09-01; the correct literal is `'Arizona'`). Resolve the value against the data or use `like 'Ariz%'` when unsure |
 | `store_tz` | — | **Dropped.** Ambiguous abbreviations (`MDT` vs `CT` mixes DST and standard forms). Use `timezone_name` (IANA) |
 
 Everything else passes through unchanged: `store_id`, `store_name`, `store_short_name`,

@@ -7,7 +7,7 @@
 | Type | **View** (not materialized) |
 | Grain | 1 row per order (`brink_order_id`) |
 | Partition column | **`business_date`** — always filter it |
-| Upstream | `sales_ops.order_customer` (base) + `sales_ops.order_sequence` + `sales_ops.customer_attribute` + `claude.loyalty_user` |
+| Upstream | `sales_ops.order_customer` (base) + `sales_ops.order_sequence` + `sales_ops.customer_attribute` + `claude.loyalty_user` (a table since 2026-09-01, refreshed daily 04:30 MT — so `account_type` lags SessionM by up to a day, like the `lifetime_*` columns) |
 | Build script | `sql/claude.order_customer.sql` |
 | History | **2023-01-01 forward** (rolling 3 years — see below) |
 | Created | 2026-07-29 |
@@ -193,7 +193,7 @@ Two rules fall out of this:
 - **First-time orders only go back to 2023-03-06** in the underlying `order_sequence`, so `customer_order_count = 1` means "first order since March 2023," not first-ever. `first_order_date` (from `customer_attribute`) is not bounded that way — prefer it for true first-ever questions.
 - **Sequence numbers are computed across all of a customer's orders, then filtered.** Mixed-type ids (30 in June 2026) show million-scale `customer_order_count` on their person rows — `mapped_cust_id` 19192 sits around 2.48M. Treat those as unreliable.
 - **Store 1111 is excluded by the view itself** (difference #4, documented 2026-08-13) — writing `store_id <> 1111` here is a harmless no-op; keep the habit for `sales_ops` tables where it's load-bearing. Sequence numbers upstream are still built *including* 1111 orders, so visible sequences can have gaps for customers who ever ordered there.
-- **It's a view, not a table.** A heavy query re-runs the full join every time. For repeated multi-step work, materialize into `scratch` — though standard users have no write access, so in practice: keep the partition filter tight.
+- **It's a view, not a table** — but a cheap one since 2026-09-01. Before that date `claude.loyalty_user` was itself a view, and this view rebuilt the whole SessionM identity spine on every query: a 30-day aggregate cost 483k slot-ms / 623 MB / 6.8 s even when `account_type` wasn't selected. `loyalty_user` is now a table refreshed daily at 04:30 MT, and the same query costs 2.4k slot-ms / 62 MB / 0.65 s — about 4× the bare `sales_ops.order_customer` scan, which is the `order_sequence` + `customer_attribute` joins. If numbers you're reconciling were produced before 2026-09-01 nothing changed semantically; only the cost did. Standard users still have no write access, so for repeated multi-step work keep the partition filter tight.
 - **Grain:** verified 713,575 rows = 713,575 distinct `brink_order_id` for June 2026, 0 duplicates. The historical `pulse.orders` fan-out defect was resolved by the 2026-07-29 full-history rebuild. Use `count(distinct brink_order_id)` if exact uniqueness matters on older data.
 
 ---

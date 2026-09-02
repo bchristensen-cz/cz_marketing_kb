@@ -4,11 +4,14 @@
 
 | | |
 |---|---|
-| Type | View (no partition column — 1.77M rows, full scans are cheap) |
+| Type | **Table** since 2026-09-01 (was a view 2026-07-28 → 08-31). No partition column — 1.80M rows, 367 MB, full scans are cheap. Recommended `cluster by sm_external_user_id` (in the repo script; confirm it is in the scheduled query) |
+| Refresh | Scheduled query, daily **04:30 America/Denver**, after the SessionM load. Rows are as-of that morning's SessionM extract |
 | Grain | **1 row per `sm_external_user_id`** (changed 2026-07-29 — was 1 row per `user_id`; see the duplicate-external-id gotcha) |
 | Upstream | `sessionM.users`, `sessionM.external_user_mappings`, `sessionM.tier_member_history`, `sessionM.tier_levels` |
-| Build script | `sql/claude.loyalty_views.sql` |
-| Created | 2026-07-28 |
+| Build script | `sql/claude.loyalty_user.sql` (moved out of `claude.loyalty_views.sql` 2026-09-01) |
+| Created | 2026-07-28 (view); materialized 2026-09-01 |
+
+> **Why it became a table (2026-09-01).** As a view it re-ran three window-function CTEs over ~6.7M raw SessionM rows on every evaluation — ~2.6M slot-ms — and `claude.order_customer` left-joins it for `account_type`, so every order query paid that price whether or not it selected the column (483k slot-ms for a 30-day aggregate; 2.4k after materializing — a 200× reduction, 6.8 s → 0.65 s). SessionM loads once daily, so the view bought no freshness. Post-build grain verified 2026-09-01: 1,800,422 rows = 1,800,047 distinct `sm_external_user_id` + 375 NULL, 0 duplicates.
 
 ## Columns
 

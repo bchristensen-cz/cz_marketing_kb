@@ -84,8 +84,9 @@ select
 -- ⚠️ Do NOT "fix" this to sm_external_user_id on the basis of an email-mismatch count. Of the
 -- 7,568 June orders where lower(mapped_email) <> loyalty_user.email, 7,088 (93.7%) are the
 -- cater_ prefix and nothing else: sm_external_user_map strips it (regexp_replace ... r'^cater_')
--- while loyalty_user.email retains it, so mapped_email equals email_normalized exactly. Compare
--- against email_normalized, not email. Only 480 are genuinely different addresses, and the
+-- while the raw SessionM address retains it, so mapped_email equals the stripped address exactly.
+-- Compare against the stripped column — since 2026-09-01 that is loyalty_user.email (the raw,
+-- prefixed address is now full_email). Only 480 are genuinely different addresses, and the
 -- sm_external_user_id join carries 6,275 mismatches of its own — the key is not the cause.
 --
 -- Depends on claude.loyalty_user being ONE ROW PER sm_external_user_id — enforced by the

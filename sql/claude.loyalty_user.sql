@@ -9,13 +9,21 @@
 -- once daily, so a view bought no freshness.
 --
 -- Deployed as a scheduled query: daily 04:30 America/Denver, after the SessionM load.
--- `cluster by sm_external_user_id` is the one addition to the deployed text (join key from
--- order_customer). Diff against the scheduled-query config before every redeploy.
+-- Deployed text below is authoritative (copied from the scheduled query 2026-09-01). Diff against
+-- the scheduled-query config before every redeploy.
+--
+-- ⚠️ COLUMN RENAME 2026-09-01 (steward), same day as materialization:
+--   old `email`            (raw SessionM address, keeps cater_ prefix, unique per member) -> `full_email`
+--   old `email_normalized` (cater_ stripped)                                            -> `email`
+-- `email` is therefore NO LONGER unique: 91,829 rows are stripped, 45,544 addresses are shared by
+-- 2+ members. Identity matching against SessionM must use full_email; `email` is the person's
+-- real address for comms and for comparing to order_customer.mapped_email (which is also stripped).
 -- =====================================================================================
 
-create or replace table `marketing-data-442316`.claude.loyalty_user
-cluster by sm_external_user_id
-as
+create or replace table `marketing-data-442316.claude.loyalty_user` 
+cluster by sm_external_user_id, email, member_program
+as 
+
 with cafezupas_id as (
   select
     eum.user_id
@@ -97,13 +105,13 @@ select
   u.user_id
 , safe_cast(cz.external_user_id as int64) as sm_external_user_id
 , u.player_id
-, lower(trim(u.email)) as email
+, lower(trim(u.email)) as full_email
 , split(lower(trim(u.email)), '@')[safe_offset(1)] as email_domain
 -- Catering accounts are provisioned in SessionM with a 'cater_' prefix because SessionM
 -- enforces unique emails. email_normalized strips it for display/comms ONLY — it is NOT
 -- an identity key: 39,500 stripped catering addresses collide with a real individual
 -- account, which is the exact collision the prefix exists to prevent.
-, regexp_replace(lower(trim(u.email)), r'^cater_', '') as email_normalized
+, regexp_replace(lower(trim(u.email)), r'^cater_', '') as email
 , starts_with(lower(trim(u.email)), 'cater_') as is_cater_email
 , u.first_name
 , u.last_name

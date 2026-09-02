@@ -20,10 +20,10 @@
 | `user_id` | STRING | SessionM user id (GUID). Primary key. Join key for all other `loyalty_*` views |
 | `sm_external_user_id` | INTEGER | Cafe Zupas external id. **Joins to `sales_ops.order_customer.sm_external_user_id`** — verified 100% match. Sourced from `external_user_mappings` where `external_user_id_type = 'cafezupas'`; the most recently updated mapping wins when a member has more than one |
 | `player_id` | INTEGER | SessionM internal player id. **Not** the order-mart join key — only ~23% of order-mart ids match it. Present for upstream debugging only |
-| `email` | STRING | Lowercased, trimmed. Populated for effectively every member. **This is the identity key — not `email_normalized`** |
-| `email_domain` | STRING | Part after the `@` |
-| `email_normalized` | STRING | `email` with a leading `cater_` stripped. **Display and outbound comms only — never an identity or join key.** See the catering-alias gotcha |
-| `is_cater_email` | BOOLEAN | `email` starts with `cater_`. A *provisioning* artifact, **not** a membership flag — use `is_catering_member` for that |
+| `full_email` | STRING | **Renamed from `email` 2026-09-01.** The raw SessionM login address, lowercased and trimmed, `cater_` prefix intact. Unique per member (1,794,792 distinct of 1,800,422). **This is the SessionM identity key** |
+| `email_domain` | STRING | Part after the `@` of `full_email` |
+| `email` | STRING | **Renamed from `email_normalized` 2026-09-01.** `full_email` with a leading `cater_` stripped — the person's real address. Use for comms and for comparing to `order_customer.mapped_email` (also stripped). **Not unique**: 91,829 rows are stripped and 45,544 addresses are shared by 2+ members (a catering login and the same person's individual account). **Never a join key.** See the catering-alias gotcha |
+| `is_cater_email` | BOOLEAN | `full_email` starts with `cater_`. A *provisioning* artifact, **not** a membership flag — use `is_catering_member` for that |
 | `first_name` | STRING | |
 | `last_name` | STRING | |
 | `birthdate` | DATE | Self-reported. Drives the Birthday Free Dessert offer |
@@ -92,7 +92,8 @@ Cost is not a reason to prefer it either: the prefix scan is 45 MB vs 136 MB for
 
 ## Gotchas
 
-- **Never use `email_normalized` as a match or join key.** 39,500 of the 90,161 stripped catering addresses collide with an existing individual account — that collision is precisely what the prefix exists to prevent. Feeding it into the CRM identity match (key = normalized email) would merge 39,500 catering accounts into personal ones and collapse the two loyalty programs into one person id. Strip for display, match on `email`.
+- **Never use `email` as a match or join key — it is the STRIPPED address (renamed from `email_normalized` 2026-09-01).** 39,500 of the 90,161 stripped catering addresses collide with an existing individual account — that collision is precisely what the prefix exists to prevent. Feeding it into the CRM identity match (key = normalized email) would merge 39,500 catering accounts into personal ones and collapse the two loyalty programs into one person id. Match SessionM identity on `full_email` (or better, `sm_external_user_id`); use `email` for display, comms, and comparing to the order marts' `mapped_email`.
+- **⚠️ Guidance written before 2026-09-01 that says "match on `email`, not `email_normalized`" now means the opposite of what it says.** Read `email` there as today's `full_email`. Every `loyalty_*` view passes `lu.email` through, so since 2026-09-01 their `email` column is the stripped address too.
 - **Strip the prefix with an anchored regex, never `replace()` or `ltrim()`.** `replace(email,'cater_','')` mangles a legitimate `pat_cater_smith@x.com`; `ltrim(email,'cater_')` strips a *character set*, turning `cater_tracy@x.com` into `y@x.com`. Only `regexp_replace(email, r'^cater_', '')` is safe. Verified: 0 emails contain `cater_` anywhere but the start, 0 double prefixes, 0 prefixed rows missing an `@`.
 - **`00000000-0000-0000-DEAD-000000000000` is a tombstone sentinel in `tier_member_history`, not a person.** It carries 61 catering tier events. Excluded in this view; exclude it anywhere you join tier history directly.
 - **`member_program` is the catering/individual answer, not `point_account_name`.** The tier system is cleaner (3 members in both systems vs 264 holding both point accounts) and broader (89,940 catering members vs 43,030 with a catering point account — the account only appears once a member has points). See `claude.loyalty_points_balance.md` for the disagreement counts.

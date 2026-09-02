@@ -77,7 +77,7 @@
 | `pulse_customer_id` | INTEGER | Customer id from the digital ordering platform (Pulse). May be an **orphan** — present on the order but absent from `pulse.customers` (see `customer_type = 'aggregator'`). |
 | `sm_external_user_id` | INTEGER | Loyalty (SessionM) user mapped to a cafezupas external id. Captures in-store loyalty scans. |
 | `mapped_cust_id` | INTEGER | **Canonical customer key** = `coalesce(pulse_customer_id, sm_external_user_id)`. ~53% of orders in the last year have one. Use this for customer counts, frequency, retention — **always together with `customer_type = 'person'`**. |
-| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **Lowercased at build** since the 2026-07-29 fix (verified 2026-08-13: 0 non-lowercase values in 365 days). The SessionM fallback also strips the leading `cater_` prefix, so a catering login resolves to the same address as the individual account — compare against `loyalty_user.email_normalized`, not `email`. **⚠️ Canonical only when a canonical exists (2026-08-24):** the chain starts at `pulse.customers.email`, so `mapped_email` is the customer's real address on 117,485 of 136,653 July 2026 `person` orders (86.0%) — and on the other **19,168 (14.0%)** the pulse customer row carries no email and `mapped_email` is a **user-typed order/booking address**. Safe as best-available contact; unsafe as identity. |
+| `mapped_email` | STRING | Best-available email = pulse customer email → booking email → order email → **SessionM loyalty email** (last fallback added 2026-07-27). Now populated on every identified order. **Lowercased at build** since the 2026-07-29 fix (verified 2026-08-13: 0 non-lowercase values in 365 days). The SessionM fallback also strips the leading `cater_` prefix, so a catering login resolves to the same address as the individual account — compare against `loyalty_user.email` (since 2026-09-01 that IS the stripped address; the prefixed original is `full_email`). **⚠️ Canonical only when a canonical exists (2026-08-24):** the chain starts at `pulse.customers.email`, so `mapped_email` is the customer's real address on 117,485 of 136,653 July 2026 `person` orders (86.0%) — and on the other **19,168 (14.0%)** the pulse customer row carries no email and `mapped_email` is a **user-typed order/booking address**. Safe as best-available contact; unsafe as identity. |
 | `mapped_email_domain` | STRING | **New 2026-07-27.** Domain portion of `mapped_email`. Closes the old `mapped_domain` gap that only existed on the legacy table — internal-order exclusion can now be done on this mart. |
 | `email` | STRING | **The ORDER email — the address the guest gave for updates on *that order*, not the customer's email** (steward, 2026-08-24). Source is `pulse.order_customers.email`; we accept whatever they type and nothing forces it to match the account. Lowercased at build (since 2026-07-29). **Never use it as an identity, join, dedup or cohort key** — that is `mapped_cust_id`. It *is* the right column for order-level contact questions ("which address got this receipt") and for reading the aggregator brand on third-party orders. |
 | `phone` | STRING | Contact phone captured on the order (`pulse.order_customers.phone`), cast to STRING (2026-08-13 sync). Same caveat as `email` — per-order and user-supplied, not a customer attribute. |
@@ -426,8 +426,8 @@ nothing about which address is "right".
 
   Related normalization: the SessionM fallback email also strips the leading **`cater_`**
   prefix (and trims), so catering logins resolve to the individual account's address in
-  `mapped_email`. `claude.loyalty_user.email` keeps the prefix — compare against its
-  `email_normalized`.
+  `mapped_email`. Compare against `claude.loyalty_user.email`, which since the 2026-09-01 rename is
+  also stripped (the prefixed original is now `full_email`).
 
 - **✅ RESOLVED 2026-07-29 — `customer_type` matching is now case-insensitive on all five
   branches** (all compare against `lower(...)`; verified no reclassification — case-sensitive
@@ -534,8 +534,8 @@ nothing about which address is "right".
   orders where `lower(mapped_email) <> loyalty_user.email`, **7,088 (93.7%) are the `cater_`
   prefix and nothing else**: the build's `sm_external_user_map` strips it
   (`regexp_replace(..., r'^cater_', '')`) while `loyalty_user.email` retains it, so
-  `mapped_email` equals `email_normalized` exactly. **Compare against `email_normalized`, not
-  `email`.** Only 480 are genuinely different addresses — and the `sm_external_user_id` join
+  `mapped_email` equals the stripped address exactly. **Compare against the stripped column** —
+  since 2026-09-01 that is `loyalty_user.email` (the prefixed original is `full_email`).** Only 480 are genuinely different addresses — and the `sm_external_user_id` join
   carries 6,275 mismatches of its own, so the key is not the cause.
 
   *(An earlier revision of this file asserted the opposite. It reached that conclusion by

@@ -11,8 +11,10 @@ set start_date = case
   when format_date('%A', run_date) = 'Monday' and run_hour = 4 then date_sub(run_date, interval 35 day)
   -- daily at 4am: 8 day reload
   when run_hour = 4 then date_sub(run_date, interval 8 day)
-  -- intraday: today only
-  when run_hour between 8 and 23 then run_date
+  -- intraday: yesterday + today. SessionM lands at 06:15 MT, after the 04:02 reload,
+  -- so yesterday's loyalty identity is only picked up if the hourly window reaches back
+  -- one day (changed 2026-09-04; today-only left yesterday at ~0.5% pct_sm_linked)
+  when run_hour between 8 and 23 then run_date - 1
   -- all other hours: skip
   else null
 end;

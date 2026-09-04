@@ -1,6 +1,6 @@
 # Braze → SessionM Phone Sync — Pre-flight Analysis & Proposed Plan
 
-**Status:** RULES CONFIRMED by Brent 2026-09-04; API semantics verified on one test profile (§4a). No batch writes yet. Measured 2026-09-04 (steward: Brent).
+**Status:** RULES CONFIRMED by Brent 2026-09-04; API semantics verified on one test profile (§4a); plan tables built in `scratch` and checks passed (§5). No batch writes yet — awaiting Brent's review of the sample. Measured 2026-09-04 (steward: Brent).
 **Query:** `sql/analysis/braze_sessionm_phone_sync_preflight.sql` (read-only, produces the action plan at SessionM-user grain).
 **API:** `PUT https://api-cafezupas.ent-sessionm.com/priv/v1/apps/{SESSIONM_API_KEY_V1}/users/{sessionm user_id}` with a `user.phone_numbers[]` body. Credentials in `.env.local.gitignore` (now gitignored — it was untracked and unignored before this session).
 
@@ -87,13 +87,35 @@ Consequences for the design: one call shape covers add, replace and remove; the 
 4. **Household numbers.** The owner rule gives the number to one profile. `crm_identity_hygiene_plan.md` §7.4 deliberately keeps phone out of merge logic for this reason; here we are not merging, just choosing who carries the phone in SessionM. Confirm that is acceptable for SMS consent purposes.
 5. **Ordering with the identity cleanup.** Many of the 219,743 Braze phone-sharers are the same human under guest-checkout duplicate ids (`customer_id_map`). Running the phone sync first is fine, but the winner rule should later be re-derived on `canonical_cust_id` so a merge doesn't move the phone back.
 
-## 5. Proposed execution shape (not built)
+## 5. Execution tables — BUILT in `scratch` 2026-09-04 (dry run, no API calls)
 
-```
-sales_ops.sessionm_phone_sync_plan      1 row per action (remove / put), source ext id, phone10, batch, status
-sales_ops.sessionm_phone_sync_log       1 row per API call: request, http status, response, attempt
-```
-Worker: Cloud Run job (same pattern as the Braze pipeline) draining the plan table in order remove → put, idempotent on `(sm_user_id, phone10, action)`, verifying each PUT with a GET before marking `succeeded`. Dry-run on 50 users first, then 5,000, then the rest.
+Build script: `sql/scratch.sessionm_phone_sync_plan.sql`. Checks: `sql/checks/sessionm_phone_sync_plan_checks.sql`. Steward chose `scratch` over `sales_ops` for all of these.
+
+| Table | Grain | Rows |
+|---|---|---|
+| `scratch.braze_phone_ranked` | 1 row per clean Braze phone profile, `rn = 1` is the owner | 1,247,027 |
+| `scratch.sessionm_phone_sync_plan` | 1 row per SessionM user whose phone list changes; `request_body` is the exact PUT payload | **790,523** |
+| `scratch.braze_phone_clear_plan` | 1 row per Braze profile whose phone should be cleared | 126,068 (10,871 junk + 115,197 losers) |
+| `scratch.sessionm_phone_sync_log` | 1 row per API call attempt (empty until the first live batch) | 0 |
+| `scratch.sessionm_phone_sync_review_sample` | up to 40 rows per action group for eyeballing; exported to `artifacts/phone_sync/…review_sample_2026-09-04.xlsx` | 258 |
+
+### Desired-state model
+Instead of listing individual add/remove operations, the plan holds each user's **current** and **desired** phone list and derives the PUT from the desired list (PUT replaces, so one call shape covers everything). Desired list = `[winner phone]` for a Braze-winner target; for everyone else, their current clean phones minus junk, minus any number a winner claims, minus numbers where another non-target holder was updated more recently.
+
+### Phases (a number is always freed before it is granted)
+| Phase | Meaning | Rows |
+|---|---|---|
+| 1 | pure removals — junk (6,333), conflict holders for a Braze winner (26,553), SessionM-internal duplicate losers (559), winners dropping an extra (18) | 33,463 |
+| 2 | replace — SessionM has a different number than the Braze winner | 832 |
+| 3 | pure adds — SessionM has no phone | 756,228 |
+
+The conflict-holder count is larger than §3's 12,090 because it also includes holders of numbers whose Braze winner *already* has the number in SessionM (the no-op winners) — those are the SessionM-internal duplicates that Braze happens to resolve.
+
+### Integrity checks (all passed 2026-09-04)
+Final state has **0** phones on more than one user, **0** junk numbers, **0** adds whose current holder is not scheduled to release the number in an earlier phase, and **0** users left holding more than one phone.
+
+### Worker (not built)
+Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 
 ## 6. Gotchas recorded this session
 
@@ -101,4 +123,6 @@ Worker: Cloud Run job (same pattern as the Braze pipeline) draining the plan tab
 - `9999999999` sits on **6,390** SessionM profiles and `9999999999`/`8888888888`-style junk on 10,406 Braze profiles — any phone-keyed join must strip junk first or it fans out by thousands.
 - `braze.users.phone` is never E.164 (`+1`) — 1,252,237 are 10 digits, 5,243 are 11 digits with a leading `1`, 465 are unparseable.
 - 585 `external_user_id`s in `external_user_mappings` (type `cafezupas`) map to more than one SessionM `user_id`; and 69 SessionM users receive two Braze winners. Both are small but must be handled deterministically.
+- `sessionM.user_phone_numbers` has rows with a NULL `phone_number`; they are excluded from the plan (an array with a NULL element fails the build).
+- `gcloud` auth on the Windows machine had expired 2026-09-04 (`bq` needs `gcloud auth login`); the review sample was exported through the MCP connector instead.
 - `.env.local.gitignore` was **not** ignored by git despite its name (`.gitignore` only listed `CLAUDE.md`). Added `.env.local.gitignore` and `.env*` to `.gitignore` 2026-09-04.

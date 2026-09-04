@@ -1,6 +1,6 @@
 # Braze → SessionM Phone Sync — Pre-flight Analysis & Proposed Plan
 
-**Status:** PROPOSED — analysis only, nothing written to SessionM or Braze. Measured 2026-09-04 (steward: Brent).
+**Status:** RULES CONFIRMED by Brent 2026-09-04; API semantics verified on one test profile (§4a). No batch writes yet. Measured 2026-09-04 (steward: Brent).
 **Query:** `sql/analysis/braze_sessionm_phone_sync_preflight.sql` (read-only, produces the action plan at SessionM-user grain).
 **API:** `PUT https://api-cafezupas.ent-sessionm.com/priv/v1/apps/{SESSIONM_API_KEY_V1}/users/{sessionm user_id}` with a `user.phone_numbers[]` body. Credentials in `.env.local.gitignore` (now gitignored — it was untracked and unignored before this session).
 
@@ -63,9 +63,25 @@ Push one clean phone number per customer from Braze into SessionM. SessionM refu
 
 Tie-out: 343,775 + 18 + 756,161 + 833 = 1,100,787 ✓.
 
+## 4a. API test on the Ashley profile (2026-09-04) — verified
+
+Test subject: SessionM user `61af8800-016d-11f1-8e6c-443aac110010` (external id 12520552), baseline phone `8016689089`, restored to that exact state at the end.
+
+| Step | Call | Result |
+|---|---|---|
+| Baseline | `GET /users/{id}` | 200; `phone_numbers` = [8016689089 mobile/primary/unverified], matches BigQuery |
+| Idempotency | `PUT` same number | 200, list unchanged |
+| **Replace vs append** | `PUT` a single different number (`8015550100`, reserved 555-01xx, verified absent from both systems) | 200; **the old number was gone** — `PUT` **replaces** the whole `phone_numbers` list |
+| **Removal** | `PUT` `{"user":{"phone_numbers":[]}}` | 200; list empty — the empty array is the remove call |
+| Restore | `PUT` original number | 200; GET confirms baseline |
+
+Consequences for the design: one call shape covers add, replace and remove; the "drop extras" case (②) is just a PUT with the winner alone; conflict holders are cleared with the empty array. The response body echoes the resulting `phone_numbers`, so the worker can verify from the PUT response and only needs a GET on non-200s.
+
+**Not yet tested — conflict behaviour.** Attempting to PUT a number that another SessionM user currently holds was not run: the only candidate second profile was a real customer's, and the auto-mode classifier blocked the call. Needs a second profile Brent controls. Until then the design assumes SessionM rejects the PUT (Brent's statement), and the worker treats any non-200 on a PUT as "stop, log, do not retry blindly".
+
 ## 4. Open questions for Brent (blocking execution)
 
-1. **Does `PUT …/users/{id}` with `phone_numbers` replace the list or append?** Assumed *replace*. Must be tested on one test profile (e.g. the Ashley profile in the Postman example) before any batch — if it appends, "replace" and "remove" need a different call.
+1. ~~Replace or append?~~ **Resolved — replace (§4a).** Remaining: run the conflict test on a second profile Brent owns, to learn the exact error code/body.
 2. **Rate limit / batch size** for the v1 users endpoint — not documented in the KB. Plan: 5 req/s with retry, ~757K calls ≈ 42 h at that pace; confirm the ceiling with SessionM.
 3. **Clear the phone on the 115,128 losing Braze profiles?** Assumed yes (via `/users/track` with `phone: null`). Otherwise the next Braze→SessionM run re-creates every conflict.
 4. **Household numbers.** The owner rule gives the number to one profile. `crm_identity_hygiene_plan.md` §7.4 deliberately keeps phone out of merge logic for this reason; here we are not merging, just choosing who carries the phone in SessionM. Confirm that is acceptable for SMS consent purposes.

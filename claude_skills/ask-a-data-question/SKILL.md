@@ -432,9 +432,10 @@ discount exclusions, 10,000-row cap with a truncation warning. The generated SQL
 shown and copyable, and results export to CSV.
 
 **Its answers must match yours.** If you answer one of these questions in chat, use the
-same expressions — particularly `week_ending`, the null-safe discount filters, and the
-`store_id not in (1111, 999)` exclusion. A tool and a chat answer that disagree is worse
-than either one alone.
+same expressions — particularly `week_ending` and the null-safe discount filters. (Stores
+1111/999 are excluded by the `claude` views themselves; neither the tool nor your chat SQL
+needs to write the predicate — steward rule 2026-09-03.) A tool and a chat answer that
+disagree is worse than either one alone.
 
 **It does not arrive by cloning.** Cloning gives an inert HTML file in a temp folder.
 Cowork artifacts live in a per-user manifest, so the page has to be registered inside the

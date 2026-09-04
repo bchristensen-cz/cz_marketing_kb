@@ -100,7 +100,7 @@ Three differences, each of which will make a `claude` answer disagree with a `sa
 
    > **⚠️ The market column is NULL for stores 1111 and 999** — `store_info` has no row for either. On **`sales_ops`**, a market breakdown **without `store_id not in (1111, 999)` grows a phantom tenth market**: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27, appearing as an unnamed NULL group that reads like a data defect rather than the test store. Keep the filter and `coalesce` the label; never ship an unnamed group.
    >
-   > **Correction 2026-08-19 — this box previously said "on both views," which was wrong.** `claude.order_customer` and `claude.order_lines` **already exclude both stores in the view definition** (`store_id not in (1111, 999)`, read from `INFORMATION_SCHEMA.VIEWS.view_definition`), so the phantom market cannot appear on the `claude` layer and the predicate there is redundant, not load-bearing. See the per-view table in [the store-exclusion section](#store-11111999-which-layer-already-excludes-them-measured-2026-08-19) — the exclusion is **not uniform** across the five `claude` views, which is why you should keep writing it rather than relying on the layer.
+   > **Correction 2026-08-19 — this box previously said "on both views," which was wrong.** `claude.order_customer` and `claude.order_lines` **already exclude both stores in the view definition** (`store_id not in (1111, 999)`, read from `INFORMATION_SCHEMA.VIEWS.view_definition`), so the phantom market cannot appear on the `claude` layer and the predicate there is redundant, not load-bearing. See the per-view table in [the store-exclusion section](#store-11111999-which-layer-already-excludes-them-measured-2026-08-19) — since 2026-08-20 all four `claude` order views carry the exclusion, so on the `claude` layer **don't write it** (steward rule 2026-09-03); it stays mandatory on every `sales_ops` table.
 
 ### `claude.order_customer` folds in the sequencing and lifetime columns
 
@@ -919,9 +919,12 @@ State which you did whenever it affects the answer.
 
 **Before running the query that answers the question, confirm scope.** Every one of these has burned a real answer. Ask them together in ONE message (don't interrogate the user one item at a time), then query. If the user has already stated an item, don't re-ask it.
 
-### 1. Store 1111 — never ask, always exclude
+### 1. Store 1111 — never ask, always excluded
 
-**`store_id not in (1111, 999)`** on whichever table you're querying. Test/training store, plus 999 which has no `store_info` row and so forms a second unnamed group. Not a question, not a default the user can override, and don't raise it as an assumption — just do it and note it in the assumptions line.
+Test/training store 1111, plus 999 which has no `store_info` row and so forms a second unnamed group. Not a question, not a default the user can override, and don't raise it as an assumption. **Which layer you're on decides who writes the filter** (steward rule 2026-09-03):
+
+- **`claude.*` views — do NOT add `store_id not in (1111, 999)`.** All four order views (`order_customer`, `order_lines`, `order_line_discount_detail`, `order_payment_tender`) already apply it in their `view_definition`, so the predicate is redundant noise in user-facing SQL. Just note "stores 1111/999 excluded by the view" in the assumptions line.
+- **`sales_ops.*` tables (steward only) — always write `store_id not in (1111, 999)`.** Nothing upstream applies it.
 
 #### Store 1111/999: which layer already excludes them (measured 2026-08-19)
 
@@ -938,7 +941,7 @@ Read from `INFORMATION_SCHEMA.VIEWS.view_definition`, not from documentation:
 
 **✅ As of 2026-08-20 the four order views are uniform** — all exclude both stores, verified against `INFORMATION_SCHEMA.VIEWS.view_definition`. The earlier asymmetry (payment_tender excluded only 1111; discount_detail carried no predicate of its own) is closed, and the `$13.49` tie-out floor it created is gone.
 
-**Write the predicate on `claude` objects anyway.** It costs nothing where the view already applies it, it is *required* on every `sales_ops` table, and uniformity today is not a guarantee about tomorrow — this table was asymmetric for five days without anything failing. Re-read `view_definition` rather than trusting this table if a number depends on it.
+**Don't write the predicate on `claude` objects** (steward rule 2026-09-03, superseding the earlier "write it anyway" guidance). The views own the exclusion; repeating it in every query taught users it was theirs to remember and cluttered the SQL the steward reads. It remains *required* on every `sales_ops` table. If a number depends on the exclusion, re-verify with `select table_name, view_definition from `marketing-data-442316`.claude.INFORMATION_SCHEMA.VIEWS` rather than trusting this table — it was asymmetric for five days in August without anything failing.
 
 > **Store 1111 is not dormant, so this still matters.** On `sales_ops.order_customer`, 2026-07-01 → 2026-08-19: **626 orders / $17,325.14 net / 223 of them `customer_type = 'person'`**. Store 999 had **zero** orders in the same window — it is `order_lines`-only and tiny, which is exactly why it went unnoticed until 2026-07-30.
 >

@@ -67,7 +67,7 @@ in the repo script 2026-08-17, after a redeploy from the stale repo copy would h
 readmitted store 999 — the store with no `store_info` row, hence a NULL `store_name` / `store_state`
 that forms a second unnamed group in any store or market breakout.
 
-The deployed view filters the test store out entirely — a standard user **cannot see store 1111 at all**, while the steward's `sales_ops` tables still contain it. Keep writing `store_id <> 1111` in queries anyway (it's free here and load-bearing on every `sales_ops` table), but know that a `claude`-vs-`sales_ops` total that differs by a few hundred orders/month is probably this filter, not a defect. Two side effects: the measured zero-trap numbers below predate the filter (the "person, store 1111" rows no longer appear here), and `customer_order_count` is computed upstream *including* 1111 orders, so a customer who ever ordered at the test store can show a gap in their visible sequence numbers.
+The deployed view filters both test stores out entirely — a standard user **cannot see store 1111 or 999 at all**, while the steward's `sales_ops` tables still contain them. **Don't add `store_id not in (1111, 999)` to queries against this view** (steward rule 2026-09-03; the earlier "keep writing it anyway" guidance is withdrawn) — it is load-bearing only on `sales_ops` tables. Know that a `claude`-vs-`sales_ops` total that differs by a few hundred orders/month is probably this filter, not a defect. Two side effects: the measured zero-trap numbers below predate the filter (the "person, store 1111" rows no longer appear here), and `customer_order_count` is computed upstream *including* 1111 orders, so a customer who ever ordered at the test store can show a gap in their visible sequence numbers.
 
 ---
 

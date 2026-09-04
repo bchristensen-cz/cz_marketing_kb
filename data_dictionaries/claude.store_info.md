@@ -98,11 +98,12 @@ order by
   item_gross_sales desc
 ```
 
-> **⚠️ The market column is NULL for stores 1111 and 999 on both order views** — this
-> table has no row for either. Without `store_id <> 1111` a market breakdown grows a
-> phantom tenth market: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27,
+> **⚠️ The market column is NULL for stores 1111 and 999 on the `sales_ops` order tables** — this
+> table has no row for either. Without `store_id not in (1111, 999)` a `sales_ops` market breakdown
+> grows a phantom tenth market: 1,154 orders and **$117,196** over 2026-05-03 → 2026-06-27,
 > sitting in a NULL group that reads like a data problem rather than the test store.
-> Always keep the filter, and `coalesce` the label so no group ships unnamed.
+> On `sales_ops`, always keep the filter and `coalesce` the label so no group ships unnamed.
+> On the `claude` order views the filter is built in — don't add it (steward rule 2026-09-03).
 >
 > Naming history, because it churned in a single day: `order_customer` originally carried
 > the state as **`state`**; a join briefly added a duplicate `store_state`; the join was

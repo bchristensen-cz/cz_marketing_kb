@@ -36,6 +36,15 @@
 --           streaming-era tables (banner_*, rcs_*) have NO is_canvas column;
 --           it is derived from canvas_id there.
 --
+-- time columns (verified 2026-09-03, see skill "Time columns"):
+--           event_date      = America/Denver local DATE (partition column)
+--           event_timestamp = America/Denver local DATETIME, follows DST.
+--                             NOT utc. extract(hour ...) is already mountain.
+--           time            = unix epoch seconds, true utc. for a utc instant
+--                             use timestamp_seconds(time); never
+--                             cast(event_timestamp as timestamp).
+--           this template passes event_timestamp through unchanged.
+--
 -- usage   : replace @start_date / @end_date. keep the event_date partition
 --           filter (and workspace filter) in every base cte. default
 --           engagement rate uses SENT as the denominator (see example B).

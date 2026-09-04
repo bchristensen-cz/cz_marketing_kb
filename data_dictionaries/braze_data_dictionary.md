@@ -29,10 +29,10 @@ This dataset is the BigQuery landing for Braze Currents event streams plus Cafe 
 | `app_id` | Identifier of the specific app/platform build the event is tied to. |
 | `app_group_id` | Identifier of the Braze app group (workspace) the event belongs to. |
 | `workspace` | Human-readable Braze workspace name: `'cafe_zupas'` (retail, ~97.5% of email_send rows) or `'cafe_zupas_catering'`. Added/backfilled 2026-07-22 across event tables (full history to 2024-06). **Filter `workspace = 'cafe_zupas'` for retail-only campaign analyses** — catering campaign events are mixed into the same tables. |
-| `time` | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | User's IANA time zone (e.g., America/Denver) at time of event. |
-| `event_timestamp` | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | UTC date of the event; typically the partition column. |
+| `event_timestamp` | Event time as a DATETIME in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | Datetime the record was loaded into the warehouse. |
 | `campaign_id` | Braze campaign ID that sent/triggered the message. |
@@ -149,11 +149,11 @@ _10 columns._ Logs changes to a user's random bucket number (used for random sam
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `random_bucket_number` | INT64 | New random bucket number assigned to the user. |
 | `prev_random_bucket_number` | INT64 | Previous random bucket number. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 
@@ -169,7 +169,7 @@ _20 columns._ Records the first app session ever logged for a user, including th
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `session_id` | STRING | Identifier of the session. |
 | `gender` | STRING | User gender at first session. |
 | `country` | STRING | Country of the user. |
@@ -181,8 +181,8 @@ _20 columns._ Records the first app session ever logged for a user, including th
 | `os_version` | STRING | Operating system version of the device. |
 | `device_model` | STRING | Device model. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -196,15 +196,15 @@ _14 columns._ Logged when an app session begins.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `session_id` | STRING | Identifier of the session. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `os_version` | STRING | Operating system version of the device. |
 | `device_model` | STRING | Device model. |
 | `device_id` | STRING | Braze device identifier. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `app_sessionend`
@@ -217,7 +217,7 @@ _15 columns._ Logged when an app session ends, including session duration.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `duration` | FLOAT64 | Session length in seconds. |
 | `session_id` | STRING | Identifier of the session. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
@@ -225,8 +225,8 @@ _15 columns._ Logged when an app session ends, including session duration.
 | `device_model` | STRING | Device model. |
 | `device_id` | STRING | Braze device identifier. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `uninstall`
@@ -240,10 +240,10 @@ _10 columns._ App uninstall event for a user/device.
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `device_id` | STRING | Braze device identifier. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `customevent`
@@ -256,7 +256,7 @@ _20 columns._ Custom events tracked from the apps or API. The name column holds 
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `os_version` | STRING | Operating system version of the device. |
@@ -268,8 +268,8 @@ _20 columns._ Custom events tracked from the apps or API. The name column holds 
 | `ad_id_type` | STRING | Type of advertising identifier (e.g., idfa, google_ad_id). |
 | `ad_tracking_enabled` | BOOL | Whether ad tracking is enabled on the device. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -283,7 +283,7 @@ _20 columns._ Purchase/revenue event with product, price, and currency.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `os_version` | STRING | Operating system version of the device. |
 | `device_model` | STRING | Device model. |
@@ -296,8 +296,8 @@ _20 columns._ Purchase/revenue event with product, price, and currency.
 | `ad_id_type` | STRING | Type of advertising identifier (e.g., idfa, google_ad_id). |
 | `ad_tracking_enabled` | BOOL | Whether ad tracking is enabled on the device. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 
@@ -313,7 +313,7 @@ _31 columns._ Email handed off to the email service provider for delivery.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -336,8 +336,8 @@ _31 columns._ Email handed off to the email service provider for delivery.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -351,7 +351,7 @@ _33 columns._ Email accepted/delivered by the receiving mail server.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -376,8 +376,8 @@ _33 columns._ Email accepted/delivered by the receiving mail server.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -391,7 +391,7 @@ _40 columns._ Email open event (includes machine/proxy-open detection).
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -423,8 +423,8 @@ _40 columns._ Email open event (includes machine/proxy-open detection).
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -438,7 +438,7 @@ _42 columns._ Email link click event, including the clicked URL and device/clien
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -472,8 +472,8 @@ _42 columns._ Email link click event, including the clicked URL and device/clien
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -487,7 +487,7 @@ _35 columns._ Hard bounce - the email was permanently rejected by the receiving 
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -514,8 +514,8 @@ _35 columns._ Hard bounce - the email was permanently rejected by the receiving 
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -529,7 +529,7 @@ _34 columns._ Soft bounce - temporary delivery failure (e.g., full mailbox).
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -555,8 +555,8 @@ _34 columns._ Soft bounce - temporary delivery failure (e.g., full mailbox).
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -570,7 +570,7 @@ _33 columns._ Recipient marked the email as spam.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -595,8 +595,8 @@ _33 columns._ Recipient marked the email as spam.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -610,7 +610,7 @@ _30 columns._ Recipient unsubscribed via this email.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -632,8 +632,8 @@ _30 columns._ Recipient unsubscribed via this email.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -664,7 +664,7 @@ _34 columns._ Email that was aborted before delivery (e.g., suppressed, rate-lim
 | `message_variation_id` | STRING | ID of the message variation (A/B test variant) sent. |
 | `message_variation_name` | STRING | Name of the message variation sent. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `domain` | STRING | Recipient email domain. |
@@ -673,8 +673,8 @@ _34 columns._ Email that was aborted before delivery (e.g., suppressed, rate-lim
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -691,7 +691,7 @@ _35 columns._ Push notification sent to the push provider.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -718,8 +718,8 @@ _35 columns._ Push notification sent to the push provider.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -732,7 +732,7 @@ _38 columns._ Push notification open/tap event, including the button tapped.
 | `id` | STRING | Unique identifier (UUID) for this event record. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -763,8 +763,8 @@ _38 columns._ Push notification open/tap event, including the button tapped.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -778,7 +778,7 @@ _33 columns._ Push notification bounce (token rejected/invalid).
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -803,8 +803,8 @@ _33 columns._ Push notification bounce (token rejected/invalid).
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -835,7 +835,7 @@ _33 columns._ Push notification aborted before send, with the abort reason.
 | `message_variation_name` | STRING | Name of the message variation sent. |
 | `platform` | STRING | Device platform (e.g., iOS, Android, Web). |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `cmpgn_id` | STRING | Legacy/duplicate campaign ID field included in the export. |
@@ -843,8 +843,8 @@ _33 columns._ Push notification aborted before send, with the abort reason.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -861,7 +861,7 @@ _31 columns._ SMS sent to the SMS provider.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -884,8 +884,8 @@ _31 columns._ SMS sent to the SMS provider.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -899,7 +899,7 @@ _30 columns._ SMS delivered to the carrier/recipient.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -921,8 +921,8 @@ _30 columns._ SMS delivered to the carrier/recipient.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -936,7 +936,7 @@ _31 columns._ SMS delivery failure with carrier error code and message.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -959,8 +959,8 @@ _31 columns._ SMS delivery failure with carrier error code and message.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -974,7 +974,7 @@ _32 columns._ SMS rejected by the provider before delivery, with error details.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -998,8 +998,8 @@ _32 columns._ SMS rejected by the provider before delivery, with error details.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1026,15 +1026,15 @@ _27 columns._ SMS aborted before send, with the abort reason.
 | `message_variation_id` | STRING | ID of the message variation (A/B test variant) sent. |
 | `message_variation_name` | STRING | Name of the message variation sent. |
 | `subscription_group_id` | STRING | Braze subscription group identifier. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `cmpgn_id` | STRING | Legacy/duplicate campaign ID field included in the export. |
 | `cmpgn_name` | STRING | Legacy/duplicate campaign name field included in the export. |
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `sms_inboundreceive`
@@ -1047,7 +1047,7 @@ _29 columns._ Inbound SMS received from a user (e.g., keyword replies like STOP/
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `user_phone_number` | STRING | The user's phone number. |
 | `subscription_group_id` | STRING | Braze subscription group identifier. |
 | `inbound_phone_number` | STRING | Braze number that received the inbound message. |
@@ -1069,8 +1069,8 @@ _29 columns._ Inbound SMS received from a user (e.g., keyword replies like STOP/
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `sms_shortlinkclick`
@@ -1083,7 +1083,7 @@ _29 columns._ Click on a Braze SMS short link, including resolved URL.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1104,8 +1104,8 @@ _29 columns._ Click on a Braze SMS short link, including resolved URL.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1122,7 +1122,7 @@ _30 columns._ Content Card send event.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `content_card_id` | STRING | Identifier of the Content Card. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1144,8 +1144,8 @@ _30 columns._ Content Card send event.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1159,7 +1159,7 @@ _36 columns._ Content Card impression (view) event.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `content_card_id` | STRING | Identifier of the Content Card. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -1187,8 +1187,8 @@ _36 columns._ Content Card impression (view) event.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1202,7 +1202,7 @@ _36 columns._ Content Card click event.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `content_card_id` | STRING | Identifier of the Content Card. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -1230,8 +1230,8 @@ _36 columns._ Content Card click event.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1244,7 +1244,7 @@ _38 columns._ In-app message impression (view) event.
 | `id` | STRING | Unique identifier (UUID) for this event record. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
@@ -1275,8 +1275,8 @@ _38 columns._ In-app message impression (view) event.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1290,7 +1290,7 @@ _37 columns._ In-app message click event.
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1319,8 +1319,8 @@ _37 columns._ In-app message click event.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1337,7 +1337,7 @@ _19 columns._ A conversion event attributed to a Braze campaign (the user perfor
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1348,8 +1348,8 @@ _19 columns._ A conversion event attributed to a Braze campaign (the user perfor
 | `conversion_behavior` | STRING | JSON describing the configured conversion behavior. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1363,7 +1363,7 @@ _17 columns._ Records when a user was placed in a campaign's control (holdout) g
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1372,8 +1372,8 @@ _17 columns._ Records when a user was placed in a campaign's control (holdout) g
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
 | `dispatch_id` | STRING | ID of the message dispatch (one send batch to a user). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1386,7 +1386,7 @@ _17 columns._ Logged when a user enters a Canvas, including whether they landed 
 | `id` | STRING | Unique identifier (UUID) for this event record. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `canvas_id` | STRING | Braze Canvas (journey) ID associated with the message. |
 | `canvas_name` | STRING | Name of the Braze Canvas. |
@@ -1396,8 +1396,8 @@ _17 columns._ Logged when a user enters a Canvas, including whether they landed 
 | `canvas_step_name` | STRING | Name of the Canvas step. |
 | `in_control_group` | BOOL | TRUE if the user entered the Canvas control group. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1411,7 +1411,7 @@ _19 columns._ A conversion event attributed to a Braze Canvas (journey).
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `canvas_id` | STRING | Braze Canvas (journey) ID associated with the message. |
 | `canvas_name` | STRING | Name of the Braze Canvas. |
@@ -1422,8 +1422,8 @@ _19 columns._ A conversion event attributed to a Braze Canvas (journey).
 | `conversion_behavior_index` | INT64 | Index of the conversion behavior that fired. |
 | `conversion_behavior` | STRING | JSON describing the configured conversion behavior. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1438,7 +1438,7 @@ _18 columns._ Logged when a user exits a Canvas because they performed a configu
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
 | `app_group_api_id` | STRING | Public API identifier of the Braze app group. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `canvas_id` | STRING | Braze Canvas (journey) ID associated with the message. |
 | `canvas_variation_id` | STRING | ID of the Canvas variation the user is in. |
 | `canvas_step_id` | STRING | ID of the Canvas step that produced the event. |
@@ -1448,8 +1448,8 @@ _18 columns._ Logged when a user exits a Canvas because they performed a configu
 | `canvas_api_id` | STRING | Public API ID of the Canvas. |
 | `canvas_variation_api_id` | STRING | Public API ID of the Canvas variation. |
 | `canvas_step_api_id` | STRING | Public API ID of the Canvas step. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `canvas_experimentstep_splitentry`
@@ -1461,7 +1461,7 @@ _17 columns._ Records the experiment-path split a user was assigned to at a Canv
 | `id` | STRING | Unique identifier (UUID) for this event record. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `canvas_id` | STRING | Braze Canvas (journey) ID associated with the message. |
 | `canvas_name` | STRING | Name of the Braze Canvas. |
 | `canvas_variation_id` | STRING | ID of the Canvas variation the user is in. |
@@ -1472,8 +1472,8 @@ _17 columns._ Records the experiment-path split a user was assigned to at a Canv
 | `experiment_split_id` | STRING | ID of the assigned split path. |
 | `experiment_split_name` | STRING | Name of the assigned split path. |
 | `in_control_group` | BOOL | TRUE if assigned to the control split. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 ### `canvas_experimentstep_conversion`
@@ -1486,7 +1486,7 @@ _19 columns._ A conversion attributed to a specific Experiment Path split within
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
 | `app_id` | STRING | Identifier of the specific app/platform build the event is tied to. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `canvas_id` | STRING | Braze Canvas (journey) ID associated with the message. |
 | `canvas_name` | STRING | Name of the Braze Canvas. |
 | `canvas_variation_id` | STRING | ID of the Canvas variation the user is in. |
@@ -1498,8 +1498,8 @@ _19 columns._ A conversion attributed to a specific Experiment Path split within
 | `experiment_split_name` | STRING | Name of the experiment split path. |
 | `conversion_behavior_index` | INT64 | Index of the conversion behavior that fired. |
 | `conversion_behavior` | STRING | JSON describing the conversion behavior. |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
 
@@ -1518,7 +1518,7 @@ _31 columns._ Global (channel-level) subscription state change for a user.
 | `state_change_source` | STRING | Source that triggered the subscription state change. |
 | `subscription_status` | STRING | Subscription status value (e.g., subscribed, unsubscribed, opted_in). |
 | `channel` | STRING | Messaging channel (e.g., email, push, sms). |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `app_group_id` | STRING | Identifier of the Braze app group (workspace) the event belongs to. |
 | `app_id` | STRING | App identifier. |
@@ -1538,8 +1538,8 @@ _31 columns._ Global (channel-level) subscription state change for a user.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1568,7 +1568,7 @@ _35 columns._ Subscription group membership state change (opted in/out of a spec
 | `subscription_group_id` | STRING | Braze subscription group identifier. |
 | `subscription_status` | STRING | Subscription status value (e.g., subscribed, unsubscribed, opted_in). |
 | `channel` | STRING | Messaging channel (e.g., email, push, sms). |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
 | `state_change_source` | STRING | Source that triggered the subscription state change. |
@@ -1580,8 +1580,8 @@ _35 columns._ Subscription group membership state change (opted in/out of a spec
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1594,7 +1594,7 @@ _28 columns._ Webhook message sent from a campaign/Canvas.
 | `id` | STRING | Unique identifier (UUID) for this event record. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `external_user_id` | STRING | Externally provided user ID (external_id) - the Cafe Zupas customer ID used to join to source systems. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `campaign_id` | STRING | Braze campaign ID that sent/triggered the message. |
 | `campaign_name` | STRING | Name of the Braze campaign. |
@@ -1615,8 +1615,8 @@ _28 columns._ Webhook message sent from a campaign/Canvas.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 
@@ -1645,7 +1645,7 @@ _31 columns._ Webhook message aborted before send, with the abort reason.
 | `message_variation_id` | STRING | ID of the message variation (A/B test variant) sent. |
 | `message_variation_name` | STRING | Name of the message variation sent. |
 | `send_id` | STRING | Identifier grouping all messages from a single send, used for send-level analytics. |
-| `time` | INT64 | Unix epoch timestamp (seconds, UTC) when the event occurred. |
+| `time` | INT64 | Unix epoch seconds (true UTC) when the event occurred. The only unambiguous UTC clock on the table — use `timestamp_seconds(time)` for a UTC TIMESTAMP and for any comparison to `order_timestamp_utc`. |
 | `timezone` | STRING | User's IANA time zone (e.g., America/Denver) at time of event. |
 | `user_id` | STRING | Braze internal user identifier (braze_id) for the user. |
 | `cmpgn_id` | STRING | Legacy/duplicate campaign ID field included in the export. |
@@ -1653,8 +1653,8 @@ _31 columns._ Webhook message aborted before send, with the abort reason.
 | `cmpgn_variation_id` | STRING | Legacy/duplicate message variation ID field. |
 | `cmpgn_variation_name` | STRING | Legacy/duplicate message variation name field. |
 | `is_canvas` | INT64 | Flag (1/0) indicating whether the message originated from a Canvas (1) vs a Campaign (0). |
-| `event_timestamp` | DATETIME | Event time as a UTC DATETIME (derived from time). |
-| `event_date` | DATE | UTC date of the event; typically the partition column. |
+| `event_timestamp` | DATETIME | Event time in **America/Denver wall-clock time** (follows US Mountain DST; derived from `time`). **Not UTC** — verified 2026-09-03, −7 h vs `time` in winter, −6 h in summer, 100% of rows. Never `cast(... as timestamp)` or `timestamp(...)` it; `extract(hour ...)` is already Mountain time. |
+| `event_date` | DATE | **America/Denver local date** of the event (`= date(event_timestamp)`, 100% of rows); the partition column. Not the UTC date — late-evening Mountain events sit on the previous UTC day's `event_date`. |
 | `local_event_datetime` | DATETIME | Event datetime expressed in the user's local time zone. |
 | `create_datetime` | DATETIME | Datetime the record was loaded into the warehouse. |
 

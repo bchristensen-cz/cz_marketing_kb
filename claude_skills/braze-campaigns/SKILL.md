@@ -88,10 +88,31 @@ Every event row carries both a Campaign identity and a Canvas identity, plus mes
 
 ## Time columns
 
-- **`event_date`** (DATE, UTC) — the **partition column**. Always filter it (`where event_date between @start_date and @end_date`) in every base table for cost control. This is the date to group by for "by day".
-- **`event_timestamp`** (DATETIME, UTC) — precise event time.
-- **`local_event_datetime`** — event time in the user's local zone (use when daypart/local-day matters; not present on every table).
-- **`time`** — raw Unix epoch seconds.
+- **`event_date`** (DATE, **America/Denver local date**) — the **partition column**. Always filter it (`where event_date between @start_date and @end_date`) in every base table for cost control. This is the date to group by for "by day". It is the Denver-local calendar day of the event, not the UTC date (measured 2026-09-03: `event_date = date(event_timestamp)` on 100% of `email_send` rows every day sampled; the UTC date `date(timestamp_seconds(time))` only matches ~97–99% — the late-evening rows roll to the next UTC day).
+- **`event_timestamp`** (DATETIME, **America/Denver wall-clock, follows US Mountain DST**) — precise event time in Mountain time. **It is NOT UTC**, despite earlier revisions of this file saying so. `extract(hour from event_timestamp)` is already a Mountain-time hour. Never wrap it in `cast(... as timestamp)`, `timestamp(...)`, or `datetime(cast(... as timestamp), 'America/Denver')` — all three assert UTC on a local value and land 6–7 hours early.
+- **`time`** (INT64, Unix epoch seconds, **true UTC**) — the only unambiguous UTC clock on the event tables. **For a UTC instant use `timestamp_seconds(<alias>.time)`.** This is the Braze side of every cross-source comparison to `order_timestamp_utc`.
+- **`local_event_datetime`** — event time in the *user's* zone (`timezone` column; differs from `event_timestamp` for out-of-Mountain users); not present on every table. Use for user-local daypart only.
+
+> **🚨 Verified 2026-09-03 — `event_timestamp` is Denver local, not UTC (Asana 1217708981759181, 1218166682517918).** Measured against `timestamp_seconds(time)` on `email_send`: the gap is exactly **−7 h on a January day** and **−6 h on every summer day** sampled March → September, 100% of rows, both workspaces, pre-streaming history included — zero variance, so it is a clock definition, not drift, and the DST step confirms the zone. An earlier 2026-08-20 pass found the same 360-minute offset on 16.8M events across 8 tables (`canvas_entry`, `email_send`, `email_open`, `pushnotification_send`, `inappmessage_impression`, `inappmessage_click`, `campaigns_enrollincontrol`, `rcs_send`). Verification query (leading commas, lowercase, partition-bounded):
+>
+> ```sql
+> select
+> es.event_date
+> , es.workspace
+> , datetime_diff(es.event_timestamp, datetime(timestamp_seconds(es.time)), hour) as ts_minus_utc_hours
+> , countif(es.event_date = date(es.event_timestamp)) / count(*) as pct_event_date_is_local_date
+> , countif(es.event_date = date(timestamp_seconds(es.time))) / count(*) as pct_event_date_is_utc_date
+> , count(distinct es.id) as sends
+> from `marketing-data-442316`.braze.email_send es
+> where 1=1
+> and es.event_date in (date '2026-01-15', date '2026-03-05', date '2026-03-10', date '2026-06-15', date '2026-09-03')
+> group by es.event_date, es.workspace, ts_minus_utc_hours
+> order by es.event_date, es.workspace
+> ```
+>
+> Expected: `ts_minus_utc_hours` = −7 before 2026-03-08 and −6 after; `pct_event_date_is_local_date` = 1.0; `pct_event_date_is_utc_date` < 1.0.
+>
+> **Practical damage.** A session that followed the previous revision converted an already-local value with `datetime(cast(event_timestamp as timestamp), 'America/Denver')` and looked 6 hours early — a 4:42pm broadcast appeared not to have loaded ("data stops at 4:02pm") when the whole 4–6pm send was present. Any hour-of-day / daypart cut built on the old guidance is off by 6–7 h, and any Braze↔orders window built on `cast(event_timestamp as timestamp)` vs `order_timestamp_utc` puts the exposure 6–7 h *before* it happened — an "order after exposure" test silently sweeps in orders that preceded the message, and a 72-hour window is really −6 h → +66 h. This is the same asserts-UTC-on-a-local-value anti-pattern the order-side section below documents for `timestamp(order_datetime)`, now on the Braze side — and because both errors push their clock *earlier* by a similar amount, they partially cancel on Mountain-time stores, which is likely why neither surfaced for a month.
 
 ## Conventions these templates follow (team SQL style)
 
@@ -184,7 +205,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
 - **Cost:** always keep the `event_date` partition filter. The tables are large. Measured 2026-08-12: a `canvas_experimentstep_splitentry` name-search (`where canvas_name like '%…%'` with **no** `event_date` bound) billed **24.0 GB** in one MCP query; the same session's bounded version of the search cost under 1 GB. "When did this canvas run?" is still a partition-bounded question — start from a recent window and widen in steps rather than dropping the bound to search all history.
 - **Workspaces (added 2026-07-22):** event tables carry a `workspace` column — `'cafe_zupas'` (retail) or `'cafe_zupas_catering'` — backfilled for full history. Catering campaign events live in the *same* tables; filter `workspace = 'cafe_zupas'` for retail-only analyses and state which workspace(s) an answer includes.
 - **Freshness / event maturation (steward rule 2026-07-23):** event tables (`email_send`, `email_open`, clicks, `app_sessionstart`, etc.) keep backfilling for **~2 days** — same-day reads have run **20–25% low**. Treat the most recent 1–2 event days as partial: label them as immature in any answer, and never compare a just-loaded day against matured days (day-over-day on fresh data will always look like a drop). Check `braze.load_watermark` (`watermark`, `updated_at`) before treating recent events as complete.
-- **`event_timestamp` is DATETIME, not TIMESTAMP** — comparing it directly to a TIMESTAMP column (e.g., order timestamps when joining Braze events to `sales_ops` orders) fails with `No matching signature for operator > for argument types: TIMESTAMP, DATETIME`. Cast the Braze side: `cast(event_timestamp as timestamp)` (it's UTC, so the cast is safe). Observed tripping analyst MCP sessions 2026-07-23.
+- **`event_timestamp` is DATETIME, not TIMESTAMP** — comparing it directly to a TIMESTAMP column (e.g., order timestamps when joining Braze events to `sales_ops` orders) fails with `No matching signature for operator > for argument types: TIMESTAMP, DATETIME`. **Do not fix this with `cast(event_timestamp as timestamp)`** — an earlier revision of this file recommended exactly that ("it's UTC, so the cast is safe"), and it is **retracted**: `event_timestamp` is America/Denver local, so the cast asserts UTC on a local value and is 6–7 h early. Use the epoch column instead: **`timestamp_seconds(<alias>.time)`** is a true-UTC TIMESTAMP with no cast and no zone literal. Type error observed tripping analyst MCP sessions 2026-07-23; the wrong fix corrected 2026-09-03.
 
   > **⚠️ But "cast the Braze side to TIMESTAMP" is only half a rule, and following it alone reproduces the same error backwards** (observed 2026-08-17). **`claude.order_customer.order_datetime` is a DATETIME**, not a TIMESTAMP — so is `order_lines.order_datetime` and `order_customer.opened_time`. An analyst session that did everything else right (`claude` views, `customer_type = 'person'`, partition filters, a matured-cohort bound) failed on
   >
@@ -194,14 +215,15 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   >
   > because it compared a correctly-TIMESTAMP-cast Braze value to `min(oc.order_datetime)`. **Braze is also internally mixed:** the *event* tables carry DATETIME `event_timestamp`, while `braze.users` profile columns (`push_opted_in_at`, `email_unsubscribed_at`) are genuine **TIMESTAMP**, and `json_value(apps, '$.first_used')` becomes TIMESTAMP the moment you wrap it in `timestamp()` per the app-adoption pattern below. So a single query can hold three different types for "when".
   >
-  > **Canonical pairing — use the UTC column, not a cast:**
+  > **Canonical pairing — use the UTC column on BOTH sides, never a cast (revised 2026-09-03):**
   >
   > | Braze side | Order side | Why |
   > |---|---|---|
-  > | `cast(event_timestamp as timestamp)`, or any `braze.users` `*_at` column as-is | **`oc.order_timestamp_utc`** (TIMESTAMP) | ✅ Types match **and** both are UTC |
-  > | raw `event_timestamp` (DATETIME) | `oc.order_datetime` (DATETIME) | ⚠️ Compiles, silently wrong — see below |
+  > | **`timestamp_seconds(e.time)`**, or any `braze.users` `*_at` column as-is | **`oc.order_timestamp_utc`** (TIMESTAMP) | ✅ Types match **and** both are true UTC — no cast, no zone literal |
+  > | `cast(event_timestamp as timestamp)` / `timestamp(event_timestamp)` | `oc.order_timestamp_utc` | 🚨 Compiles, **6–7 h early** — asserts UTC on a Denver-local value. Was the documented pairing until 2026-09-03; **retracted** |
+  > | raw `event_timestamp` (DATETIME) | `oc.order_datetime_local` (DATETIME) | ⚠️ Compiles, silently wrong — Denver clock vs each store's own clock, off by 0–2 h depending on the store's state |
   >
-  > The second row is the trap worth more than the type error: `order_datetime` is **store-local business time** and Braze `event_timestamp` is **UTC**, so a DATETIME-to-DATETIME comparison type-checks cleanly and is off by 4–7 hours. In a "did the email precede the order?" or "first app use within 30 days of first order" test, that silently reclassifies every event inside the offset window. **Reach for `order_timestamp_utc` on any cross-source time comparison; keep `order_datetime` for reporting a local time to a human.**
+  > The last two rows are the traps worth more than the type error: `order_datetime_local` is **store-local business time** and Braze `event_timestamp` is **Denver-local time**, so neither is UTC and a DATETIME-to-DATETIME comparison type-checks cleanly while being wrong for every store outside Mountain time. In a "did the email precede the order?" or "first app use within 30 days of first order" test, that silently reclassifies every event inside the offset window. **Reach for `order_timestamp_utc` on any cross-source time comparison; keep `order_datetime` for reporting a local time to a human.**
   >
   > Generalisable lesson: a type error is loud and gets fixed in seconds; the timezone error underneath it is silent and survives. When a cross-source join errors on types, pick the column pair that fixes **both** problems rather than casting until it compiles.
 
@@ -244,7 +266,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   >     and timestamp_add(c.first_dt, interval 14 day)
   > ```
   >
-  > Identical syntax on both sides, which reads as consistent. But `event_timestamp` **is** UTC, so wrapping it is a pure relabel; `order_datetime` is store-local, so wrapping it silently asserts that a local wall-clock reading is UTC. Same function, one harmless, one a 4–7 hour error. Look for the *asymmetry of meaning*, not the symmetry of syntax.
+  > Identical syntax on both sides, which reads as consistent — and **both are wrong** (correction 2026-09-03: this paragraph previously called the Braze side "a pure relabel" because `event_timestamp` was believed to be UTC; it is Denver-local, so `timestamp(e.event_timestamp)` is 6–7 h early exactly as `timestamp(order_datetime)` is 4–7 h early). Because the two errors run the same direction they *partially cancel* on Mountain-time stores, which is how this shape survived review. The fix is the same on both sides: use the column that is already UTC — `timestamp_seconds(e.time)` and `oc.order_timestamp_utc` — and never wrap a wall-clock DATETIME in `timestamp()`.
   >
   > **Measured damage on the shape that actually runs here** — a per-customer relative window anchored on the first order (`first_dt` → `first_dt + 14 days`) used for onboarding-engagement reporting. The bad anchor is 4–7 h early, so the window is **displaced, not widened**: it imports events from just before the first order and drops an equal slice off day 14. Measured 2026-08-20 on the 2026-07-01 → 07-14 first-order cohort (person, non-catering) against `braze.email_send`:
   >
@@ -285,7 +307,7 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   and u.external_id is not null
   group by 1
   ```
-- **`time` is INT64 epoch seconds on every event table — `extract(hour from time)` fails** with `No matching signature for EXTRACT … FROM INT64` (hit 2026-08-03 on `subscriptiongroup_statechange`; the retry guessed a column called `occurred_at`, which doesn't exist on any Braze table). For hour-of-day use `extract(hour from event_timestamp)` (DATETIME, UTC) or `local_event_datetime` (user-local) — both already on the table. `timestamp_seconds(time)` also works but is never necessary.
+- **`time` is INT64 epoch seconds on every event table — `extract(hour from time)` fails** with `No matching signature for EXTRACT … FROM INT64` (hit 2026-08-03 on `subscriptiongroup_statechange`; the retry guessed a column called `occurred_at`, which doesn't exist on any Braze table). For hour-of-day use `extract(hour from event_timestamp)` — that is **already a Mountain-time hour** (`event_timestamp` is America/Denver local, see Time columns), so do **not** convert it again; or `local_event_datetime` for the user's own zone. `timestamp_seconds(time)` is the way to get a true-UTC TIMESTAMP and is the column to use in any cross-source comparison — it is *not* optional there (corrected 2026-09-03; this bullet previously called it "never necessary").
 - **Subscription-state changes live in `subscriptiongroup_statechange`** (verified schema 2026-08-03): `channel` (`'sms'`, …), `subscription_group_id`, `subscription_status` (`'Subscribed'`/`'Unsubscribed'`), `state_change_source`, plus the standard campaign/canvas identity and time columns, partitioned by `event_date`. This is the table for "why did SMS unsubs spike" questions. No recipe in the templates yet — logged as a KB gap 2026-08-03.
 - **`canvas_experimentstep_splitentry` has NO `campaign_*` columns** — it carries `canvas_*`, `canvas_step_*`, `experiment_step_id` and `experiment_split_id`/`experiment_split_name` (plus `in_control_group`) only; `select campaign_name` fails with `Unrecognized name: campaign_name` (hit by an analyst MCP session 2026-08-07). Experiment splits are a Canvas-only feature, so identify the test by `canvas_name` + `experiment_split_name`. Experiment/holdout **lift** analyses (exposed vs control legs joined forward to orders) are a recurring demand shape with no template yet — logged as a KB gap 2026-08-10 (Asana 1217335407819497); until one lands, remember the order-side join must use the marts, never `pulse.*` or legacy `OrderCustomer`, and long canvas windows are expensive (a six-month `canvas_entry` scan bills ~45 GB per run — materialize to `scratch` instead of re-running).
 - **🔁 "What campaigns/canvases are currently live?" is the single most-repeated question in this dataset, and answering it by scanning the event tables is the expensive way** (query-log review 2026-08-17). One analyst ran the same discovery set — `select distinct canvas_name from canvas_entry`, `distinct campaign_name from inappmessage_impression`, and `distinct coalesce(campaign_name, canvas_name)` from `sms_send` / `pushnotification_send` / `contentcard_send`, all over a trailing 14 days — on **three separate days** in one four-day window. The `canvas_entry` leg alone billed 3.41, 3.55, 3.67 and 4.14 GiB on successive runs; the whole window's name-discovery came to **~19 GiB to produce a list of names**. Note the cost asymmetry that makes this counterintuitive: `inappmessage_impression` and `sms_send` return the same shape of answer for **0.01 GiB**, because the driver is table size, not the date filter — `event_date` is already pruning correctly, `canvas_entry` is simply enormous. Two consequences:

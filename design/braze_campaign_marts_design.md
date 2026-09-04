@@ -145,7 +145,7 @@ The single biggest trap in any pre-aggregated campaign table, and the reason a n
 
 **c) 6.8% of recipients can never be tied to orders.** On 2026-07-20, 50,769 of 743,284 distinct `external_user_id` values were non-numeric (UUID-shaped), so no `mapped_cust_id`. Hence `unique_sent_users_matchable` alongside `unique_sent_users`: conversion rates divide by the matchable base, and the coverage number travels with the answer. Also why `safe_cast` is mandatory — a plain `cast` aborts the query.
 
-**d) The attribution join works and is cheap.** Day × program × channel, `safe_cast(external_user_id as int64)` to `order_customer.mapped_cust_id`, `store_id <> 1111`, `customer_type = 'person'`: **202 MB scanned, 18s slot** for a week of sends. Both documented casts required (`safe_cast` for the id, `cast(event_timestamp as timestamp)` for the DATETIME/TIMESTAMP mismatch).
+**d) The attribution join works and is cheap.** Day × program × channel, `safe_cast(external_user_id as int64)` to `order_customer.mapped_cust_id`, `store_id <> 1111`, `customer_type = 'person'`: **202 MB scanned, 18s slot** for a week of sends. Both documented conversions required (`safe_cast` for the id, and `timestamp_seconds(time)` for the Braze clock — **not** `cast(event_timestamp as timestamp)`, which this prototype used and which is 6–7 h early because `event_timestamp` is America/Denver local, not UTC; corrected 2026-09-03, see the skill's Time columns). `first_exposure_utc` / `last_exposure_utc` / `exposure_utc` in the L3/L4 specs above must be built from `timestamp_seconds(time)`, and the section-5 window percentages need a re-run on the corrected clock before the mart is built.
 
 ## 5. The attribution-window analysis (decision 2)
 

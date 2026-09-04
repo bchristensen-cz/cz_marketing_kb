@@ -12,6 +12,14 @@
 -- headline: none of the three found a response window. the window is a
 --           reporting convention chosen to minimise ambiguity, not an
 --           empirical constant. label revenue "last-touch influenced sales".
+--
+-- 2026-09-03 correction: sections B and C originally built the braze clock as
+--           cast(event_timestamp as timestamp). event_timestamp is
+--           America/Denver local, not utc, so that exposure clock was 6h early
+--           and the recorded percentages rest on a -6h..+66h window, not
+--           0..72h. the sql below now uses timestamp_seconds(time) (true utc).
+--           the numbers in the comments are the ORIGINAL 2026-07-28 run and
+--           have NOT been re-derived -- re-run and re-date before citing them.
 -- =============================================================================
 
 
@@ -101,19 +109,19 @@ order by e.day_offset
 --            -> +2.9pp coverage for 2x the ambiguity. window = 72h.
 -- -----------------------------------------------------------------------------
 with exposure as (
-select event_timestamp, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
+select time, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
 from `marketing-data-442316`.braze.email_send
 where event_date between date '2026-06-25' and date '2026-07-27' and workspace = 'cafe_zupas'
 union all
-select event_timestamp, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
+select time, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
 from `marketing-data-442316`.braze.pushnotification_send
 where event_date between date '2026-06-25' and date '2026-07-27' and workspace = 'cafe_zupas'
 union all
-select event_timestamp, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
+select time, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
 from `marketing-data-442316`.braze.sms_send
 where event_date between date '2026-06-25' and date '2026-07-27' and workspace = 'cafe_zupas'
 union all
-select event_timestamp, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
+select time, external_user_id, coalesce(nullif(campaign_id, ''), canvas_id) as program_id
 from `marketing-data-442316`.braze.rcs_send
 where event_date between date '2026-06-25' and date '2026-07-27' and workspace = 'cafe_zupas'
 )
@@ -121,7 +129,7 @@ where event_date between date '2026-06-25' and date '2026-07-27' and workspace =
 , exp_clean as (
 select
   safe_cast(e.external_user_id as int64) as mapped_cust_id
-, cast(e.event_timestamp as timestamp)   as exposure_utc
+, timestamp_seconds(e.time)              as exposure_utc
 , e.program_id
 from exposure e
 where 1=1
@@ -184,7 +192,7 @@ from joined
 with clicks as (
 select
   safe_cast(ec.external_user_id as int64) as mapped_cust_id
-, cast(ec.event_timestamp as timestamp)   as click_utc
+, timestamp_seconds(ec.time)             as click_utc
 from `marketing-data-442316`.braze.email_click ec
 where 1=1
 and ec.event_date between date '2026-07-01' and date '2026-07-20'

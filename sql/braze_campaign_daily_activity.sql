@@ -29,6 +29,15 @@
 --           partition filter is applied in EVERY base cte for cost control --
 --           keep it, and keep the workspace filter with it.
 --
+-- time columns (verified 2026-09-03, see skill "Time columns"):
+--           event_date      = America/Denver local DATE (partition column)
+--           event_timestamp = America/Denver local DATETIME, follows DST.
+--                             NOT utc. extract(hour ...) is already mountain.
+--           time            = unix epoch seconds, true utc. for a utc instant
+--                             use timestamp_seconds(time); never
+--                             cast(event_timestamp as timestamp).
+--           this template passes event_timestamp through unchanged.
+--
 -- notes   : - all lower case, fully qualified table names, early partition
 --             filtering, only the columns needed (per team sql conventions).
 --           - is_canvas is 1 when the message came from a Canvas, else 0.

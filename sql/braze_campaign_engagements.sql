@@ -25,6 +25,16 @@
 --           can be a machine open; everything else is false. (rcs_read is a
 --           genuine device read receipt, not a machine open.)
 --
+-- bot clicks (added 2026-09-03):
+--           braze flags suspected bot / security-scanner clicks on email_click,
+--           sms_shortlinkclick and rcs_click (is_suspected_bot_click, with a
+--           suspected_bot_click_reason). the flag is carried through as
+--           is_suspected_bot_click (false on tables without it) and folded with
+--           is_machine_open into a single is_human boolean:
+--             is_human = not is_machine_open and not is_suspected_bot_click
+--           default to is_human for engagement; keep the all-events metric for
+--           reconciliation against braze dashboards.
+--
 -- workspace (added with the 2026-07 streaming switch):
 --           values: 'cafe_zupas' (main, ~99%) and 'cafe_zupas_catering'.
 --           CANONICAL DEFAULT: filter workspace = 'cafe_zupas'; include
@@ -58,6 +68,7 @@ with email_opens as (
   , 'email'  as channel
   , 'open'   as engagement_type
   , coalesce(lower(machine_open) = 'true', false) as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -80,6 +91,7 @@ with email_opens as (
   , 'email'  as channel
   , 'click'  as engagement_type
   , false    as is_machine_open
+  , coalesce(is_suspected_bot_click, false) as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -102,6 +114,7 @@ with email_opens as (
   , 'push'   as channel
   , 'open'   as engagement_type
   , false    as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -124,6 +137,7 @@ with email_opens as (
   , 'in_app_message' as channel
   , 'click'          as engagement_type
   , false            as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -146,6 +160,7 @@ with email_opens as (
   , 'content_card'   as channel
   , 'click'          as engagement_type
   , false            as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -169,6 +184,7 @@ with email_opens as (
   , 'banner' as channel
   , 'click'  as engagement_type
   , false    as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -192,6 +208,7 @@ with email_opens as (
   , 'sms'    as channel
   , 'click'  as engagement_type
   , false    as is_machine_open
+  , coalesce(is_suspected_bot_click, false) as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -215,6 +232,7 @@ with email_opens as (
   , 'sms'    as channel
   , 'reply'  as engagement_type
   , false    as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -237,6 +255,7 @@ with email_opens as (
   , 'rcs'    as channel
   , 'click'  as engagement_type
   , false    as is_machine_open
+  , coalesce(is_suspected_bot_click, false) as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -261,6 +280,7 @@ with email_opens as (
   , 'rcs'    as channel
   , 'open'   as engagement_type
   , false    as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -284,6 +304,7 @@ with email_opens as (
   , 'rcs'    as channel
   , 'reply'  as engagement_type
   , false    as is_machine_open
+  , false as is_suspected_bot_click
   , campaign_id
   , campaign_name
   , canvas_id
@@ -320,6 +341,8 @@ select
 , channel
 , engagement_type
 , is_machine_open
+, is_suspected_bot_click
+, (not is_machine_open and not is_suspected_bot_click)      as is_human
 , case when is_canvas = 1 then 'canvas' else 'campaign' end as program_type
 , coalesce(nullif(campaign_id, ''), canvas_id)             as program_id
 , coalesce(nullif(campaign_name, ''), canvas_name)         as program_name
@@ -348,7 +371,7 @@ from engagements
 -- , count(*)                                       as engagement_events
 -- , array_agg(distinct channel order by channel)  as channels_engaged
 -- from engagements_norm
--- where not is_machine_open                        -- human engagement only
+-- where is_human                                   -- human engagement only (no machine opens, no bot clicks)
 --   and program_id is not null
 -- group by external_user_id, program_id, program_name
 -- ;
@@ -361,8 +384,8 @@ from engagements
 -- braze_campaign_daily_activity.sql -- email, push, sms, rcs, content_card
 -- sends + banner / in-app impressions, workspace = 'cafe_zupas') and a minimal
 -- ENGAGED base from the engagement union above, then divides distinct engaged
--- users by distinct sent users per program. reports human-only and all-opens
--- variants.
+-- users by distinct sent users per program. reports human-only (is_human) and
+-- all-engagement variants.
 -- =============================================================================
 -- with sent_base as (
 --   select coalesce(nullif(campaign_id,''), canvas_id) as program_id,
@@ -410,7 +433,7 @@ from engagements
 -- )
 -- , engaged as (
 --   select program_id,
---          count(distinct case when not is_machine_open then external_user_id end) as engaged_users_human,
+--          count(distinct case when is_human then external_user_id end) as engaged_users_human,
 --          count(distinct external_user_id) as engaged_users_all
 --   from engagements_norm                      -- <- the normalized engagement set
 --   where program_id is not null
@@ -428,7 +451,6 @@ from engagements
 -- left join engaged e using (program_id)
 -- order by s.sent_users desc
 -- ;
--- -- tip: for human-only vs all-opens, filter the engaged cte on
--- --      `not is_machine_open` (human) vs no filter (all). split into two ctes
--- --      for clean side-by-side columns. group by channel too for a per-channel
--- --      engagement-rate breakdown.
+-- -- tip: for human-only vs all, filter the engaged cte on `is_human` vs no
+-- --      filter. group by channel too for a per-channel engagement-rate
+-- --      breakdown.

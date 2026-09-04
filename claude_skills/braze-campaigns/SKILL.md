@@ -1,6 +1,6 @@
 ---
 name: braze-campaigns
-description: How to query Braze marketing campaign data in BigQuery (dataset braze) — campaign/canvas activity by day and cross-channel customer engagement (email, push, SMS, content cards, in-app). Use for ANY question about marketing campaigns, campaign sends, opens, clicks, engagement rates, journeys/canvases, or channel performance. Contains the canonical union templates and identity/machine-open rules so every session returns the same answer.
+description: How to query Braze marketing campaign data in BigQuery (dataset braze) — campaign/canvas activity by day and cross-channel customer engagement (email, push, SMS, RCS, banners, content cards, in-app). Use for ANY question about marketing campaigns, campaign sends, opens, clicks, engagement rates, journeys/canvases, or channel performance. Contains the canonical union templates and identity/machine-open rules so every session returns the same answer.
 ---
 
 # Querying Braze Campaign Data
@@ -19,7 +19,7 @@ The companion templates in this repo are the source of truth for the SQL:
 - `sql/braze_campaign_daily_activity.sql` — normalized cross-channel **activity** (sends/exposures).
 - `sql/braze_campaign_engagements.sql` — normalized cross-channel **engagement** (opens/clicks/replies) + engagement-rate example.
 
-Both have been validated against BigQuery (dry run, zero errors). Use them as the starting point rather than rewriting the unions by hand — that's where errors creep in. Full column docs: `data_dictionaries/braze_data_dictionary.md` (note: generated pre-streaming, 2026-06-11 — covers the original 69 tables but not yet the streaming-era additions below).
+Both have been validated against BigQuery (dry run, zero errors). Use them as the starting point rather than rewriting the unions by hand — that's where errors creep in. Full column docs: `data_dictionaries/braze_data_dictionary.md` (refreshed 2026-09-03 from live `INFORMATION_SCHEMA` — all 119 tables / 2,651 columns including the streaming-era additions, each tagged Active/Empty with row counts; `.xlsx` twin alongside it).
 
 ## Workspaces (added with the 2026-07 streaming switch)
 
@@ -32,7 +32,7 @@ Every event table now carries a **`workspace`** column with two values:
 
 ## The core idea: one campaign spans many channels and many tables
 
-A single campaign can reach a customer through **email, push notification, SMS, an in-app message, and an on-site/in-app banner (Content Card)**. Braze writes each channel's events to **separate tables**, and each event type (send, delivery, open, click, bounce, …) is also its own table. To reason about a campaign as a whole you must **union the relevant per-channel tables together** into one normalized shape, then aggregate.
+A single campaign can reach a customer through **email, push notification, SMS, RCS, an in-app message, an on-site/in-app Banner, or a Content Card**. Braze writes each channel's events to **separate tables**, and each event type (send, delivery, open, click, bounce, …) is also its own table. To reason about a campaign as a whole you must **union the relevant per-channel tables together** into one normalized shape, then aggregate.
 
 Channel → table mapping used by the templates:
 
@@ -54,10 +54,12 @@ Other tables exist per channel (delivery, bounce, abort, unsubscribe, mark-as-sp
 
 ### Streaming-era tables (added 2026-07)
 
-The switch to streaming ingestion (Currents → `braze_stream` → merged into `braze`) added ~50 tables. Status as of 2026-07-22:
+The switch to streaming ingestion (Currents → `braze_stream` → merged into `braze`) added 50 tables (119 total). Status as of 2026-09-03 (row counts from `__TABLES__`):
 
-- **Active, in the templates**: `banner_impression`, `banner_click`, `rcs_send`, `rcs_read`, `rcs_click`, `rcs_delivery`, `rcs_inboundreceive`, `email_deferral`, `email_retry`.
-- **Present but no data yet** (channels not in use): `line_*` (LINE), `whatsapp_*` (WhatsApp), `sms_carriersend`, `pushnotification_iosforeground`, `liveactivity_*`, `featureflag_impression`, `agentconsole_*`, `banner_abort`/`banner_dismiss`. If these light up, extend the templates the same way.
+- **Active, in the templates**: `banner_impression` (135k), `banner_click` (5k), `rcs_send` (50k), `rcs_delivery` (44k), `rcs_read` (10k), `rcs_click` (6k), `rcs_inboundreceive` (2k).
+- **Active, not in the templates** (operational / diagnostic): `rcs_rejection` (6k, `is_sms_fallback` marks RCS→SMS fallback), `rcs_abort`, `email_deferral` (806k), `inappmessage_abort`, `canvas_exit_matchedaudience`, `canvasstep_progression` (287M — granular journey flow), `pushnotification_tokenstatechange` (265k), `webhook_failure` (3.6M), `location` (524k).
+- **Present but empty** (channels not in use): `line_*` (LINE), `whatsapp_*` (WhatsApp), `liveactivity_*`, `agentconsole_*`, `featureflag_impression`, `installattribution`, `sms_carriersend`, `pushnotification_iosforeground`, all `*_retry` (incl. `email_retry`), `banner_abort`/`banner_dismiss`, `contentcard_abort`/`contentcard_dismiss`. If these light up, extend the templates the same way.
+- **Original-era tables changed too**: 42 of the 69 gained columns — `workspace` everywhere; `is_suspected_bot_click` + `suspected_bot_click_reason` on `email_click` / `sms_shortlinkclick` (and `rcs_click`); `is_sms_fallback` on `sms_delivery` / `sms_deliveryfailure` / `sms_rejection`; `push_token` on push send/bounce.
 - **Plumbing — never query for analysis**: `currents_raw`, `load_watermark`, the whole `braze_stream` dataset, `stg_*`, `table_rec_cnt`.
 - **Custom attribute feeds** (`bz_cid_*`, `cdi_*`, `users`, `global_holdout`, points/user-id sync tables): Cafe Zupas profile/attribute syncs, not campaign events — out of scope for this skill.
 
@@ -161,9 +163,9 @@ This gives one row per campaign per day, with the channels it ran on and how man
 
 Full template: **`sql/braze_campaign_engagements.sql`**.
 
-It unions the engagement tables into a CTE `engagements`, normalized to one row per open/click/reply with `program_id`, `channel`, `engagement_type`, and `is_machine_open`.
+It unions the engagement tables into a CTE `engagements`, normalized to one row per open/click/reply with `program_id`, `channel`, `engagement_type`, the two non-human flags `is_machine_open` and `is_suspected_bot_click`, and their combination **`is_human`** (`not is_machine_open and not is_suspected_bot_click`).
 
-**Did a customer engage with a campaign?** Group the normalized set by `external_user_id` + `program_id` (filter `not is_machine_open` for true human engagement). See *Example A* in the template.
+**Did a customer engage with a campaign?** Group the normalized set by `external_user_id` + `program_id` (filter `is_human` for true human engagement). See *Example A* in the template.
 
 **Engagement rate (default denominator = SENT):** the template's *Example B* builds a `sent` base from the send/impression tables and an `engaged` base from the engagement union, then divides distinct engaged users by distinct sent users per `program_id`:
 
@@ -173,8 +175,8 @@ engagement_rate = distinct engaged users / distinct sent users   (per program_id
 
 It reports two variants side by side:
 
-- **`engagement_rate_human`** — excludes machine opens (`not is_machine_open`). Use this as the headline rate.
-- **`engagement_rate_all`** — every open/click including machine opens.
+- **`engagement_rate_human`** — `is_human` only: excludes machine opens and suspected bot clicks. Use this as the headline rate.
+- **`engagement_rate_all`** — every open/click including machine opens and bot clicks.
 
 Add `channel` to both the `sent` and `engaged` grains for a per-channel engagement-rate breakdown of the same campaign.
 
@@ -187,6 +189,10 @@ coalesce(lower(machine_open) = 'true', false) as is_machine_open
 ```
 
 and sets `is_machine_open = false` on all non-email engagements. Default to the human-only metric; keep the all-opens metric available for reconciliation against Braze's dashboard, which counts all opens.
+
+### Bot clicks (added 2026-09-03)
+
+Braze now flags suspected bot / security-scanner clicks with **`is_suspected_bot_click`** (plus a `suspected_bot_click_reason`) on `email_click`, `sms_shortlinkclick`, and `rcs_click`. The template carries it through as `coalesce(is_suspected_bot_click, false)` on those three tables and `false` elsewhere, then folds it with machine opens into `is_human`. Treat bot clicks like machine opens: excluded from the headline rate, retained in the all-events metric.
 
 ### Why "sent" as the denominator (and how to switch to delivered)
 
@@ -518,7 +524,8 @@ That orders the flag **alphabetically**: `cold` → `hot` → `rain` → `snow`.
 | `claude_skills/braze-campaigns/SKILL.md` | This guide. |
 | `sql/braze_campaign_daily_activity.sql` | Normalized cross-channel activity union + campaigns-by-day rollup. |
 | `sql/braze_campaign_engagements.sql` | Normalized cross-channel engagement union + engagement-by-customer and engagement-rate examples. |
-| `data_dictionaries/braze_data_dictionary.md` | Full table & column dictionary for the `braze` dataset (69 pre-streaming tables; streaming-era additions summarized in this skill, dictionary refresh pending). |
+| `data_dictionaries/braze_data_dictionary.md` | Full table & column dictionary for the `braze` dataset — all 119 tables / 2,651 columns, Active/Empty status and row counts, refreshed 2026-09-03 from live `INFORMATION_SCHEMA`. |
+| `data_dictionaries/braze_data_dictionary.xlsx` | Same content as a filterable workbook (Read Me, Tables, Data Dictionary, Custom PAYLOAD Fields). |
 
 ## When done
 

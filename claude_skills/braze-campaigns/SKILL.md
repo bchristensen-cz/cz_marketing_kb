@@ -512,6 +512,33 @@ That orders the flag **alphabetically**: `cold` → `hot` → `rain` → `snow`.
 
 **Generalisable:** when a lookup table exists to express an *ordering*, check that its rank column appears in an `ORDER BY` and not only in a join predicate. A join gives you the filter; only the `ORDER BY` gives you the precedence. Related: a filter and a breakout are different controls, and this is the same confusion between "restrict the set" and "rank the set."
 
+### 5. Order-event upload recipe (steward query, 2026-09-03)
+
+The steward's ad-hoc "customers who bought X" custom-event feed is the reference shape for anything that turns orders into Braze events — it satisfies rule 1 above without an explicit `'UTC'` argument because the source column is already the true-UTC TIMESTAMP:
+
+```sql
+-- One row per (customer, order): distinct collapses multiple qualifying lines on the same order
+select distinct
+  cast(oc.mapped_cust_id as string) as external_id
+, format_timestamp('%Y-%m-%dT%H:%M:%E3SZ', oc.order_timestamp_utc) as event_time
+from `marketing-data-442316`.claude.order_lines ol
+	join `marketing-data-442316`.claude.order_customer oc
+	on oc.brink_order_id = ol.brink_order_id
+where 1=1
+and ol.business_date >= current_date('America/Denver') - 45
+and ol.is_catering = false
+and ol.rev_center_name = 'Desserts'
+and lower(ol.item_name) like '%cup%'
+and oc.mapped_cust_id is not null
+and oc.order_timestamp_utc is not null
+```
+
+- `external_id` is `mapped_cust_id` cast to STRING — the same id space as `braze.users.external_id` / event `external_user_id`. Never key an upload on email.
+- `distinct` is load-bearing: an order with two cup lines must produce one event, not two.
+- `order_timestamp_utc is not null` drops the still-open orders (rule (2) under Time columns) rather than emitting a NULL `event_time` that Braze rejects row-by-row.
+- The `Z` suffix is a literal. It is truthful here **only** because `order_timestamp_utc` is UTC — the same string built from `order_datetime_local` is the item-1 defect with a different mask.
+- Use `item_id` rather than a `like` on `item_name` when the target is a single product; the name matches every size (see `sales-ops-orders`, *item_name is not the product key*).
+
 ### Two lower-priority notes from the same review
 
 - **`current_date` is UTC.** Three of these builds anchor on bare `current_date` / `current_date()` (the churn model's `ref_date`, the weather build's `weather_date = current_date`, the L90/L180/L365 windows). After 18:00 MT it is already tomorrow in UTC. Use `current_date('America/Denver')`, which `google_offline_conversions` already does.

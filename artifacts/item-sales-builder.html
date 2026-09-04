@@ -138,7 +138,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <div id="combonote"></div>
 
   <div class="lock">
-    Applied for you: test store 1111 and unmapped store 999 excluded &middot; discount and promotion lines excluded, null-safe &middot; <code>claude.order_lines</code>, history from 2023-01-01 &middot; business week is Mon&ndash;Sat, so a week is labelled by its Saturday &middot; results capped at 10,000 rows and you'll be told if the cap is hit
+    Applied for you: test store 1111 and unmapped store 999 excluded by the <code>claude</code> views &middot; discount and promotion lines excluded, null-safe &middot; <code>claude.order_lines</code>, history from 2023-01-01 &middot; business week is Mon&ndash;Sat, so a week is labelled by its Saturday &middot; results capped at 10,000 rows and you'll be told if the cap is hit
   </div>
 </div>
 
@@ -422,7 +422,6 @@ ${selMeas}
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
-and ol.store_id not in (1111, 999)
 and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
@@ -475,7 +474,6 @@ ol.item_name
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
-and ol.store_id not in (1111, 999)
 and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')

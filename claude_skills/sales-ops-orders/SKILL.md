@@ -2154,19 +2154,30 @@ order by 1
 Healthy is **~28–33%**. Under 15% on a **completed** day means that date is corrupted — **say so
 in the answer and exclude or caveat those dates** rather than reporting the number as-is.
 
-> ### 🔑 Exclude today — SessionM loads once per day (~03:00 MT)
+> ### 🔑 Exclude today AND yesterday — SessionM loads once per day at 06:15 MT, after the 04:02 reload
 >
-> **Today's date will always read ~2% and that is normal.** SessionM data for a given day lands
-> in the *next* morning's load, so today's orders have essentially no loyalty identity:
-> 2026-07-29 at 13:20 MT had 9,758 Brink orders and 195 SessionM links, against 7,868 (30.0%)
-> for 2026-07-28.
+> **Today's date will always read ~2% and yesterday's ~0.5%, and both are normal.** The
+> bucket → BigQuery loader (`bigquery-loader-sa`, 15 merges into `sessionM.*`) runs at
+> **06:15–06:20 MT every day** (verified on `JOBS_BY_PROJECT`, 60 days, 0 failures, 2026-09-04).
+> The only `order_customer` run that reaches back past today is the **04:02 reload**, two hours
+> *before* the loader; every intraday run (08:00–23:00) is today-only. So a business date gets
+> its loyalty identity at **D+2 04:02**, not D+1. Measured with time travel: 2026-09-03 at 0.5%
+> all day on 2026-09-04; 2026-09-02 at 0.7% at noon on 2026-09-03; 2026-08-31 at 0.4% at noon on
+> 2026-09-01. Each snapped to 30–32% at the next 04:02. (The earlier "~03:00 load" note was wrong;
+> before the ~2026-08-26 script change every hourly run reloaded 8 days, so the 07:02 run used to
+> hide the gap.)
 >
-> - **Never apply the 15% rule to the current business date** — it is a guaranteed false positive.
-> - **Never answer a customer-grain question about today.** Customer counts, `mapped_cust_id`,
->   first-time vs repeat, and anything from `order_sequence` / `customer_attribute` are ~98%
->   under-identified for today. If asked about today, answer through **yesterday** and say why.
-> - **Sales, order counts and channel mix for today are fine** — those come from Brink, which
->   loads intraday every hour.
+> - **Never apply the 15% rule to the current or previous business date** — both are guaranteed
+>   false positives until the day after tomorrow's 04:02 run.
+> - **Never answer a customer-grain question about today or yesterday.** Customer counts,
+>   `mapped_cust_id`, first-time vs repeat, `in_store_scan`, and anything from `order_sequence` /
+>   `customer_attribute` are ~98% under-identified for both dates. Answer through the
+>   **day before yesterday** and say why.
+> - **`customer_attribute` (05:00, `attribute_asof_date = run_date - 1`) and `claude.loyalty_user`
+>   (04:30) also run before the 06:15 loader**, so `customer_attribute`'s newest day is always
+>   built on an under-identified date. Steward is aware (2026-09-04); fix pending.
+> - **Sales, order counts and channel mix for today and yesterday are fine** — those come from
+>   Brink, which loads intraday every hour.
 
 ## Gotchas checklist (scan before answering)
 

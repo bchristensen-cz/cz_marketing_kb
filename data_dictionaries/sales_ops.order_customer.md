@@ -369,30 +369,39 @@ nothing about which address is "right".
   Healthy is **~28–33% `pct_sm_linked`**, **excluding the current business date** — see below.
   Anything under 15% on a *completed* day means that day is corrupted.
 
-- **🔑 SessionM loads ONCE PER DAY (~03:00 MT), so today's orders have no loyalty identity**
-  (steward-confirmed 2026-07-29). This is normal and permanent, not a defect.
+- **🔑 SessionM loads ONCE PER DAY at 06:15 MT — after the 04:02 `order_customer` reload — so
+  today's AND yesterday's orders have no loyalty identity** (measured 2026-09-04; supersedes the
+  2026-07-29 "~03:00" note, which was wrong). This is normal and permanent, not a defect.
 
   | `business_date` | Brink orders | SessionM-linked | `pct_sm_linked` |
   |---|---|---|---|
-  | Yesterday (2026-07-28) | 26,258 | 7,868 | **30.0%** ✅ |
-  | **Today (2026-07-29, 13:20 MT)** | 9,758 | **195** | **2.0%** — expected |
+  | 2026-09-02 (D-2) | 28,112 | 8,775 | **31.2%** ✅ |
+  | **2026-09-03 (yesterday, all day 09-04)** | 29,224 | **155** | **0.5%** — expected |
+  | **2026-09-04 (today, 10:15 MT)** | 469 | 26 | **5.5%** — expected |
 
-  A day's transactions all land in the next morning's ~03:00 load, so **yesterday and older are
-  fully covered; today is not assessable for loyalty identity at all.** Consequences:
+  The bucket → BigQuery loader (`bigquery-loader-sa`, 15 `MERGE`s into `sessionM.*`) runs at
+  **06:15–06:20 MT** every day (60 days on `JOBS_BY_PROJECT`, 0 failures). `order_customer`'s
+  intraday runs (08:00–23:00) are **today-only**; the only run that reaches back is the
+  **04:02** reload, which fires before the loader. So a business date is linked at **D+2 04:02**.
+  Time travel confirms steady state: 2026-08-31 read 0.4% at noon on 09-01; 2026-09-02 read 0.7%
+  at noon on 09-03; each snapped to 30–32% at the next 04:02. Before the ~2026-08-26 script
+  change every hourly run reloaded 8 days, so the 07:02 run used to close the gap — the
+  today-only intraday window introduced this. Cheapest fix: intraday `start_date = run_date - 1`
+  (cost ~unchanged: today-only bills 13.47 GiB vs 14.92 GiB for 8 days, because most sources
+  are not window-bounded). Consequences:
 
-  - **The detector above will false-positive on today's date every single day.** Always exclude
-    the current `business_date`. (This nearly produced a P1 raised against the ETL team over
-    entirely normal behaviour — the mistake was inferring ingestion cadence from
-    `last_updated_at` / `etl_time`, neither of which reflects the SessionM extract.)
-  - **Never answer a customer-grain question about today.** `mapped_cust_id`, person counts,
-    first-time vs repeat and anything from `order_sequence` / `customer_attribute` are all
-    ~98% under-identified for today. Sales, order counts and channel mix are fine — those come
-    from Brink, which loads intraday.
-  - This is why the load chain is ordered **SessionM ~03:00 → `order_customer` 04:00 reload →
-    `customer_attribute` 05:00**, and why `customer_attribute.attribute_asof_date` is
-    `run_date - 1`. Anchoring the trailing windows on *today* would have read a day with ~2%
-    loyalty identity and silently understated every customer metric. Don't "improve" that
-    anchor to today.
+  - **The detector above false-positives on today AND yesterday.** Exclude both dates.
+    (The 2026-07-29 mistake was inferring ingestion cadence from `last_updated_at` / `etl_time`;
+    the 2026-09-04 correction came from reading the loader's jobs on `JOBS_BY_PROJECT`.)
+  - **Never answer a customer-grain question about today or yesterday.** `mapped_cust_id`,
+    person counts, first-time vs repeat, `in_store_scan` and anything from `order_sequence` /
+    `customer_attribute` are ~98% under-identified for both. Sales, order counts and channel
+    mix are fine — those come from Brink, which loads intraday.
+  - The load chain is actually **`order_customer` 04:02 → `claude.loyalty_user` 04:30 →
+    `customer_attribute` 05:00 → SessionM 06:15**, i.e. every downstream mart runs *before*
+    the loyalty data it needs. `customer_attribute.attribute_asof_date = run_date - 1` therefore
+    reads a day with ~0.5% loyalty identity every run. Don't "improve" the anchor to today —
+    it needs to move to `run_date - 2`, or the chain needs to run after 06:30.
 
 - **`mapped_cust_id` can migrate between customers without a new order** (audited 2026-07-29).
   `sm_external_user_map` keeps one `external_user_id` per SessionM `user_id`, chosen by

@@ -380,7 +380,14 @@ nothing about which address is "right".
   | **2026-09-04 (today, 12:10 MT)** | 5,819 | 26 | **0.4%** — expected |
 
   The bucket → BigQuery loader (`bigquery-loader-sa`, 15 `MERGE`s into `sessionM.*`) runs at
-  **06:15–06:20 MT** every day (60 days on `JOBS_BY_PROJECT`, 0 failures). The 04:02 reload fires
+  **06:15–06:20 MT** every day (60 days on `JOBS_BY_PROJECT`, 0 failures). **The dump itself lands
+  earlier:** SessionM pushes 47 files to `gs://sessionm/prod_datadumps/<yyyy_mm_dd>/` starting at
+  **11:00:11 UTC** every day and finishes by **11:04–11:05 UTC** (object upload times checked with
+  `gcloud storage ls -l -r` on 12 days across 2026-08-10 → 09-04, zero variance). The files are
+  generated ~09:07–09:18 UTC (filename suffix; snapshot-table `etl_time` 02:37–02:44 MT) and shipped
+  on a fixed UTC schedule. So the earliest safe loader start is **~11:15 UTC** (05:15 MDT / 04:15
+  MST) — the current 06:15 MT leaves ~70 min of slack. Schedule the loader in **UTC** to match the
+  source; a Denver-time schedule drifts an hour against the dump at each DST change. The 04:02 reload fires
   *before* it, so yesterday's identity depends on the intraday runs reaching back one day:
   `when run_hour between 8 and 23 then run_date - 1` (steward change 2026-09-04). Cost is
   unchanged — 13.54 GiB for the two-day run vs 13.47 for today-only, because most sources are not

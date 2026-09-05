@@ -15,7 +15,7 @@ phone in SessionM whose Braze number is held by nobody — so t1 is production w
 |---|---|---|---|
 | t1_add | PUT Ashley `phone_numbers: []` | Ashley → [8015550100]; 19 real adds | all 20 users show exactly the one number — **PASSED 2026-09-04 (SM Sync job 90035, 34 s)** |
 | t2_replace | t1 verified | Ashley → [8015550101] | **PASSED 2026-09-04 (job 90037): replace.** Ashley = [8015550101] only → **replace**. If both numbers → **merge** → the 832 phase-2 replaces stay on the API |
-| t3_clear | t2 verified | Ashley → [] | Ashley empty → the 33K phase-1 removals can go by file. If unchanged → removals stay on the API |
+| t3_clear | t2 verified | Ashley → [] | **PASSED 2026-09-04 (job 90042).** Ashley empty → the 33K phase-1 removals can go by file. If unchanged → removals stay on the API |
 | t4_conflict | PUT Ashley [8015550102] via API; fill in the second test profile's external_id | second profile → [8015550102] | row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |
 
 Finish: PUT Ashley back to [8016689089] via the API. Mark the 19 real rows `succeeded` in the plan table (action_ids 34297–34319 range, listed in t1) once verified.

@@ -156,6 +156,11 @@ Two consequences:
 
 Plan rows for file 1 are `sent_smsync_file1_job90048` (not `succeeded`) until the full load check passes. File 2 is now **778,957 rows**.
 
+### File 1 full verification — 2026-09-05 12:20 MT ✅ 9,988 / 10,000
+All 10,000 file-1 users GET-checked against the live API (`scripts/verify_sample.ps1`, ~2 h sequential). **9,988 match exactly**; every drop-extras (18/18), conflict-holder (700/700) and SessionM-duplicate (555/555) removal landed. 12 mismatches: **10 are `user_not_found`** — all among the 30 users flagged with a privacy request, i.e. genuinely deleted in SessionM (the other 20 flagged users still exist and were updated, so not every privacy request is an erasure). **2 `junk_only` users still hold `9999999999`** (`0de07a7a…`, `fa425e48…`): both have two cafezupas ids, we keyed on a unique one, the importer reported no failure and did nothing visible. Open question whether it silently created a *new* user for that external_id — check the next good BQ load for new `users` rows carrying `1799484` / `2184236`, and for the 10 deleted users' ids. Plan statuses: 10,057 `succeeded`, 10 `user_deleted_in_sessionm`, 2 `file_row_not_applied_investigate`.
+
+**Mart verification was impossible today:** the SessionM loader ran at 03:50 MT Sat but rewrote every table with Thursday's data (row counts identical, `etl_time` still 2026-09-04 02:38) and left `privacy_requests` **empty**. Loader defect — the Cloud Run job needs a look before the mart can be trusted for file-2 verification. API GET sampling is the fallback.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

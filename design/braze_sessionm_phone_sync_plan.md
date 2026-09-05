@@ -121,6 +121,11 @@ Two observations for the worker: after a clear, SessionM echoes `phone_numbers: 
 
 `*_results.jsonl` files are gitignored: the raw PUT response is the full user object (email, name), which does not belong in the repo.
 
+### SMSync test t1 — 2026-09-04 21:33 MT ✅ (SM Sync job 90035, input file 92954, template 6)
+20-row `_user_update.csv` (Ashley + 19 real phase-3 adds), files in `artifacts/phone_sync/smsync_test/`. Job status `success`, file state `split`, no error; created 03:33:51 UTC, completed 03:34:25 — **34 s end to end for 20 rows**, all 20 profiles stamped `updated_at` 03:34:10–11. Verified by API GET on every row: exactly the one number each, `mobile` / `primary` / `verified_ownership=false` carried through. Logged as `batch_label = 'smsync_t1'`; the 19 real plan rows are `succeeded`.
+
+What t1 proves: the importer accepts our column shape, keys on `external_id` by default, and the **add** path (phase 3) works by file. Still open before the bulk drop: t2 (replace vs merge), t3 (`[]` clears?), t4 (conflict handling — needs a second profile Brent controls). The admin console at *Admin & Rights 2.0 → All SM Sync Jobs* answers the "is it done yet" question and shows a per-file `Error` column; whether per-**row** rejections surface there is what t4 will tell us.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

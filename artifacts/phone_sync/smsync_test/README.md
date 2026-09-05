@@ -13,7 +13,7 @@ phone in SessionM whose Braze number is held by nobody — so t1 is production w
 
 | File | Precondition (API, from the batch script pattern) | Row(s) | Passes if |
 |---|---|---|---|
-| t1_add | PUT Ashley `phone_numbers: []` | Ashley → [8015550100]; 19 real adds | all 20 users show exactly the one number |
+| t1_add | PUT Ashley `phone_numbers: []` | Ashley → [8015550100]; 19 real adds | all 20 users show exactly the one number — **PASSED 2026-09-04 (SM Sync job 90035, 34 s)** |
 | t2_replace | t1 verified | Ashley → [8015550101] | Ashley = [8015550101] only → **replace**. If both numbers → **merge** → the 832 phase-2 replaces stay on the API |
 | t3_clear | t2 verified | Ashley → [] | Ashley empty → the 33K phase-1 removals can go by file. If unchanged → removals stay on the API |
 | t4_conflict | PUT Ashley [8015550102] via API; fill in the second test profile's external_id | second profile → [8015550102] | row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |

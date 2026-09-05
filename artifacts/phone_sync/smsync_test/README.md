@@ -16,7 +16,7 @@ phone in SessionM whose Braze number is held by nobody — so t1 is production w
 | t1_add | PUT Ashley `phone_numbers: []` | Ashley → [8015550100]; 19 real adds | all 20 users show exactly the one number — **PASSED 2026-09-04 (SM Sync job 90035, 34 s)** |
 | t2_replace | t1 verified | Ashley → [8015550101] | **PASSED 2026-09-04 (job 90037): replace.** Ashley = [8015550101] only → **replace**. If both numbers → **merge** → the 832 phase-2 replaces stay on the API |
 | t3_clear | t2 verified | Ashley → [] | **PASSED 2026-09-04 (job 90042).** Ashley empty → the 33K phase-1 removals can go by file. If unchanged → removals stay on the API |
-| t4_conflict | PUT Ashley [8015550102] via API; fill in the second test profile's external_id | second profile → [8015550102] | row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |
+| t4_conflict | PUT Ashley [8015550102] via API (done 2026-09-04 23:10 MT); second profile = Brent, cafezupas external_id 6860889, SessionM user cf71462c-a91b-11ef-98b8-5bcaac110004, baseline phone [8016995272] | Brent → [8015550102] | row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |
 
 Finish: PUT Ashley back to [8016689089] via the API. Mark the 19 real rows `succeeded` in the plan table (action_ids 34297–34319 range, listed in t1) once verified.
 
@@ -35,3 +35,12 @@ Copy-Item .\artifacts\phone_sync\smsync_test\t1_add_user_update.csv ("new_{0}_{1
 ```
 Open question for SessionM: is the `api_key` in the filename the same v1 app key we use for the REST API, and
 where is the S3 drop / how are per-row rejections reported.
+
+## Finding from t1 (2026-09-04): `external_id` lookup resolves against ANY mapping
+The REST API's `user.external_id` returns the most recently updated mapping — for 708,169 of the 790,454 planned users
+that is an **amperity UUID**, not the cafezupas id Braze uses. 18 of t1's 19 real rows were such users and all 18
+landed when keyed on the cafezupas id, so SMSync (default `lookup_key = external_id`) matches on any
+`external_user_mappings` row. Keep keying files on the cafezupas id. (3,349 plan users have more than one cafezupas
+id — either works, but pick one deterministically: the plan uses the Braze winner's id.)
+
+After t4: restore Brent to [8016995272] and Ashley to [8016689089] via the API.

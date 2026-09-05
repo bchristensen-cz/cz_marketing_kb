@@ -16,7 +16,7 @@ phone in SessionM whose Braze number is held by nobody — so t1 is production w
 | t1_add | PUT Ashley `phone_numbers: []` | Ashley → [8015550100]; 19 real adds | all 20 users show exactly the one number — **PASSED 2026-09-04 (SM Sync job 90035, 34 s)** |
 | t2_replace | t1 verified | Ashley → [8015550101] | **PASSED 2026-09-04 (job 90037): replace.** Ashley = [8015550101] only → **replace**. If both numbers → **merge** → the 832 phase-2 replaces stay on the API |
 | t3_clear | t2 verified | Ashley → [] | **PASSED 2026-09-04 (job 90042).** Ashley empty → the 33K phase-1 removals can go by file. If unchanged → removals stay on the API |
-| t4_conflict | PUT Ashley [8015550102] via API (done 2026-09-04 23:10 MT); second profile = Brent, cafezupas external_id 6860889, SessionM user cf71462c-a91b-11ef-98b8-5bcaac110004, baseline phone [8016995272] | Brent → [8015550102] | row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |
+| t4_conflict | PUT Ashley [8015550102] via API (done 2026-09-04 23:10 MT); second profile = Brent, cafezupas external_id 6860889, SessionM user cf71462c-a91b-11ef-98b8-5bcaac110004, baseline phone [8016995272] | Brent → [8015550102] | **RESULT 2026-09-04 (job 90045): silent duplicate — both profiles held 8015550102, job success, no error. API PUT does the same (200).** Expected was: row rejected and reported. If the second profile GETs back with the number, or Ashley lost it, SMSync moves numbers silently — do **not** use it for anything but phase 3 |
 
 Finish: PUT Ashley back to [8016689089] via the API. Mark the 19 real rows `succeeded` in the plan table (action_ids 34297–34319 range, listed in t1) once verified.
 
@@ -43,4 +43,4 @@ landed when keyed on the cafezupas id, so SMSync (default `lookup_key = external
 `external_user_mappings` row. Keep keying files on the cafezupas id. (3,349 plan users have more than one cafezupas
 id — either works, but pick one deterministically: the plan uses the Braze winner's id.)
 
-After t4: restore Brent to [8016995272] and Ashley to [8016689089] via the API.
+After t4: Brent restored to [8016995272] and Ashley to [8016689089] via the API — done 2026-09-04 23:25 MT.

@@ -3,3 +3,5 @@ CLAUDE.md
 .env*
 artifacts/phone_sync/batches/*_results.jsonl
 artifacts/phone_sync/batches/file*_user_update.csv
+artifacts/phone_sync/batches/*_verify_sample*.csv
+artifacts/phone_sync/batches/*_result.txt

@@ -145,6 +145,17 @@ Brent's call after t4: since SessionM rejects nothing, phases buy no acceptance 
 
 File 1 built 2026-09-04 by paging the connector (3,000 rows/call); file 2 must be exported by Brent (`EXPORT DATA` to `gs://sessionm/phone_sync_exports/…` — the classifier blocks the automated session from writing customer phones to GCS). Files with customer numbers are gitignored. Verify each file by GET sample after the job, then the full check against the next morning's `user_phone_numbers` load before file 2 drops.
 
+### File 1 (pilot) — dropped 2026-09-04 23:52 MT ✅ with two findings
+SM Sync job **90048**, input file 92967, importer job 546884: **10,000 records, Num Failed 0, 100%**, 05:52:50 → 06:01:45 UTC = **8 min 55 s ≈ 19 rows/s** (file 2 at that rate ≈ 11.5 h). The expanded console view (Job → Input File → Importer Jobs) is where the per-row `Records Count` / `Num Failed` live — the job-level page hides them.
+
+GET sample of 138 users stratified across all six action types (`scripts/verify_sample.ps1`): **137 match**, every removal / replace / drop-extras case correct. The one miss is a **deleted user** — SessionM returns `user_not_found`, and `sessionM.privacy_requests` shows a completed deletion from 2025-03-14 — yet the importer counted it as neither failed nor errored.
+
+Two consequences:
+1. **Deleted users were in the plan.** The BigQuery `users` / `external_user_mappings` snapshots retain profiles SessionM has erased. 1,402 such users (1,401 completed + 1 in-progress request) were in file 2 → moved to `file_no = 0`, `status = 'held_out_privacy_request'`. 30 were already in file 1: **check tomorrow's load for any NEW user carrying their cafezupas external_id** — if the importer upserted, it resurrected erased profiles with a phone number and they must be deleted again. The build script now needs a `privacy_requests` exclusion.
+2. **`Num Failed` does not count unknown users** (nor, from t4, conflicts). It will catch malformed rows; it will not catch semantic problems. The BQ-load verification stays mandatory.
+
+Plan rows for file 1 are `sent_smsync_file1_job90048` (not `succeeded`) until the full load check passes. File 2 is now **778,957 rows**.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

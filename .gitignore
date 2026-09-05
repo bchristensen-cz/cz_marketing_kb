@@ -2,3 +2,4 @@ CLAUDE.md
 .env.local.gitignore
 .env*
 artifacts/phone_sync/batches/*_results.jsonl
+artifacts/phone_sync/batches/file*_user_update.csv

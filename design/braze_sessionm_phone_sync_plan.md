@@ -135,6 +135,16 @@ Consequences:
 
 Also learned: the REST `user.external_id` returns the most recently updated mapping (an **amperity UUID** for 708,169 of 790,454 plan users); SMSync resolves `external_id` against **any** mapping (18 of t1's 19 real users were amperity-latest and all landed on the cafezupas id). Files stay keyed on the cafezupas id. The admin console at *Admin & Rights 2.0 → All SM Sync Jobs* answers the "is it done yet" question and shows a per-file `Error` column; whether per-**row** rejections surface there is what t4 will tell us.
 
+### Bulk delivery — decided 2026-09-04 23:40 MT: two SMSync files, no phasing
+Brent's call after t4: since SessionM rejects nothing, phases buy no acceptance benefit. `scratch.sessionm_phone_sync_file` holds one row per planned user with the cafezupas `external_id` to key on and the final `phone_numbers` JSON. Keying rule: the Braze winner's id when it maps to exactly one SessionM user, else the user's lowest cafezupas id that does; **95 users have no unambiguous id (13 none, 82 shared) — `file_no = 0`, held out for API-by-user_id later.**
+
+| file_no | Rows | Contents |
+|---|---|---|
+| 1 (pilot) | 10,000 | stratified: 700 junk-only + 700 conflict-holder + 555 SM-duplicate removals, all 830 replaces, 18 drop-extras, 7,197 adds |
+| 2 | 780,359 | everything else (748,984 adds, 25,812 conflict-holder removals, 5,575 junk-only) |
+
+File 1 built 2026-09-04 by paging the connector (3,000 rows/call); file 2 must be exported by Brent (`EXPORT DATA` to `gs://sessionm/phone_sync_exports/…` — the classifier blocks the automated session from writing customer phones to GCS). Files with customer numbers are gitignored. Verify each file by GET sample after the job, then the full check against the next morning's `user_phone_numbers` load before file 2 drops.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

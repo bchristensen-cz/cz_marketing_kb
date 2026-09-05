@@ -114,6 +114,13 @@ The conflict-holder count is larger than §3's 12,090 because it also includes h
 ### Integrity checks (all passed 2026-09-04)
 Final state has **0** phones on more than one user, **0** junk numbers, **0** adds whose current holder is not scheduled to release the number in an earlier phase, and **0** users left holding more than one phone.
 
+### Batch 001 — first live run, 2026-09-04 19:38 MT ✅
+50 phase-1 `junk_only` users (all `[9999999999]` → `[]`), run by Brent from `scripts/sessionm_phone_sync_batch.ps1`. Dry run first (GET-only): 50/50 still matched the plan snapshot, no drift. Live: **50/50 succeeded, 0 stale, 0 failed, 22.9 s sequential**. Timings from the response log: GET avg 152 ms (max 392), PUT avg 300 ms (max 381), no throttling signs. Results loaded to `scratch.sessionm_phone_sync_log` (`batch_label = 'batch_001'`) and the 50 plan rows set to `succeeded`.
+
+Two observations for the worker: after a clear, SessionM echoes `phone_numbers: null`, not `[]` — compare as empty, not literally. And a sequential worker doing GET+PUT runs at ~2.2 users/s; PUT-only would be ~3.3/s. Extrapolated single-threaded: phase 1+2 (~34K) ≈ 3–4 h, phase 3 (756K) ≈ 63 h. Concurrency is the lever — test 4 and 8 parallel workers on batch 002 and watch for 429s.
+
+`*_results.jsonl` files are gitignored: the raw PUT response is the full user object (email, name), which does not belong in the repo.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

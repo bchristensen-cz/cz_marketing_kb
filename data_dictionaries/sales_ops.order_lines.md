@@ -1,5 +1,7 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.order_lines`
 
+> **✅ 2026-09-08 — built by the chained scheduled query.** Since 17:02 MT this table is section 2 of `sql/sales_ops.order_marts.sql`, running *after* `order_customer` commits in the same job, on the same `start_date`: **5am = full history from 2018-08-07**, 8am–11pm = today only, hours 0–4 / 6–7 skip. The 2026-08-25 read-mid-rebuild collision below is structurally impossible now (`order_lines` reads the committed `order_customer` sequentially). `sql/sales_ops.order_lines.sql` is a retired pointer. Only change to the section vs the 2026-08-27 standalone text: the `declare`/`set start_date` header is gone (shared) and the `delete`+`insert` sits in its own transaction.
+
 **One row per order line element** — items, modifiers, fees, tips, discounts, gift cards, promotions, surcharges. This is the canonical table for product/menu-mix, item counts, modifier analysis, and combo composition. For order-level sales, use `sales_ops.order_customer` instead.
 
 > # 🚨 STALE — DO NOT REPORT RECENT ITEM NUMBERS FROM THIS TABLE (found 2026-08-25)

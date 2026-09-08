@@ -601,7 +601,9 @@ order by
 
 ## Refresh & cost
 
-Same schedule as `order_customer`, widened windows (steward 2026-08-15):
+> **✅ 2026-09-08 — one job, one window.** Since 17:02 MT the base table is section 3 of the chained scheduled query `sql/sales_ops.order_marts.sql`, built right after `order_lines` commits, on the same `start_date`: **5am = full history from 2018-08-07**, 8am–11pm = today only, hours 0–4 / 6–7 skip. The 120 / 380 / 730-day table below is history — and so is the "65% of the table is never refreshed" gotcha above once the first 5am run lands on 2026-09-09 (verify: `min(business_date)` partitions get a fresh `last_modified`). `sql/sales_ops.order_line_discount_detail.sql` is a retired pointer. One small logic change shipped with the chaining: `root_offer_id` is now `coalesce(odr.root_offer_id, od.root_offer_id, upper(pd.sessionM_root_offer_id))` — the Pulse-side id is upper-cased and the `offer_detail` join on the Pulse user-offer id is consulted before it.
+
+Same schedule as `order_customer`, widened windows (steward 2026-08-15) — **superseded 2026-09-08, kept for history:**
 
 | Run | Reload window | Scan |
 |---|---|---|

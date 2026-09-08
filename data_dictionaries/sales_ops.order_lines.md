@@ -138,6 +138,7 @@
 | `qty` | **Derived**: `round(item_gross_sales / price)`, floored at 1. Approximate — wrong when price is 0/missing or item was price-overridden. Good for menu-mix counts on `line_item_type='item'`. |
 
 ## Gotchas
+- **`'Kids Meals'` lives in two columns with two populations** (observed 2026-09-05/07 — analyst used one, steward the other). `rev_center_name = 'Kids Meals'` is the Brink menu category (every kids item). `item_type = 'Kids Meals'` is the closed-domain rollup and holds **only `Kids Combo`** — the build (`sql/sales_ops.order_lines.sql` lines 338–339) sends every other kids-rev-center item to `Entree`. "Kids menu sales" → `rev_center_name`; "Kids Combo" → `item_type` or `item_name`. State which one the answer used.
 - **Always filter `business_date`** (partition). Cluster fields (`rev_center_name`, `item_name`, parent fields) make filters on them cheap.
 - **Item counts**: filter `line_item_type = 'item'` — otherwise modifiers/fees inflate counts ~2x.
 - **Order-level sales**: use `order_customer` — gross = `gross_sales`, net = calculated `gross_sales - total_discount_amount - total_promotions_amount` (the `net_sales` column is validation-only). Line-level sums won't exactly reconcile to order-level (order-level discounts, rounding).

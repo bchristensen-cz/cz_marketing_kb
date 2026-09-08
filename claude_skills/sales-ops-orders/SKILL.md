@@ -1802,19 +1802,22 @@ group by 1, 2
 order by 1, 2
 ```
 
-**Identified customer counts (person only):**
+**Identified customer counts (person only):** *(rewritten 2026-09-08 — `mapped_cust_id` and `customer_type` now live on `order_sequence`; on `claude.order_customer` they are still exposed directly and the join is unnecessary)*
 ```sql
 select
 date_trunc(oc.business_date, month) as month
-, count(distinct oc.mapped_cust_id) as customers
+, count(distinct os.mapped_cust_id) as customers
 , count(*) as orders
 , round(sum(oc.net_sales), 2) as net_sales
 from `marketing-data-442316`.sales_ops.order_customer oc
+	join `marketing-data-442316`.sales_ops.order_sequence os
+	on os.brink_order_id = oc.brink_order_id
+	and os.business_date = oc.business_date
 where 1=1
 and oc.business_date >= date_sub(current_date('America/Denver'), interval 365 day)
-and oc.store_id <> 1111
-and oc.mapped_cust_id is not null
-and oc.customer_type = 'person'
+and os.business_date >= date_sub(current_date('America/Denver'), interval 365 day)
+and oc.store_id not in (1111, 999)
+and os.customer_type = 'person'
 group by 1
 order by 1
 ```
@@ -2172,12 +2175,15 @@ select
 oc.business_date
 , count(*) as all_orders
 , countif(oc.sm_external_user_id is not null) as sm_linked
-, countif(oc.customer_type = 'person') as person_orders
+, countif(os.customer_type = 'person') as person_orders  -- 2026-09-08: customer_type moved to order_sequence
 , round(100 * countif(oc.sm_external_user_id is not null) / count(*), 1) as pct_sm_linked
 from `marketing-data-442316`.sales_ops.order_customer oc
+	left join `marketing-data-442316`.sales_ops.order_sequence os
+	on os.brink_order_id = oc.brink_order_id
+	and os.business_date = oc.business_date
 where 1=1
 and oc.business_date >= date_sub(current_date('America/Denver'), interval 14 day)
-and oc.store_id <> 1111
+and oc.store_id not in (1111, 999)
 group by 1
 order by 1
 ```

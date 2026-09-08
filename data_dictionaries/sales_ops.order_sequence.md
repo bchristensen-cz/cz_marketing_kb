@@ -1,5 +1,9 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.order_sequence`
 
+> # 🔁 Redefined 2026-09-08 — this table now OWNS customer identity
+>
+> With the 2026-09-08 16:16 MT rebuild, `mapped_cust_id`, `mapped_email`, `mapped_email_domain` and `customer_type` **left `sales_ops.order_customer` and are computed here**, and `mapped_cust_id` itself changed definition: it is no longer `coalesce(pulse_customer_id, sm_external_user_id)` but a seven-branch coalesce that routes each order through the new `sales_ops.cust_map` email→account table (see Columns). Anything keyed on the old `mapped_cust_id` (`customer_attribute`, Braze external ids, cohorts saved before 2026-09-08) will re-key for some customers. Rebuilt in full on every run of the chained query `sql/sales_ops.order_marts.sql`, so history is always on the newest definition. Now **8 columns** (the "exactly six columns" note below is from 2026-07-29).
+
 **One row per order that has a `mapped_cust_id`.** Customer order sequencing and recency. Split out of `sales_ops.order_customer` on 2026-07-24 so the window functions are computed over **full history on every run** instead of being scoped to the reload window.
 
 Use this table for anything involving *where an order sits in a customer's history*: first-time vs repeat, order frequency, recency gaps, lifetime order counts, cohorts.
@@ -12,9 +16,9 @@ Use this table for anything involving *where an order sits in a customer's histo
 | Row count | ~10.5M rows, earliest `business_date` **2023-03-06** (see Gotchas) |
 | Partitioned by | `business_date` (DAY) — **always filter on it** |
 | Clustered by | `brink_order_id`, `mapped_cust_id` |
-| Refresh | `create or replace` in full on **every run** of the `order_customer` scheduled query — same schedule, same skipped hours (0–3, 5–7 MT). Cost measured 2026-07-24: ~420 MB scanned, ~97 slot-seconds per run. |
-| Source build script | `sql/sales_ops.order_customer.sql` (second statement) |
-| Upstream | `sales_ops.order_customer` only |
+| Refresh | `create or replace` in full on **every run** of the chained order-marts scheduled query (statement 2, right after `order_customer` commits) — hourly at :02, 5am full refresh, 8am–11pm intraday, hours 0–4 / 6–7 skip. Since 2026-09-08 also reads `sales_ops.cust_map` (rebuilt daily 04:00 MT) and `pulse.customers`. Cost measured 2026-07-24: ~420 MB scanned, ~97 slot-seconds per run (pre-rework). |
+| Source build script | `sql/sales_ops.order_marts.sql` (statement 2, after the `order_customer` transaction) |
+| Upstream | `sales_ops.order_customer`, `sales_ops.cust_map` (2026-09-08), `pulse.customers` (2026-09-08, for `mapped_email` / `customer_type`) |
 
 ## Columns
 
@@ -22,8 +26,10 @@ Use this table for anything involving *where an order sits in a customer's histo
 |---|---|---|
 | `brink_order_id` | INTEGER | Join key to `order_customer` and `order_lines`. |
 | `business_date` | DATE | Copied from `order_customer` (partition column). |
-| `mapped_cust_id` | INTEGER | Canonical customer key. Never NULL in this table. |
-| `customer_type` | STRING | Copied from `order_customer` — `person`, `kiosk`, `internal`, `aggregator`. **Added 2026-07-27** so callers can filter here instead of joining back. Order-level, so it can vary across one customer's rows. |
+| `mapped_cust_id` | INTEGER | Canonical customer key. Never NULL in this table. **Redefined 2026-09-08** as the first non-null of, in order (all flags from `order_customer`, `m` = `cust_map` joined on the ORDER `email`, `ms` = `cust_map` joined on `sm_email`): (1) `pulse_customer_id` when `is_sys_order_email = 0 and is_sys_acct_email = 0 and acct_email is not null` — a real account with a real order email; (2) `coalesce(pulse_customer_id, sm_external_user_id)` when `is_catering`; (3) `m.max_acct_id` when `is_guest_order` — a guest checkout is attributed to the highest pulse customer id ever seen with that order email; (4) `pulse_customer_id` when both order and account emails are system addresses (kiosk / checkmate order on a kiosk / checkmate account); (5) `coalesce(m.final_acct_id, m.max_acct_id)` when the order email is a person's but the account is a system account and `email is not null`; (6) `ms.final_acct_id` via the SessionM email; (7) `sm_external_user_id`. Orders resolving to NULL (third-party aggregator orders with a `guest.doordash.com` / `itsacheckmate.com` order email and no loyalty scan, most notably) have **no row here**. Steward intent per branch and the measured shift vs the old definition are not yet written up — see the CLAUDE.md backlog. |
+| `mapped_email` | STRING | **Moved here 2026-09-08.** `lower(coalesce(pulse.customers.email for mapped_cust_id, order_customer.email))`. Canonical when the mapped customer has an account email; otherwise the user-typed order email (same caveat as the 2026-08-24 note in the `order_customer` dictionary). |
+| `mapped_email_domain` | STRING | **Moved here 2026-09-08.** `split(mapped_email, '@')[safe_offset(1)]`. |
+| `customer_type` | STRING | **Computed here since 2026-09-08** (was copied from `order_customer`) from `coalesce(pulse.customers.email, order email)`: `kiosk` = `%outdoor%@cafezupas.com`; `aggregator` = `%ezcater%@zupas.com` or `checkmate_user@cafezupas.com`; `internal` = `@cafezupas.com`, `@tkxel.com`, `@tkxel.io`; else `person`. **`%doordash.com` and `%itsacheckmate.com` no longer classify as `aggregator`** — those orders are gated out of `mapped_cust_id` upstream by `is_sys_order_email` and mostly never reach this table. Order-level, so it can vary across one customer's rows. **Added 2026-07-27** so callers can filter here instead of joining back. |
 | `customer_order_count` | INTEGER | Sequential order number for this customer, 1 = first order. Ordered by `order_datetime`, tie-broken by `brink_order_id`. Computed across **all** the customer's orders, not just person ones. **Renamed from `order_count`.** |
 | `days_since_prev_order` | INTEGER | Days between this order's `business_date` and the customer's previous order (any type). NULL on the first order. |
 

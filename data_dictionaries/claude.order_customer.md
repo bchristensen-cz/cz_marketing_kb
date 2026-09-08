@@ -7,11 +7,13 @@
 | Type | **View** (not materialized) |
 | Grain | 1 row per order (`brink_order_id`) |
 | Partition column | **`business_date`** — always filter it |
-| Upstream | `sales_ops.order_customer` (base) + `sales_ops.order_sequence` + `sales_ops.customer_attribute` + `claude.loyalty_user` (a table since 2026-09-01, refreshed daily 04:30 MT — so `account_type` lags SessionM by up to a day, like the `lifetime_*` columns) |
+| Upstream | `sales_ops.order_customer` (base) + `sales_ops.order_sequence` (**since 2026-09-08 also the source of `mapped_cust_id`, `mapped_email`, `mapped_email_domain`, `customer_type`, and the join key for the next two**) + `sales_ops.customer_attribute` + `claude.loyalty_user` (a table since 2026-09-01, refreshed daily 04:30 MT — so `account_type` lags SessionM by up to a day, like the `lifetime_*` columns) |
 | Build script | `sql/claude.order_customer.sql` |
 | History | **2023-01-01 forward** (rolling 3 years — see below) |
 | Created | 2026-07-29 |
 
+> **🚨 Outage 2026-09-08 16:16 → ~16:55 MT.** The base table was dropped and rebuilt without `mapped_cust_id`; this view joined on `oc.mapped_cust_id`, so every query failed with `Name mapped_cust_id not found inside oc` for ~40 minutes. Redeployed keying the `customer_attribute` and `loyalty_user` joins on `os.mapped_cust_id` and re-exposing the four identity columns from `order_sequence`. **Column list unchanged for you** — but `mapped_cust_id` changed *definition* that day (see `sales_ops.order_sequence.md`), so customer counts and cohorts computed before and after 2026-09-08 are not strictly comparable. `lifetime_*` and `account_type` re-key at the 05:00 `customer_attribute` run on 2026-09-09 — until then a few percent of person orders show `lifetime_order_count = 0` (21 of 4,836 on 2026-09-07 at 16:55).
+>
 > **This is the table most people should be querying.** Standard access is `dataViewer` on the `claude` dataset only; `sales_ops.order_customer` returns `Access Denied` for everyone except the steward. If you have `sales_ops` access, read `sales_ops.order_customer.md` instead — the two are **not** interchangeable, for the three reasons below.
 
 ---

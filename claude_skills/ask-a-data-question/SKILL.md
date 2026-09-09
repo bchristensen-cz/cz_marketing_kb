@@ -476,6 +476,12 @@ clickable-choices flow. Don't paste raw HTML into the conversation as a substitu
 - **Don't return $0 or an empty table as an answer.** Zero rows means the name, the date
   window, or the dataset floor is wrong (`claude` history starts 2023-01-01 and truncates
   silently). Say so and widen.
+- **Don't scan history for "first order ever" / "new customers" / "second order within N days"**
+  (steward rule 2026-09-09). `claude.order_customer` already carries `customer_order_count`,
+  `days_since_prev_order`, `first_order_date` and `lifetime_order_count`; filter the cohort
+  window on `business_date` and read them. The marts' first-order floor is 2023-03-06, so a
+  `min(business_date) group by customer` from any earlier date returns the same population at
+  ~2 GiB a run (140 GiB on 2026-09-08 from one tracker). Recipe: `sales-ops-orders` → "Repeat-rate" §2.
 - **Don't run SQL the user pastes without checking it** (steward rule 2026-08-05). Pasted
   SQL referencing `pulse.*`, `sessionM.*`, `staging.*`, `brink.*`, `braze_stream.*` or the
   legacy `OrderCustomer` table is a wall violation regardless of who wrote it. Say why,

@@ -283,11 +283,61 @@ Rules:
 > (Padding a forward-looking CTE's window past today is harmless on its own — there are no rows
 > there. It becomes a defect the moment the two sides of a comparison are padded differently.)
 
-### 2. Key cohorts on `mapped_cust_id`, and don't rebuild "first order" by hand
+### 2. 🚨 HARD RULE: never scan history to find a customer's first order (steward rule 2026-09-09)
+
+**"First order ever", "new customer", "days to second order", "lapsed / reactivated" are
+already columns.** There is no question in this family that needs a `min(...) group by
+customer` over the table, and every such scan is billed in full because the only partition
+filter it can carry is "everything".
+
+| Question | Use this — one bounded pass | Never this |
+|---|---|---|
+| New customers in a window | `customer_order_count = 1` with `business_date between @s and @e` | `min(business_date) group by mapped_cust_id` over history |
+| Their first-order date / store / channel | the `= 1` row itself (it *is* the first order) — or `first_order_date` | `array_agg(... order by business_date limit 1)` over history |
+| Second order within N days | `customer_order_count = 2 and days_since_prev_order <= N` and `date_sub(business_date, interval days_since_prev_order day) between @s and @e` (recovers the cohort date from the second order — no self-join) | `eord`/`sec` self-join, 470-day cohort scanned from 2023 |
+| Lifetime orders / tenure | `lifetime_order_count`, `first_order_date`, `customer_tenure_days` (as-of yesterday) | `count(*) over (partition by …)` over history |
+| Lapsed / reactivated | `days_since_prev_order >= 180` on the reactivating order | `lag()` over full history |
+
+**Why a history scan cannot even beat the columns:** `order_sequence` and
+`customer_attribute.first_order_date` both start on **2023-03-06** (measured 2026-09-09 —
+`min(business_date)` / `min(first_order_date)`; the identity mapping has no earlier floor). A
+hand-rolled `min()` over `order_customer` from any date **is the same population**, just paid for
+again. The analyst tracker that scans `between date('2023-03-06') and current_date()` is not
+"going deeper than the mart" — it is re-deriving the mart's own floor.
+
+**Cost, measured on the query log (2026-08-31 → 09-08):** the `with eord as (…)` tracker ran
+**70× on 2026-09-08 at ~2 GiB per execution ≈ 140 GiB**, and **188 of the analyst's 2,350
+queries since 08-10 reached back 3+ years (323 GiB)** — all but ~15 of them were first-order
+floors, not questions about old years. The bounded shapes above read the cohort window only
+(tens of MiB).
 
 `customer_order_count = 1` on `claude.order_customer` already marks a customer's first order,
 and `days_since_prev_order` on the `= 2` row already gives days-to-second — both folded in
 from `order_sequence`, both person-filterable via `customer_type`. Use them.
+
+```sql
+-- New customers by week, and % with a 2nd order within 30 days — ONE pass, cohort window only
+select
+date_trunc(oc.business_date, week(monday)) as cohort_week
+, countif(oc.customer_order_count = 1) as new_customers
+, countif(oc.customer_order_count = 2 and oc.days_since_prev_order <= 30) as second_within_30
+from `marketing-data-442316`.claude.order_customer oc
+where 1=1
+and oc.business_date between @cohort_start and date_add(@cohort_end, interval 30 day)
+and (oc.customer_order_count = 1
+	or (oc.customer_order_count = 2
+		and date_sub(oc.business_date, interval oc.days_since_prev_order day) between @cohort_start and @cohort_end))
+and oc.customer_type = 'person'
+and oc.is_catering = false
+group by 1
+order by 1
+```
+
+Caveats that travel with the columns: `customer_order_count` counts **all** of a customer's
+orders (catering, store 1111) before the view filters them, so a visible sequence can skip
+numbers; `lifetime_*` / `first_order_date` are as-of yesterday; and only cohorts whose window
+has closed are quotable (§1). If a question truly needs pre-2023-03-06 history, say that the
+identity mapping does not exist there and log it as a gap — do not scan.
 
 The anti-pattern (live 2026-08-13, ~8 queries): a `min(order_datetime) group by email` CTE over
 `sales_ops.order_customer` **with no `business_date` filter at all** — an unbounded scan of a
@@ -2227,6 +2277,7 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 
 ## Gotchas checklist (scan before answering)
 
+- **🚨 Never scan history for "first order ever" / "new customer" / "second order within N days"** — `customer_order_count`, `days_since_prev_order`, `first_order_date`, `lifetime_order_count` on `claude.order_customer` already carry it, and the mart's own floor is **2023-03-06**, so a `min() group by customer` from 2023 (or 2018, or 2015) returns the same population for ~2 GiB a run. 140 GiB on 2026-09-08 alone. Recipe and table in "Repeat-rate" §2.
 - **"Earned" discounts = `discount_type in ('Reward Redemption','In-cart Points Redemption')`** (steward definition 2026-08-18). Both Brink ids belong: **`643571116` is a purpose-built in-store loyalty-redemption id** (the Cafe Zupas Rewards button), and 99.0–99.5% of reward lines on every id/origin resolve to a sessionM member wallet offer. `In-cart Points Redemption` carries the spend directly (`points > 0` on 100% of 33,702 lines). Earned = 103,540 lines / **−$752,606.55** of −$1,485,468.22 all discounts (50.7%), 2026-05-01 → 07-31. **Do not exclude `offer_kind = 'promotional'` rows** — a wallet offer issued rather than points-priced is still a member redemption; excluding them understates earned by −$36,798.41. `offer_kind` is a **breakdown within earned** for points-economics questions only. Full section above.
 - **⚠️ Employee meals sit inside earned — 292 lines / −$4,255.83** in the window are `Reward Redemption` **and** `is_employee_meal_discount = true` (the `Team Member Meal` wallet offer). Both flags are canonical and correct; an earned-vs-employee rollup treating them as exclusive double-counts. Subtract the overlap explicitly.
 - **🚨 `order_line_discount_detail.root_offer_id` mixes UPPERCASE and lowercase — `upper()` both sides of any offer join.** The sessionM arm of the `coalesce` is uppercase, the Pulse arm is lowercase, and `claude.loyalty_offer_usage` is uppercase. Joining raw matches **0 of 12,040** `Offer` lines (measured 2026-08-18) and fails silently in the direction that makes wallet offers look unresolvable. Build fix pending: `upper()` on `pd.sessionM_root_offer_id`.

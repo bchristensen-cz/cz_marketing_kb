@@ -2203,24 +2203,25 @@ order by 1
 Healthy is **~28–33%**. Under 15% on a **completed** day means that date is corrupted — **say so
 in the answer and exclude or caveat those dates** rather than reporting the number as-is.
 
-> ### 🔑 Exclude today — SessionM loads once per day at 06:15 MT; yesterday is complete from ~07:02
+> ### 🔑 Exclude today — SessionM merges once per day at 04:07 MT; yesterday is complete from the 05:02 rebuild
 >
-> **Today's date will always read ~0.5–2% and that is normal.** The bucket → BigQuery loader
-> (`bigquery-loader-sa`, 15 merges into `sessionM.*`) runs at **06:15–06:20 MT** every day
-> (verified on `JOBS_BY_PROJECT`, 60 days, 0 failures). `order_customer`'s intraday runs reload
-> **yesterday + today** (`run_date - 1`, changed 2026-09-04), so yesterday snaps from ~0.5% to
-> ~30% at the **07:02** run. Between 2026-08-26 and 2026-09-04 the intraday window was today-only
-> and yesterday stayed at ~0.5% until D+2 04:02 — if you see that pattern again, the deployed
-> script has regressed; check the job text on `JOBS_BY_PROJECT`.
+> **Today's date will always read ~0–2% `pct_sm_linked` and that is normal.** SessionM ingestion
+> is three scheduled steps — S3→GCS transfer 03:45, GCS→`staging.sm_*` loader 03:55,
+> `staging`→`sessionM.*` merge **04:07** (all MT; re-sequenced 2026-09-08/09) — followed by
+> `claude.loyalty_user` 04:30, the **full-history `order_customer` + `order_sequence` rebuild at
+> 05:02**, and `customer_attribute` 05:20. Yesterday therefore has its ~30% loyalty identity from
+> ~05:10 MT; the hourly intraday runs (08:02–23:02) reload **today only**.
 >
 > - **Never apply the 15% rule to the current business date** — guaranteed false positive.
->   Yesterday is fair game after ~07:15 MT.
+>   Yesterday is fair game after ~05:15 MT.
 > - **Never answer a customer-grain question about today.** Customer counts, `mapped_cust_id`,
 >   first-time vs repeat, `in_store_scan`, and anything from `order_sequence` /
 >   `customer_attribute` are ~98% under-identified for today. Answer through yesterday and say why.
-> - **`customer_attribute` (05:00, `attribute_asof_date = run_date - 1`) and `claude.loyalty_user`
->   (04:30) still run before the 06:15 loader**, so `customer_attribute`'s newest day is built on
->   an under-identified date. Open item (2026-09-04).
+> - **If yesterday reads under 15% after 05:15 MT**, the three SessionM steps have probably fallen
+>   out of order (it happened 2026-09-05 → 09-08: merge before loader, `sessionM.*` one day stale,
+>   yesterday at 0.0%). Check `LOAD` vs `MERGE` times for `bigquery-loader-sa` on
+>   `JOBS_BY_PROJECT` before blaming the order_customer script — full write-up in
+>   `data_dictionaries/sales_ops.order_customer.md` § "SessionM loads once per day".
 > - **Sales, order counts and channel mix for today are fine** — those come from Brink, which
 >   loads intraday every hour.
 

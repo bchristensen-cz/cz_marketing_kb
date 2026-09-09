@@ -31,7 +31,11 @@ select
 , oc.is_guest_order
 , oc.mapped_email
 , oc.mapped_email_domain
-from `marketing-data-442316`.sales_ops.order_customer oc
+-- 2026-09-08: reads the claude.order_customer VIEW, not the sales_ops table. The identity rework
+-- moved mapped_cust_id / customer_type off sales_ops.order_customer onto sales_ops.order_sequence;
+-- the view joins them back (and excludes stores 1111/999, which the filter below repeats).
+-- Scheduled 05:20 MT, after the 05:02 order_customer + order_sequence full rebuild.
+from `marketing-data-442316`.claude.order_customer oc
 where 1=1
 and oc.business_date between history_start and asof_date
 and oc.store_id not in (1111, 999)

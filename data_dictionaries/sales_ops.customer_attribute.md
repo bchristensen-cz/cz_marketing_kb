@@ -29,10 +29,10 @@ Two consumers:
 | Row count | **1,375,117** · 687 MB (build of 2026-07-29) |
 | Partitioned by | none — it's a ~1.4M-row dimension, partitioning buys nothing |
 | Clustered by | `mapped_cust_id` |
-| Refresh | **Daily at 5am MT**, full `create or replace`. Deliberately after the 4am `order_customer` reload — see Gotchas. |
+| Refresh | **Daily at 05:20 MT** (moved from 05:00 on 2026-09-08), full `create or replace`. Deliberately after the **05:02** `order_customer` + `order_sequence` full rebuild, which itself follows the 04:07 SessionM merge — see Gotchas and `sales_ops.order_customer.md` § "SessionM loads once per day". |
 | Cost | ~3.8 GB scanned / ~985 slot-seconds per run ≈ $0.019/run |
 | Source build script | `sql/sales_ops.customer_attribute.sql` |
-| Upstream | `sales_ops.order_customer` **only** |
+| Upstream | `claude.order_customer` (the view) since 2026-09-08 — it supplies `mapped_cust_id` / `customer_type` from `sales_ops.order_sequence` after the identity rework moved those columns off `sales_ops.order_customer`. Before 2026-09-08: `sales_ops.order_customer` only. |
 
 ## Why full rebuild, not MERGE
 
@@ -52,6 +52,14 @@ no downstream filter could unwind it. Filtering *after* aggregation doesn't renu
 filtering *before* does. Same principle, opposite conclusion, because the grain differs.
 
 ## Why it's built from `order_customer`, not `order_sequence`
+
+> **2026-09-08 update.** `mapped_cust_id` and `customer_type` moved from `sales_ops.order_customer` to
+> `sales_ops.order_sequence`, so the build now reads **`claude.order_customer`**, the view that joins the
+> two (and `loyalty_user`, and this table itself — a self-reference that is fine in a `create or replace`
+> because the view reads the previous snapshot). The reasoning below about *why order_sequence alone is
+> not enough* still holds; the base is just the joined view now. Refresh moved to 05:20 MT so it runs after
+> the 05:02 full rebuild of both tables. First run on the new chain: 2026-09-09 05:20, `attribute_asof_date`
+> 2026-09-08, 1,331,693 rows.
 
 `order_sequence` is the intuitive base — it already holds `lifetime_customer_order_count` —
 but it doesn't work here:

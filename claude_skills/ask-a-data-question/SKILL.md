@@ -89,7 +89,7 @@ about bowls (see below) teaches the user that the clarifications are noise.
 | "delivery" | see the delivery rule below — default is `oc.destination = 'CZ Delivery'`; the third-party marketplaces are a different question |
 | a category | `select distinct ol.rev_center_name` / `ol.item_type` on the date range |
 | a campaign | the Braze / SessionM lookup in the relevant skill |
-| a fuzzy date ("last week", "May") | resolve to explicit dates; business week is **Mon–Sat** |
+| a fuzzy date ("last week", "May") | resolve to explicit dates; the reporting week is **Mon–Sun, labelled by its Sunday** (`last_day(d, week(monday))`); trading is Mon–Sat |
 | "period", "P8", "fiscal year/quarter", a holiday | `claude.date_dim` via the **`date-dimensions`** skill — resolve the fiscal window to explicit dates first. "Quarter"/"year" alone is a fork: calendar vs fiscal disagree near year-end |
 
 ### Size lives in `item_size`, never in `item_name` (steward rule 2026-08-27)
@@ -422,7 +422,7 @@ What it covers:
 | | |
 |---|---|
 | **Items** | optional — search resolves names against live data; leave empty for all items |
-| **Time grain** | none / week ending (Saturday) / day / month / quarter / year, with snap-to-whole-weeks |
+| **Time grain** | none / week ending (Sunday) / day / month / quarter / year, with snap-to-whole-weeks |
 | **Break out by** | any combination, in the order clicked: market, store, item, item category, menu section, menu group, item size, catering, sale shape |
 | **Filters** | catering (exclude / include / only) and combo handling (all / alone / in-combo) — **independent of** whether either is broken out |
 | **Measures** | units (default), orders, item gross sales, item net sales — multi-select, each with its warning |

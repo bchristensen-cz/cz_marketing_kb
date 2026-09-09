@@ -597,8 +597,8 @@ number or get told exactly how their numbers differ.
 State them and you'll usually get a number on the first pass.
 
 1. **Dates.** Always explicit. "May" is ambiguous (this May? fiscal?). Say
-   `2026-05-01 to 2026-05-31`. Note that the business week runs **Monday–Saturday** here, so
-   "last week" is not what your calendar app means.
+   `2026-05-01 to 2026-05-31`. Note that stores trade **Monday–Saturday** and the reporting week is
+   **Monday–Sunday, labelled by its Sunday** ("week ending"), so "last week" may not be what your calendar app means.
 2. **Catering — in or out.** Catering trays carry the same item names as retail items at wildly
    different volumes and prices. Leaving this unsaid silently changes item answers.
 3. **Try 2 Combos** — on any soup, sandwich, or salad question. Say whether you want standalone

@@ -92,7 +92,7 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
     <div><label>To</label><input type="date" id="d2" value="2026-06-27"></div>
     <div><label>Time grain</label><select id="grain">
       <option value="none">No time breakout &mdash; one total for the range</option>
-      <option value="week">Week ending (Saturday)</option>
+      <option value="week">Week ending (Sunday)</option>
       <option value="day">Day</option>
       <option value="month">Month</option>
       <option value="quarter">Quarter</option>
@@ -234,7 +234,7 @@ const ATTRS=[
 const GRAINS={
   none:null,
   day:    {sql:'ol.business_date', as:'business_date', label:'day'},
-  week:   {sql:'date_trunc(ol.business_date, week(sunday)) + 6', as:'week_ending', label:'week ending'},
+  week:   {sql:'last_day(ol.business_date, week(monday))', as:'week_ending', label:'week ending'},
   month:  {sql:'date_trunc(ol.business_date, month)', as:'month', label:'month'},
   quarter:{sql:'date_trunc(ol.business_date, quarter)', as:'quarter', label:'quarter'},
   year:   {sql:'date_trunc(ol.business_date, year)', as:'year', label:'year'},
@@ -270,14 +270,14 @@ async function bq(sql){
 }
 
 // ---- date helpers ---------------------------------------------------------
-// Week runs Sunday-start so that week_ending is always the Saturday on or AFTER the
-// business date. Cafe Zupas trades Mon-Sat; the handful of stray Sunday lines roll
-// forward into the following week rather than landing in a phantom prior bucket.
+// Week runs Monday-Sunday and is labelled by its Sunday (steward rule 2026-09-09; the
+// Saturday label is retired). Cafe Zupas trades Mon-Sat; the handful of stray Sunday
+// lines sit in the week that contains them. Matches claude.date_dim.week_ending.
 const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 function snapRange(d1,d2){
   const a=new Date(d1+'T00:00:00'), b=new Date(d2+'T00:00:00');
-  a.setDate(a.getDate()-a.getDay());
-  b.setDate(b.getDate()+(6-b.getDay()));
+  a.setDate(a.getDate()-((a.getDay()+6)%7));
+  b.setDate(b.getDate()+((7-b.getDay())%7));
   return [fmt(a),fmt(b)];
 }
 function effRange(){

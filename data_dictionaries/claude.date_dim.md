@@ -13,7 +13,7 @@ boundary — nothing after 2057-10-31 exists.
 ## Why it exists
 
 Weekly, fiscal-period, and holiday groupings were previously hand-rolled expressions
-(`date_trunc(…, week(sunday)) + 6` and friends) that every session had to reconstruct.
+(`last_day(…, week(monday))` and friends) that every session had to reconstruct.
 This view makes the **company fiscal calendar** (4-4-5 periods), continuous week/period
 counters, and holiday flags reachable for standard users as ordinary join-and-group-by
 columns. The `claude` dataset is authorized on `sales_ops` at the dataset level, so the
@@ -37,7 +37,7 @@ Everything verified against the live view 2026-08-05.
 | `day_of_week_full` | STRING | `Monday`, `Tuesday`, … |
 | `week_num` | INTEGER | Week of the **calendar year**. Resets to 1 on Jan 1 (mid-week!), increments each Monday. See gotchas |
 | `week_beginning` | DATE | Monday of the Mon–Sun week containing this date |
-| `week_ending` | DATE | **Sunday** of that week — one day *after* the CZ "week ending" Saturday. See gotchas |
+| `week_ending` | DATE | **Sunday** of that week — the CZ "week ending" (steward rule 2026-09-09); equals `last_day(cal_date, week(monday))` |
 | `week_beginning_ly` | DATE | `week_beginning` minus **364 days** — the Monday of the prior-year comparison week. Day-of-week preserved. Added 2026-08-24 |
 | `week_ending_ly` | DATE | `week_ending` minus **364 days** — the **Sunday** of that same prior-year week. Added 2026-08-24 |
 | `week_of_month` | INTEGER | Resets to 1 on the 1st of the month, increments each Monday |
@@ -104,14 +104,13 @@ Quirks:
 
 ## Gotchas
 
-- **⚠️ `week_ending` is the Sunday, not the CZ "week ending" Saturday.** The business
-  week is Mon–Sat (stores closed Sunday) and the steward's weekly label rule is
-  `date_trunc(business_date, week(sunday)) + 6` — the Saturday. `dd.week_ending` is one
-  day later, and it disagrees on *bucketing* for Sunday rows: the ~4 stray Sunday lines
-  that exist chain-wide join to the **preceding** Mon–Sun week here, while the steward
-  expression pushes them into the **following** week. For user-facing weekly sales
-  output, keep the steward expression. Use `week_beginning`/`week_ending` when you want
-  the fiscal (Mon–Sun) calendar. Full guidance in the `date-dimensions` skill.
+- **`week_ending` is the Sunday and it IS the CZ "week ending"** (steward rule 2026-09-09).
+  Trading is Mon–Sat (stores closed Sunday) but the reporting week is Mon–Sun, labelled by
+  its Sunday, so `dd.week_ending` and the inline `last_day(business_date, week(monday))`
+  agree on every row including the ~4 stray Sunday lines chain-wide. The retired Saturday
+  label (`date_trunc(business_date, week(sunday)) + 6`, 2026-07-30 → 2026-09-09) was one
+  day earlier and pushed Sunday rows into the following week — relabel old output, don't
+  re-derive it. Full guidance in the `date-dimensions` skill.
 - **`week_num` splits a physical week across years.** It resets on Jan 1 regardless of
   weekday, so the week spanning 2025-12-29 → 2026-01-04 is week 53 for its 2025 days and
   week 1 for its 2026 days. Grouping by `(year, week_num)` produces two short buckets at

@@ -22,7 +22,7 @@ table. Column docs: [`data_dictionaries/claude.date_dim.md`](../../data_dictiona
 |---|---|
 | Fiscal calendar (**4-4-5**) | `fsc_year`, `fsc_qtr` (3 periods each), `fsc_period` (1–12; P3/6/9/12 are 5-week), `fsc_week`, `fsc_week_of_year`, `fsc_day_of_period`, `fsc_day_of_year` |
 | Rolling windows without year-boundary logic | `run_period`, `run_week` — continuous counters, never reset, verified gap-free |
-| Mon–Sun week buckets | `week_beginning` (Mon), `week_ending` (Sun — **not** the CZ Saturday label, see below) |
+| Mon–Sun week buckets | `week_beginning` (Mon), `week_ending` (Sun — **the** CZ "week ending" since 2026-09-09; equals `last_day(d, week(monday))`) |
 | Prior-year week anchors | `week_beginning_ly`, `week_ending_ly` — the same week **364 days** back (day-of-week preserved). New 2026-08-24; see the 53-week caveat under Year-over-year |
 | Pretty labels | `day_of_week_full`, `month_full`, `year_month`, `year_quarter` |
 | Holiday flags | `holiday` — 25 labels incl. the C5 Thanksgiving span, **populated 2001–2050 only** |
@@ -42,32 +42,28 @@ The fiscal year ends on the **last Sunday of December** and begins the Monday af
    or subquery. Run a tiny lookup on `date_dim` to get the window's start/end dates,
    then write them into the fact query's `business_date between` — and state them in the
    answer (which the protocol requires anyway).
-3. **"Week ending" in user-facing weekly sales output stays the steward Saturday rule**
-   (`date_trunc(oc.business_date, week(sunday)) + 6`, owned by `sales-ops-orders`).
-   `dd.week_ending` is the **Sunday** of the Mon–Sun week — a different convention. See
-   the fork below.
+3. **"Week ending" is the Sunday** — `dd.week_ending` and the `sales-ops-orders` expression
+   `last_day(oc.business_date, week(monday))` are the same date (steward rule 2026-09-09, which
+   retired the older Saturday label). Business week and fiscal week are one bucket now.
 4. **Never approximate fiscal periods with calendar months.** P8 ≠ August (P8 FY2026 =
    2026-07-27 → 2026-08-23). If the user says "period", it comes from `date_dim` or not
    at all.
 5. **`holiday is null` is only meaningful through 2050**, and one date carries at most
    one label (collisions resolved silently — Valentine's beats Presidents Day Weekend).
 
-## The week fork: business week vs fiscal week
+## One week definition (since 2026-09-09)
 
-Two legitimate week definitions now exist. They bucket identically for Mon–Sat dates and
-differ only on the ~4 stray Sunday lines chain-wide — which is exactly the kind of gap
-that produces a same-question-different-answer defect, so pick deliberately:
+The business week and the fiscal week are the same Mon–Sun bucket, labelled by its Sunday.
+`last_day(oc.business_date, week(monday))` inline and `dd.week_ending` via a join return the
+same date, so pick whichever is cheaper for the query (inline on the fact table when you
+don't need other `date_dim` columns). Trading is still Mon–Sat — per-trading-day averages
+divide by 6 — and the ~4 stray Sunday lines chain-wide sit in the week that contains them.
 
-| | Business week (default for sales reporting) | Fiscal week (`date_dim`) |
-|---|---|---|
-| Span | Mon–Sat, labelled by the **Saturday** | Mon–Sun, `week_beginning`/`week_ending` |
-| Expression | `date_trunc(oc.business_date, week(sunday)) + 6` | join `dd.cal_date = oc.business_date` |
-| Sunday rows land | following week | preceding week |
-| Use when | the user asks for weekly sales, "week ending" | the user asks for fiscal weeks/periods, or you're aligning to `fsc_*`/`run_week` |
-
-`date_sub(dd.week_ending, interval 1 day)` reproduces the Saturday label *only* while no
-Sunday rows are in scope; don't substitute it silently. Snap-to-whole-weeks and the
-364-day YoY rules in `sales-ops-orders` apply unchanged.
+Before 2026-09-09 a second convention existed: the steward Saturday label,
+`date_trunc(oc.business_date, week(sunday)) + 6`, which pushed Sunday rows into the
+*following* week. It is retired; older saved SQL that carries it bucketed identically for
+Mon–Sat dates and only the label differs (Saturday vs the next day). Snap-to-whole-weeks
+and the 364-day YoY rules in `sales-ops-orders` apply unchanged.
 
 ## Year-over-year
 

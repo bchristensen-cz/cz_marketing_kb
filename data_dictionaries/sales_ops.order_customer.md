@@ -385,32 +385,58 @@ nothing about which address is "right".
   Healthy is **~28–33% `pct_sm_linked`**, **excluding the current business date** — see below.
   Anything under 15% on a *completed* day means that day is corrupted.
 
-- **🔑 SessionM loads ONCE PER DAY at 06:15 MT, so today's orders have no loyalty identity;
-  yesterday is complete from the 07:02 run** (measured 2026-09-04; supersedes the 2026-07-29
-  "~03:00" note, which was wrong). Normal and permanent, not a defect.
+- **🔑 SessionM loads ONCE PER DAY — merged into `sessionM.*` at 04:07 MT — so today's orders have
+  no loyalty identity; yesterday is complete from the 05:02 full rebuild** (chain re-sequenced
+  2026-09-08/09; supersedes the 2026-09-04 "06:15 / 07:02" note and the 2026-07-29 "~03:00" note).
+  Normal and permanent, not a defect.
 
-  | `business_date` | Brink orders | SessionM-linked | `pct_sm_linked` |
+  | `business_date` | Brink orders | `pct_sm_linked` | `sessionM.transaction_headers` rows |
   |---|---|---|---|
-  | 2026-09-02 | 28,112 | 8,775 | **31.2%** ✅ |
-  | 2026-09-03 (yesterday, after 12:08 MT rerun) | 29,224 | 9,147 | **31.3%** ✅ |
-  | **2026-09-04 (today, 12:10 MT)** | 5,819 | 26 | **0.4%** — expected |
+  | 2026-09-07 (Labor Day) | 24,105 | **32.8%** ✅ | 19,387 |
+  | 2026-09-08 (yesterday, read 10:15 MT 09-09) | 26,618 | **31.1%** ✅ | 29,062 |
+  | **2026-09-09 (today, 10:15 MT)** | 404 | **0.0%** — expected | 6,275 (yesterday's dump tail) |
 
-  The bucket → BigQuery loader (`bigquery-loader-sa`, 15 `MERGE`s into `sessionM.*`) runs at
-  **06:15–06:20 MT** every day (60 days on `JOBS_BY_PROJECT`, 0 failures). **The dump itself lands
-  earlier:** SessionM pushes 47 files to `gs://sessionm/prod_datadumps/<yyyy_mm_dd>/` starting at
-  **11:00:11 UTC** every day and finishes by **11:04–11:05 UTC** (object upload times checked with
-  `gcloud storage ls -l -r` on 12 days across 2026-08-10 → 09-04, zero variance). The files are
-  generated ~09:07–09:18 UTC (filename suffix; snapshot-table `etl_time` 02:37–02:44 MT) and shipped
-  on a fixed UTC schedule. So the earliest safe loader start is **~11:15 UTC** (05:15 MDT / 04:15
-  MST) — the current 06:15 MT leaves ~70 min of slack. Schedule the loader in **UTC** to match the
-  source; a Denver-time schedule drifts an hour against the dump at each DST change. The 04:02 reload fires
-  *before* it, so yesterday's identity depends on the intraday runs reaching back one day:
-  `when run_hour between 8 and 23 then run_date - 1` (steward change 2026-09-04). Cost is
-  unchanged — 13.54 GiB for the two-day run vs 13.47 for today-only, because most sources are not
-  window-bounded. **Regression signature:** between 2026-08-26 and 2026-09-04 the intraday branch
-  was today-only and yesterday sat at 0.4–0.7% all day (time-travel verified on 09-01, 09-03,
-  09-04), only recovering at D+2 04:02. Brent reported it as "not getting yesterday's data". If
-  yesterday reads under 15% after ~07:15 MT, read the deployed job text before blaming the loader.
+  **SessionM ingestion is THREE separately scheduled steps, not one job.** Moving one without the
+  others silently makes `sessionM.*` a day stale (it happened 2026-09-05 → 09-08, below). Verified
+  2026-09-09 on `JOBS_BY_PROJECT`, Cloud Scheduler and the Storage Transfer / DTS APIs:
+
+  | Step | Mechanism | Schedule | Observed 2026-09-09 |
+  |---|---|---|---|
+  | 1. S3 → `gs://sessionm/prod_datadumps/<yyyy_mm_dd>/` | Storage Transfer job `9198078639943003749` from `amperity-sessionm/SessionM/prod_datadumps/` (47 files ≈ 8 GB) | **09:45 UTC** daily (UTC — does not drift at DST) | lands 03:45–03:50 MDT |
+  | 2. GCS → `staging.sm_*` | Cloud Run job `sessionm-bq-loader`, Cloud Scheduler `sessionm-bq-loader-scheduler-trigger`, 47 `LOAD` jobs, WRITE_TRUNCATE | **`55 3 * * *` America/Denver** | 03:56–04:01 |
+  | 3. `staging.sm_*` → `sessionM.*` | BigQuery scheduled query "sessionM Daily Refresh" (DTS config `68b830ae-0000-26c9-896c-14c14eea4130`, runs as `bigquery-loader-sa`): full-load `create or replace` for the small tables, 15 `MERGE`s, then 40 `TRUNCATE`s of staging | **04:07 MT** (`every 24 hours`) | 04:07–04:14, 0 failures |
+
+  The vendor finishes writing S3 between **09:03 and 09:30 UTC** (S3 mtimes preserved as GCS
+  `customTime`, 40+ days checked), so step 1 must never start before ~09:40 UTC. Steps 2 and 3
+  are on Denver time and shift an hour against step 1 at each DST change — still safe (in MST the
+  transfer lands 02:45–02:50), but the gap between 1 and 2 grows to ~65 min rather than 5.
+
+  **Downstream chain (all verified firing in this order on 2026-09-09):** SessionM merge 04:07 →
+  `claude.loyalty_user` **04:30** → `order_customer` + `order_sequence` **full-history rebuild
+  05:02–05:08** (`when run_hour = 5 then '2018-08-07'`, deployed 2026-09-08 in the combined
+  `sql/sales_ops.order_marts.sql` config `6b28c7a5…`) → `customer_attribute` **05:20**
+  (`attribute_asof_date = run_date - 1`, moved from 05:00 on 2026-09-08). The intraday branch is
+  **today only** again (`when run_hour between 8 and 23 then run_date`, hours 0–4 and 6–7 exit
+  via the `start_date is null` guard) — yesterday no longer depends on it, because the 05:02
+  rebuild runs after the merge. The 2026-09-04 `run_date - 1` workaround is retired.
+
+  **Regression signature, and how it happened (2026-09-05 → 09-08).** The transfer (step 1) and
+  the merge (step 3) were moved to 03:45 / 03:50 but the loader (step 2) stayed at 05:20. Each
+  morning the merge consumed the *previous* day's staging load, truncated it, and the 05:22 load
+  then sat unmerged for 24 h: `sessionM.*` ran one file behind, on 09-05 every `MERGE` touched 0
+  rows and the full-load tables (`privacy_requests` included) were rebuilt **empty**, and
+  yesterday's `pct_sm_linked` read **0.0%** on 09-07 and 09-08 instead of ~31%. If yesterday reads
+  under 15% after ~05:15 MT: (a) check the three steps' ORDER on `JOBS_BY_PROJECT`
+  (`user_email like 'bigquery-loader-sa@%'`, group by `job_type, statement_type` — `LOAD` must
+  precede `MERGE`; 0 inserted rows across all 15 merges = merge ran on empty staging), then (b)
+  read the deployed `order_customer` job text. Staging ahead of `sessionM.*` on
+  `date(transaction_date)` row counts is the one-query proof of a lag.
+
+  **DTS scheduling trap:** with `every 24 hours`, editing only the start *time* of a scheduled
+  query does not move the next run — the saved form showed 04:07 for four days while
+  `nextRunTime` stayed 09:50Z. Re-saving with the start **date** moved to a future day re-anchors
+  it. Always confirm with `nextRunTime` (console list column, or `GET transferConfigs/<id>`).
+
   Consequences:
 
   - **The detector above false-positives on today's date every single day.** Exclude it.
@@ -420,10 +446,8 @@ nothing about which address is "right".
     first-time vs repeat, `in_store_scan` and anything from `order_sequence` /
     `customer_attribute` are ~98% under-identified. Sales, order counts and channel mix are
     fine — those come from Brink, which loads intraday.
-  - The daily chain is actually **`order_customer` 04:02 → `claude.loyalty_user` 04:30 →
-    `customer_attribute` 05:00 → SessionM 06:15**, so `customer_attribute.attribute_asof_date =
-    run_date - 1` reads a day with ~0.5% loyalty identity every run. Open item: move it to
-    `run_date - 2`, or run the 04:30/05:00 jobs after 06:30. Don't "improve" the anchor to today.
+  - `customer_attribute` and `loyalty_user` now both run **after** the merge, so the 2026-09-04
+    open item ("customer_attribute reads an under-identified day") is closed.
 
 - **`mapped_cust_id` can migrate between customers without a new order** (audited 2026-07-29).
   `sm_external_user_map` keeps one `external_user_id` per SessionM `user_id`, chosen by

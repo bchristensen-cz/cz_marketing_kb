@@ -79,6 +79,11 @@ tfoot td { font-weight:500; border-top:2px solid var(--line); border-bottom:none
   <label style="margin-top:12px">Selected</label>
   <div class="chips" id="chips"><span class="muted">Nothing selected &mdash; the report will cover every item.</span></div>
 
+  <div id="rollwrap" style="display:none;margin-top:12px">
+    <label class="ck"><input type="checkbox" id="rollup"><span>Roll up to item name &mdash; combine every size into one row</span></label>
+    <div class="muted" style="margin-top:6px">Off (default): each size is its own selection and its own row, at its own price. On: sizes are summed under the name and the per-unit price you get is a blend the product is never sold at.</div>
+  </div>
+
   <div id="typewrap" style="display:none;margin-top:14px">
     <label>Item categories to include <span class="muted">&mdash; from the items you selected</span></label>
     <div class="chips" id="types"></div>
@@ -224,8 +229,8 @@ const ATTRS=[
   {k:'revctr',   label:'Menu section',   grp:'Product', sql:"coalesce(ol.rev_center_name, '(none)')", as:'menu_section'},
   {k:'menugrp',  label:'Menu group',     grp:'Product', sql:"coalesce(ol.parent_item_grp_name, '(none)')", as:'menu_group',
    note:'343 distinct values in a two-month window — useful for drilling, unreadable as a top-level breakout.'},
-  {k:'size',     label:'Item size',      grp:'Product', sql:"coalesce(ol.item_size, '(no size)')", as:'item_size',
-   note:'About 74% of lines carry no size, so expect one very large (no size) row.'},
+  {k:'size',     label:'Item size',      grp:'Product', sql:'ol.item_size', as:'item_size',
+   note:'Nine values, never null (steward rule 2026-08-27). <b>Not Sized</b> is 61.8% of lines — a real product with no size concept: chips, bottled drinks, cookies. <b>Not Applicable</b> (2.7%) is not a product line at all — tips, fees, gift cards. Regular is 11.9%, Half 13.0%, Mini 0.6%.'},
   {k:'catering', label:'Catering',       grp:'Order',   sql:"if(ol.is_catering, 'Catering', 'Non-catering')", as:'catering'},
   {k:'shape',    label:'Sale shape',     grp:'Order',   sql:SHAPE, as:'sale_shape',
    note:'Splits sold-alone from combo components and free combo slots. Free slots book about $0, so dollars look tiny on that row by design.'},
@@ -254,6 +259,9 @@ let chart=null, sortCol=null, sortDir=-1, lastRows=[], lastCols=[], lastMoney=ne
 
 const esc=s=>String(s).replace(/'/g,"\\'");
 const money=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+// Two-decimal prices. Rounding to whole dollars hides exactly the difference that makes a
+// wrong pick visible -- a $9.00 Mini beside a $14.00 Regular is the tell.
+const money2=n=>n==null?'—':'$'+Number(n).toFixed(2);
 const num=n=>n==null?'—':Math.round(Number(n)).toLocaleString();
 const attr=k=>ATTRS.find(a=>a.k===k);
 const $=id=>document.getElementById(id);
@@ -293,12 +301,14 @@ function effRange(){
 // ---- item picking (unchanged behaviour, kept because it works) ------------
 const eligible=()=>picked.filter(p=>COMBO_RC.includes(p.rc));
 const activeTypes=()=>types.filter(t=>!typeOff.has(t));
-const candNames=()=>[...new Set(candRows.map(r=>r.item_name))];
+// Selection is keyed on item_id, never item_name -- see itemPredicate() for why.
+const candIds=()=>[...new Set(candRows.map(r=>String(r.item_id)))];
+const pickedIds=()=>new Set(picked.map(p=>String(p.id)));
 
 function renderTypes(){
   const wrap=$('typewrap'), el=$('types');
-  const names=new Set(picked.map(p=>p.name));
-  types=[...new Set(candRows.filter(r=>names.has(r.item_name)).map(r=>r.item_type))].filter(Boolean).sort();
+  const ids=pickedIds();
+  types=[...new Set(candRows.filter(r=>ids.has(String(r.item_id))).map(r=>r.item_type))].filter(Boolean).sort();
   typeOff=new Set([...typeOff].filter(t=>types.includes(t)));
   wrap.style.display=types.length?'block':'none';
   el.innerHTML=types.map(t=>`<span class="tchip${typeOff.has(t)?'':' on'}" data-t="${t}">${t}</span>`).join('');
@@ -309,26 +319,28 @@ function renderTypes(){
   });
 }
 
+const rowToPick=r=>({id:r.item_id, name:r.item_name, size:r.item_size, rc:r.rev_center_name, it:r.item_type, price:r.avg_unit_price});
+
 function syncCandMarks(){
-  const sel=new Set(picked.map(p=>p.name));
-  document.querySelectorAll('.cand').forEach(c=>c.classList.toggle('on', sel.has(c.dataset.n)));
-  const names=candNames(), all=names.length>0 && names.every(n=>sel.has(n));
+  const sel=pickedIds();
+  document.querySelectorAll('.cand').forEach(c=>c.classList.toggle('on', sel.has(c.dataset.id)));
+  const ids=candIds(), all=ids.length>0 && ids.every(n=>sel.has(n));
   const btn=$('selall');
-  btn.textContent = all ? 'Deselect all' : `Select all (${names.length})`;
+  btn.textContent = all ? 'Deselect all' : `Select all (${ids.length})`;
   btn.dataset.mode = all ? 'clear' : 'set';
 }
 
 $('selall').onclick=()=>{
   const btn=$('selall');
   if(btn.dataset.mode==='clear'){
-    const names=new Set(candNames());
-    picked=picked.filter(p=>!names.has(p.name));
+    const ids=new Set(candIds());
+    picked=picked.filter(p=>!ids.has(String(p.id)));
   } else {
-    const have=new Set(picked.map(p=>p.name));
+    const have=pickedIds();
     candRows.forEach(r=>{
-      if(have.has(r.item_name)) return;
-      have.add(r.item_name);
-      picked.push({name:r.item_name, rc:r.rev_center_name, it:r.item_type});
+      if(have.has(String(r.item_id))) return;
+      have.add(String(r.item_id));
+      picked.push(rowToPick(r));
     });
   }
   syncCandMarks(); renderChips();
@@ -337,11 +349,12 @@ $('selall').onclick=()=>{
 function renderChips(){
   const el=$('chips');
   el.innerHTML=picked.length
-    ? picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <i>${p.it||''}</i> <span class="x" data-i="${i}">&times;</span></span>`).join('')
+    ? picked.map((p,i)=>`<span class="chip"><b>${p.name}</b> <i>${p.size||''}</i> ${p.price!=null?`<span class="muted">${money2(p.price)}</span>`:''} <span class="x" data-i="${i}">&times;</span></span>`).join('')
     : '<span class="muted">Nothing selected — the report will cover every item.</span>';
   el.querySelectorAll('span.x').forEach(s=>s.onclick=()=>{
     picked.splice(+s.dataset.i,1); syncCandMarks(); renderChips();
   });
+  $('rollwrap').style.display = picked.length ? 'block' : 'none';
   renderTypes(); buildSql();
 }
 
@@ -375,6 +388,24 @@ function renderMeas(){
 }
 
 // ---- SQL ------------------------------------------------------------------
+// Items resolve to item_id, NOT item_name. item_name is the size-stripped name and is not
+// unique to a product: 140 of 373 names span more than one item_id, carrying about half of
+// all units, and size explains only 49 of those 140 splits. Matching on the name silently
+// blends a $9.00 Mini into a $14.00 Regular and quotes a $10.25 blend the product is never
+// sold at -- which is how "the mini chocolate strawberry cup" came back as zero in the
+// first place. Ids are opaque on their own, so every id is named in a comment directly
+// above the predicate (steward call 2026-09-11).
+function itemPredicate(){
+  if($('rollup').checked){
+    const names=[...new Set(picked.map(p=>p.name))];
+    return `-- rolled up to item name ON PURPOSE: every size and item_id under ${names.length===1?'this name':'these names'} is\n-- included, so a per-unit price read off this result is a blend across sizes\nand ol.item_name in (${names.map(n=>"'"+esc(n)+"'").join(', ')})`;
+  }
+  const CAP=30;
+  const lines=picked.slice(0,CAP).map(p=>`--   ${p.id}  ${p.name} · ${p.size}${p.price!=null?' · '+money2(p.price):''}`);
+  if(picked.length>CAP) lines.push(`--   … and ${picked.length-CAP} more`);
+  return `-- items resolved to item_id (item_name is size-stripped and not unique to a product)\n${lines.join('\n')}\nand ol.item_id in (${picked.map(p=>Number(p.id)).join(', ')})`;
+}
+
 function buildSql(){
   const pre=$('sql');
   const [d1,d2,snapped]=effRange();
@@ -403,7 +434,7 @@ function buildSql(){
   const selMeas=ms.map(m=>`, ${m.sql} as ${m.as}`).join('\n');
 
   const wants=[];
-  if(picked.length) wants.push(`and ol.item_name in (${picked.map(p=>"'"+esc(p.name)+"'").join(', ')})`);
+  if(picked.length) wants.push(itemPredicate());
   if(types.length && typeOff.size) wants.push(`and ol.item_type in (${activeTypes().map(t=>"'"+esc(t)+"'").join(', ')})`);
   wants.push({excl:'and ol.is_catering = false',incl:'-- catering included, not broken out',only:'and ol.is_catering = true'}[cat]);
   if(shapef==='solo')  wants.push(`and ${F_SOLO}`);
@@ -452,7 +483,11 @@ limit ${ROW_CAP}`;
   const cl={excl:'no catering',incl:'catering included',only:'catering only'}[cat];
   const sh={all:'all sale shapes',solo:'sold alone only',combo:'in-combo only'}[shapef];
   const dimTxt=dims.length?dims.map(d=>d.as.replace(/_/g,' ')).join(' × '):'grand total';
-  $('scope').textContent=`${picked.length?picked.length+' item'+(picked.length>1?'s':''):'all items'} · ${d1} → ${d2} · ${dimTxt} · ${cl} · ${sh} · ${ms.map(m=>m.label.toLowerCase()).join(' + ')}`;
+  const rolled = picked.length && $('rollup').checked;
+  const itemTxt = !picked.length ? 'all items'
+    : rolled ? `${[...new Set(picked.map(p=>p.name))].length} name${[...new Set(picked.map(p=>p.name))].length>1?'s':''}, all sizes`
+             : `${picked.length} item${picked.length>1?'s':''} by id`;
+  $('scope').textContent=`${itemTxt} · ${d1} → ${d2} · ${dimTxt} · ${cl} · ${sh} · ${ms.map(m=>m.label.toLowerCase()).join(' + ')}`;
   return sql;
 }
 
@@ -467,10 +502,14 @@ $('find').onclick=async()=>{
   try{
     const {rows}=await bq(`select
 ol.item_name
+, ol.item_id
+, ol.item_size
 , ol.rev_center_name
 , ol.item_type
 , count(*) as lines
+, sum(ol.qty) as units
 , round(sum(ol.item_gross_sales), 0) as gross_sales
+, round(safe_divide(sum(ol.item_gross_sales), sum(ol.qty)), 2) as avg_unit_price
 from \`${PROJ}\`.claude.order_lines ol
 where 1=1
 and ol.business_date between '${d1}' and '${d2}'
@@ -478,19 +517,28 @@ and ifnull(ol.item_type, '') not in ('Discount','Promotion')
 and ifnull(ol.rev_center_name, '') not in ('Discount','Promotion')
 and ifnull(ol.line_item_type, '') not in ('discount','promotion')
 and (${likes})
-group by ol.item_name, ol.rev_center_name, ol.item_type
+group by ol.item_name, ol.item_id, ol.item_size, ol.rev_center_name, ol.item_type
 order by lines desc
 limit 60`);
     candRows=rows;
-    msg.textContent=rows.length?`${rows.length} match${rows.length>1?'es':''} — click the ones you want`:'no matches — try a shorter fragment';
+    // One row per item_id, so a name that covers several products shows each one with its
+    // own price. The split marker is the cue that picking the name alone would blend them.
+    const idsPerName={};
+    rows.forEach(r=>{ idsPerName[r.item_name]=(idsPerName[r.item_name]||0)+1; });
+    const split=rows.filter(r=>idsPerName[r.item_name]>1).length;
+    msg.textContent=rows.length
+      ? `${rows.length} match${rows.length>1?'es':''} — click the ones you want${split?` · ${split} sit under a name that covers more than one product`:''}`
+      : 'no matches — try a shorter fragment';
     $('cands').innerHTML=rows.map(r=>{
-      const on=picked.some(p=>p.name===r.item_name)?' on':'';
+      const on=pickedIds().has(String(r.item_id))?' on':'';
       const el=COMBO_RC.includes(r.rev_center_name)?' · comes in a combo':'';
-      return `<div class="cand${on}" data-n="${r.item_name}" data-rc="${r.rev_center_name}" data-it="${r.item_type}"><span class="nm">${r.item_name}</span><span class="mt">${Number(r.lines).toLocaleString()} lines · ${money(r.gross_sales)} · <b>${r.item_type}</b>${el}</span></div>`;
+      const sp=idsPerName[r.item_name]>1?` · <b>1 of ${idsPerName[r.item_name]} under this name</b>`:'';
+      return `<div class="cand${on}" data-id="${r.item_id}"><span class="nm">${r.item_name} <i>${r.item_size}</i></span><span class="mt">${money2(r.avg_unit_price)} avg · ${num(r.units)} units · ${money(r.gross_sales)} · <b>${r.item_type}</b>${el}${sp}</span></div>`;
     }).join('');
     document.querySelectorAll('.cand').forEach(c=>c.onclick=()=>{
-      const n=c.dataset.n, i=picked.findIndex(p=>p.name===n);
-      if(i>=0) picked.splice(i,1); else picked.push({name:n,rc:c.dataset.rc,it:c.dataset.it});
+      const id=c.dataset.id, i=picked.findIndex(p=>String(p.id)===String(id));
+      if(i>=0) picked.splice(i,1);
+      else { const r=candRows.find(x=>String(x.item_id)===String(id)); if(r) picked.push(rowToPick(r)); }
       syncCandMarks(); renderChips();
     });
     $('selall').style.display=rows.length?'':'none';
@@ -502,7 +550,7 @@ limit 60`);
   }
 };
 
-['d1','d2','grain','snap','cat','shapef'].forEach(id=>$(id).onchange=buildSql);
+['d1','d2','grain','snap','cat','shapef','rollup'].forEach(id=>$(id).onchange=buildSql);
 $('toggle').onclick=()=>{
   const p=$('sql'), t=$('toggle');
   const h=p.style.display==='none'; p.style.display=h?'block':'none'; t.textContent=h?'Hide SQL':'Show SQL';

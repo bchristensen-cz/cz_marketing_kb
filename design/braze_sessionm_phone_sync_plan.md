@@ -161,6 +161,25 @@ All 10,000 file-1 users GET-checked against the live API (`scripts/verify_sample
 
 **Mart verification was impossible today:** the SessionM loader ran at 03:50 MT Sat but rewrote every table with Thursday's data (row counts identical, `etl_time` still 2026-09-04 02:38) and left `privacy_requests` **empty**. **Root cause found 2026-09-08 — not a loader defect but a sequencing one.** SessionM ingestion is three separately scheduled steps (S3→GCS transfer, GCS→`staging.sm_*` Cloud Run loader, `staging`→`sessionM.*` scheduled query). On 09-05 the transfer and the merge were moved to 03:45/03:50 but the loader stayed at 05:20, so the merge ran on staging that the previous day's merge had already truncated: every `MERGE` touched 0 rows and the full-load tables (`privacy_requests` included) were rebuilt empty. Fixed 2026-09-09 (loader 03:55 → merge 04:07); see `data_dictionaries/sales_ops.order_customer.md` § "SessionM loads once per day". Mart verification of file 1 can resume from the 2026-09-09 load. API GET sampling remains the fallback.
 
+### Rebuild r2 — 2026-09-11 (fresh data, two new guards) → file 3 = 782,205 rows
+Six days after file 1 the mart was checked (loader healthy again since 2026-09-11 02:39 MT; `privacy_requests` back to 8,423 rows): file 1 reconciles 9,939/10,000 in the mart (10 deleted, 2 unapplied, 49 customers changed their own number since); **0 resurrected profiles** for the deleted users' external ids — the importer skips unknown users, it does not create them. Of the Sept-3 file-2 users, 485 had drifted; 33 had typed a *different* number into SessionM themselves, which the stale file would have overwritten.
+
+Rebuilt as `scratch.braze_phone_ranked_r2` / `sessionm_phone_sync_plan_r2` / `sessionm_phone_sync_file_r2` with two guards: (1) any user with a `privacy_requests` row is held out (1,474); (2) **recent-edit guard** — a user whose active SessionM phone row changed in the last 14 days, and whose list would change, is held out (377) — a customer's fresh entry beats Braze. Those guards create a third: if a conflict holder is held out, the winner's add is held out too or it would mint a new duplicate (201). Plus 77 with no unambiguous cafezupas id.
+
+| Status | Users |
+|---|---|
+| planned → **file 3** | **782,205** (750,391 adds · 31,891 removals · 10 replaces) |
+| held_out_privacy_request | 1,474 |
+| held_out_recent_sessionm_edit | 377 |
+| held_out_conflict_with_held_out_user | 201 |
+| held_out_no_unique_external_id | 77 |
+
+Integrity on the planned set: 0 duplicates involving a planned user, 0 junk left on a planned user, 0 users with >1 phone. **265 shared numbers remain, all among held-out users** — a follow-up pass once the recent-edit window ages out.
+
+**Quota:** Brent confirmed a 1,000,000 monthly active-user contractual limit; a phone update counts the user as active, so file 3 lands ~782K September actives. **Authorization to exceed obtained 2026-09-11 (Brent).**
+
+Rule for any future run: **rebuild within 24 h of the drop** — ~0.5%/week of users change their own number.
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

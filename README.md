@@ -34,6 +34,7 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
   sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
   date-dimensions/    Fiscal calendar (4-4-5 periods), week endings, holidays (claude.date_dim)
+  paid-media/         Ad spend & reach across Meta, Google Ads, TikTok, Snapchat, Spotify (claude.ad_spend_daily, claude.ad_reach_weekly)
   cowork-artifact-deploy/  How to change & redeploy an artifact (two-file lineage, drift diff, connector re-grant)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
@@ -69,9 +70,12 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | `marketing-data-442316.claude.loyalty_points_activity` | 1 row per point transaction | Points issued / redeemed / expired over time |
 | `marketing-data-442316.claude.loyalty_offer_usage` | 1 row per offer issued to a member | Offer & reward redemption rates |
 | `marketing-data-442316.claude.loyalty_campaign_participation` | 1 row per campaign event | Loyalty campaign participation, achievements — **always filter `create_date`** |
+| `marketing-data-442316.claude.ad_spend_daily` | 1 row per platform / campaign / ad group / ad / day | **Paid media.** Spend, impressions, clicks, conversions, CPM/CTR/CPA/ROAS across Meta, Google Ads, TikTok, Snapchat, Spotify. Partition column is `business_date`. Use the `paid-media` skill — 2024 has large coverage gaps and TikTok conversions restate for a week |
+| `marketing-data-442316.claude.ad_reach_weekly` | 1 row per platform / campaign / reach level / week | Weekly reach (facebook, snapchat, tiktok only). Partition column is `reach_week`. **Reach is never summed** — see the dictionary |
 
-Loyalty questions use the `sessionm-loyalty` skill. Partition columns by domain: `business_date`
-(order_customer, order_sequence, order_lines), `create_date` (loyalty_campaign_participation),
+Loyalty questions use the `sessionm-loyalty` skill; paid-media questions use the `paid-media`
+skill. Partition columns by domain: `business_date` (order_customer, order_sequence, order_lines,
+ad_spend_daily), `create_date` (loyalty_campaign_participation), `reach_week` (ad_reach_weekly),
 and `activity_date` for filtering loyalty_points_activity.
 
 More marts are being added in the `claude` dataset — documented here as they land.

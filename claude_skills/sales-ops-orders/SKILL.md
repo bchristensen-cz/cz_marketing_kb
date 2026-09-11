@@ -1547,19 +1547,29 @@ filter `item_size`. A user asking about the "mini chocolate strawberry cup" is n
 columns, not one — and the failure mode is a silent zero, which the user reads as the item
 not existing.
 
-**Worked example — Mini Chocolate Strawberry Cup** (measured 2026-08-27, trailing 30 days
-2026-07-29 → 2026-08-26, stores 1111/999 excluded):
+**Worked example — Mini Chocolate Strawberry Cup** (re-measured 2026-09-11, trailing 30 days
+**2026-08-12 → 2026-09-10**, sellable lines, stores 1111/999 excluded):
 
 | `item_id` | `item_name` | `item_size` | Units | Item gross | Avg unit price |
 |---|---|---|---|---|---|
-| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | $139,950 | **$9.00** |
-| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,051 | $70,714 | **$14.00** |
-| | | *name only* | *20,601* | *$210,664* | *$10.23* |
+| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,717 | $141,453 | **$9.00** |
+| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,241 | $73,374 | **$14.00** |
+| | | *name only* | *20,958* | *$214,827* | *$10.25* |
 
-Answering on the name alone overstates the Mini by **32.5% in units / 50.5% in gross**, and
-reports a blended **$10.23** price for a product sold at $9.00 and $14.00 and never at
-$10.23. Both ids have sold since **February 2025** — not an LTO artifact, and nothing about
+Answering on the name alone overstates the Mini by **33.3% in units / 51.9% in gross**, and
+reports a blended **$10.25** price for a product sold at $9.00 and $14.00 and never at
+$10.25. Both ids have sold since **February 2025** — not an LTO artifact, and nothing about
 the name hints that it splits.
+
+> **Both prices and the split are stable.** First measured 2026-08-27 (30 days to 08-26):
+> 15,550 / 5,051 units, same $9.00 and $14.00, blended $10.23. Two weeks later the unit mix
+> and the blend have barely moved. This is a permanent property of the catalogue, not a
+> window artifact — don't re-derive it per question.
+>
+> **643640567 is `Regular`, and has been since the 2026-08-27 rebuild.** Anything still
+> describing the full-size cup as NULL-sized predates that rebuild and is wrong in the
+> opposite direction now: `item_size = 'Regular'` finds it, and `item_size is null` finds
+> nothing at all (see the dead-filter warning below).
 
 > ✅ **`item_size` has no NULLs and `Regular` means an actual regular size (rebuilt
 > 2026-08-27 12:35 MT).** The column is a closed 9-value domain resolved in four steps:
@@ -1574,22 +1584,25 @@ the name hints that it splits.
 > ```
 >
 > where `family_has_sizes` comes from the **item master** (`brink_items`), not from the fact
-> rows — so the value does not depend on how wide that run's reload was. Distribution,
-> 2026-08-20 → 2026-08-26, stores 1111/999 excluded:
+> rows — so the value does not depend on how wide that run's reload was. Distribution
+> re-measured 2026-09-11 over **2026-09-04 → 2026-09-10** (stores 1111/999 excluded); the
+> 2026-08-20 → 08-26 shares from the original measurement are shown beside it:
 >
-> | `item_size` | Lines | Share | Means |
-> |---|---|---|---|
-> | `Not Sized` | 807,653 | 62.5% | a real product with no size concept (chips, bottled drink, cookie) |
-> | `Half` | 168,233 | 13.0% | |
-> | **`Regular`** | **151,034** | **11.7%** | base size of a family that *has* other sizes, or a genuine `REG` prefix |
-> | `Kids` | 66,052 | 5.1% | |
-> | `Large` | 56,593 | 4.4% | |
-> | `Not Applicable` | 33,877 | 2.6% | not a product line — tip, fee, discount, promotion, gift card, surcharge |
-> | `Mini` | 6,861 | 0.5% | only `Chocolate Strawberry Cup` and `Dubai Cup` |
-> | `Party` / `Tray` | 1,143 | 0.1% | |
+> | `item_size` | Lines | Share | (08-20→26) | Names | Means |
+> |---|---|---|---|---|---|
+> | `Not Sized` | 757,187 | 60.8% | 62.5% | 245 | a real product with no size concept (chips, bottled drink, cookie) |
+> | `Half` | 166,038 | 13.3% | 13.0% | 27 | |
+> | **`Regular`** | **147,932** | **11.9%** | 11.7% | 41 | base size of a family that *has* other sizes, or a genuine `REG` prefix |
+> | `Kids` | 71,751 | 5.8% | 5.1% | 28 | |
+> | `Large` | 55,046 | 4.4% | 4.4% | 40 | |
+> | `Not Applicable` | 38,888 | 3.1% | 2.6% | 26 | not a product line — tip, fee, discount, promotion, gift card, surcharge |
+> | `Mini` | 7,013 | 0.6% | 0.5% | **2** | still only `Chocolate Strawberry Cup` and `Dubai Cup` |
+> | `Party` | 751 | 0.1% | — | 7 | |
+> | `Tray` | 15 | 0.0% | — | 4 | |
 >
-> **A size breakout is now safe to present unlabelled** — `Regular` is 11.7%, not 76%, and the
-> two non-size states are named rather than hidden inside it. Filter
+> Every share is within ~1 point of the original, so treat these as the settled shape rather
+> than a moving number. **A size breakout is safe to present unlabelled** — `Regular` is ~12%,
+> not 76%, and the two non-size states are named rather than hidden inside it. Filter
 > `line_item_type in ('item','modifier')` for any size analysis and `Not Applicable` disappears.
 
 > ⚠️ **Three semantics shipped for this column on 2026-08-27, hours apart.** NULL-for-unparsed
@@ -1617,26 +1630,30 @@ the name hints that it splits.
 > item names already meant something specific by. Both were improvements. Both moved millions
 > of rows into a bucket something else was already reading.
 
-**Size is necessary but not sufficient — `item_id` is the product key.** Same window, 373
-`item_name` values on sellable lines (discount/promotion markers excluded):
+**Size is necessary but not sufficient — `item_id` is the product key.** Re-measured
+2026-09-11 over **2026-08-12 → 2026-09-10**, 374 `item_name` values on sellable lines
+(discount/promotion markers excluded); the 2026-08-27 figures are in brackets:
 
 | | Names | Share of names | Share of units |
 |---|---|---|---|
-| Span more than one `item_id` | **140** | 37.5% | **50.1%** |
-| …of which split by `item_size` | 49 | 13.1% | 21.0% |
-| …of which split by something **other** than size | **91** | 24.4% | — |
+| Span more than one `item_id` | **142** [140] | 38.0% [37.5%] | **50.6%** [50.1%] |
+| …of which split by `item_size` | 49 [49] | 13.1% | 21.3% [21.0%] |
+| …of which split by something **other** than size | **93** [91] | 24.9% | — |
 
 Half the volume in the mart sits under a name that is not unique to one product, and size
-explains only a third of those splits. Resolve to `item_id`; treat size as the most common
+explains only a third of those splits — and both figures have held steady across two
+independent windows two weeks apart. Resolve to `item_id`; treat size as the most common
 reason a name needs resolving, not the only one.
 
-Two more instances of the same collision, so it is a pattern and not one dessert:
+Two more instances of the same collision, so it is a pattern and not one dessert
+(same window, re-verified 2026-09-11):
 
-- **`Dubai Cup`** — identical shape: id 643640588 `Mini` **$12.00**, id 643640587 `Regular`
-  **$18.00**. `Mini` exists on exactly these two names in the window (30,892 lines total).
+- **`Dubai Cup`** — identical shape: id 643640588 `Mini` **$12.00** (14,948 units), id
+  643640587 `Regular` **$18.00** (4,638). `Mini` still exists on exactly these two names.
 - **`Kids Combo`** — the same collision with no size story: id 643647054 is the `Kids`
-  **$0.00** bundle slot, id 642361971 is the `Regular` **$7.27** paid combo. One name, two
-  things, and a units count on the name double-counts every kids meal.
+  **$0.00** bundle slot (46,653 units), id 642361971 is the `Regular` **$7.26** paid combo
+  (39,844). One name, two things, and a units count on the name double-counts every kids
+  meal — here that is 86,497 where the real paid figure is 39,844.
 
 **A size word can still survive inside `item_name`** — 14 names in the window carry one,
 because the strip runs once and is case-sensitive: `PRTY TRAY Avocado Caesar Salad` loses

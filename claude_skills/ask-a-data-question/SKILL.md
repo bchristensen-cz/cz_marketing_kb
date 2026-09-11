@@ -99,26 +99,29 @@ speaks is split across two columns. `item_name = 'Mini Chocolate Strawberry Cup'
 **zero rows** — and a zero here is the worst possible failure, because it reads to the user
 as *we don't sell that*. Match the name without the size word, then filter `item_size`.
 
-Measured 2026-08-27, trailing 30 days, stores 1111/999 excluded:
+Re-measured 2026-09-11, trailing 30 days 2026-08-12 → 2026-09-10, stores 1111/999 excluded:
 
 | `item_id` | `item_name` | `item_size` | Units | Avg unit price |
 |---|---|---|---|---|
-| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,550 | **$9.00** |
-| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,051 | **$14.00** |
+| 643640578 | `Chocolate Strawberry Cup` | `Mini` | 15,717 | **$9.00** |
+| 643640567 | `Chocolate Strawberry Cup` | `Regular` | 5,241 | **$14.00** |
 
-Answering on the name alone overstates the Mini by 32.5% in units / 50.5% in gross and
-quotes a $10.23 blended price the product is never sold at.
+Answering on the name alone overstates the Mini by 33.3% in units / 51.9% in gross and
+quotes a $10.25 blended price the product is never sold at. The prices and the split are
+stable — the 2026-08-27 measurement gave the same $9.00 / $14.00 on 15,550 / 5,051 units.
 
 ✅ **`item_size` is a clean closed domain as of 2026-08-27**: `Regular`, `Half`, `Large`,
 `Kids`, `Mini`, `Party`, `Tray`, plus `Not Sized` (a real product with no size concept) and
 `Not Applicable` (tip, fee, discount, promotion, gift card). No NULLs, and `Regular` means an
-actual regular size — 11.7% of lines, not 76%. So a size breakout is safe to show as-is; just
-filter `line_item_type in ('item','modifier')` and `Not Applicable` drops out.
+actual regular size — 11.9% of lines, not 76%. So a size breakout is safe to show as-is; just
+filter `line_item_type in ('item','modifier')` and `Not Applicable` drops out. **`Regular` is
+also what the full-size Chocolate Strawberry Cup carries** (id 643640567) — it was NULL-sized
+before the 2026-08-27 rebuild, so any older note calling it NULL is now wrong the other way.
 
 ⚠️ **But `item_size is null` is dead** — it returns zero rows now, which reads as "no such
 thing" rather than erroring. Three different semantics shipped for this column within hours on
 2026-08-27, so treat any saved query or older report touching `item_size` as suspect until
-re-read. Full mechanism, the 140-of-373 name→`item_id` collision table, and the `Dubai Cup` /
+re-read. Full mechanism, the 142-of-374 name→`item_id` collision table, and the `Dubai Cup` /
 `Kids Combo` twins are in `sales-ops-orders` pre-query protocol item 5.
 
 **So on any item-specific question, size is a dimension you resolve — not a fork you ask.**
@@ -128,10 +131,16 @@ size at all (asking a dead question teaches the user the protocol is noise). If 
 more than one, the fork is clickable and its options carry the measured consequence:
 
 > **Which Chocolate Strawberry Cup?**
-> - **Mini only** — $9.00, 15,550 units in the last 30 days
-> - **Full size only** (`Regular`) — $14.00, 5,051 units
+> - **Mini only** — $9.00, 15,717 units in the last 30 days
+> - **Full size only** (`Regular`) — $14.00, 5,241 units
 > - **Both, broken out by size** *(recommended)*
-> - **Both, combined** — one blended row; the $10.23 average is not a real price
+> - **Both, combined** — one blended row; the $10.25 average is not a real price
+
+The report builder artifact (`artifacts/item-sales-builder.html`) implements exactly this:
+its search resolves to `item_id` and shows each size at its own price, the generated SQL is
+`ol.item_id in (…)` with every id named in a comment above it, and "both, combined" is an
+explicit **Roll up to item name** checkbox rather than the silent default it used to be
+(steward call 2026-09-11). See `claude_skills/cowork-artifact-deploy/` to change it.
 
 ### "Market" means `store_state` (steward decision 2026-07-30)
 

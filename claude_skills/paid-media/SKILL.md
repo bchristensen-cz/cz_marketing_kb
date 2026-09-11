@@ -58,7 +58,10 @@ run on the two `claude` views.
    but carry genuine late-attributed conversions and revenue. Filter on dates and dimensions.
 7. **Reach is not additive** — not across campaigns, not across weeks, not across `reach_level`.
    See the reach section below.
-8. **There is no store key in this data.** Nothing joins to `store_id` or `store_state`.
+8. **Media is not reported by store** (steward decision 2026-09-11). There is no store key in
+   `edi` and none is wanted — paid media is answered at chain, platform, campaign and ad
+   level. If someone asks for spend by store or by market, say media isn't tracked that way
+   and offer the campaign or platform cut instead.
 
 ## Which platform label to use
 
@@ -90,17 +93,22 @@ breakdown of Google therefore drops almost all of it — use `asset_group` for P
 **Spotify carries spend, impressions and clicks only** — no conversions at all. It cannot appear
 in a CPA or ROAS comparison; show it in spend/CPM tables and note the exclusion.
 
-## Store and market questions — regex, not a join
+## Store and market questions — out of scope
 
-There is no store key. Google PMax **asset groups are store-named** and are the cleanest handle
-(`Greenfield`, `McKinney`, `Las Vegas`; older era `AG-SCHAUMBURG`, `AG-COON_RAPIDS`). Google
-campaign names sometimes embed the store number (`C7 | PMAX | (155) Greenfield, WI | G1`).
-Facebook, TikTok and Snapchat names are **not** consistently store-named.
+**Steward decision 2026-09-11: we do not report media by store.** There is no store key anywhere
+in `edi` — nothing joins to `store_id` or `store_state` — and building a campaign↔store mapping
+is explicitly not on the roadmap.
 
-So any store-level or market-level media number is a **name match**, and the answer must say so:
-"matched by asset-group name; campaigns without a store in the name are excluded, $X of $Y total
-spend covered". Never present it as a clean store rollup. A real campaign↔store mapping is an
-open backlog item.
+Some campaign and asset-group names happen to contain a city (`Greenfield`, `McKinney`,
+`AG-SCHAUMBURG`), and Google campaign names sometimes embed a store number
+(`C7 | PMAX | (155) Greenfield, WI | G1`). **Do not turn those into a store rollup.** Facebook,
+TikTok and Snapchat names are not consistently store-named, so any such number would cover a
+fraction of spend while reading like a complete breakdown — the exact shape of wrong answer this
+KB exists to prevent.
+
+When a store or market media question arrives: say media isn't tracked by store, then offer the
+cut that is real — by platform, by campaign, or by Google PMax asset group (which is a **campaign
+structure**, not a location).
 
 ## Reach
 
@@ -216,7 +224,6 @@ values on the keyword line, `where 1=1` with one `and` per line. Fixed aliases h
 
 ## Known gaps / not yet answerable
 
-- **Store-level media performance** — no store key; only a name regex on Google PMax asset groups.
 - **True incrementality or blended CAC** — platform attribution only; nothing ties a media
   impression to a Brink order.
 - **Cross-platform de-duplicated reach or frequency** — no shared audience key.

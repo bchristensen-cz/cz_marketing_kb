@@ -97,9 +97,10 @@ The four that change answers most often:
 3. **Never filter `where spend > 0`.** 1,211 Facebook rows have zero spend, impressions and
    clicks but carry real late-attributed conversions and revenue. The filter deletes them
    silently.
-4. **No store key exists.** Nothing here joins to `store_id` / `store_state`. Store-level media
-   numbers come from parsing Google PMax `asset_group` (store-named) or campaign names, and must
-   be labelled as a name match, not a join.
+4. **Media is not reported by store** (steward decision 2026-09-11). Nothing here joins to
+   `store_id` / `store_state`, and no campaign↔store mapping is planned. Cities appearing in
+   campaign and asset-group names are campaign structure, not a location dimension — don't build
+   a store rollup out of them. Answer by platform, campaign or asset group.
 
 Also worth knowing: `conversion_value` is **platform self-attributed**, measured by each
 platform's own pixel with its own lookback window. It double counts across platforms and does not
@@ -128,11 +129,11 @@ group by v.platform
 order by spend desc
 ```
 
-Google PMax by store (name match, not a join — label it as such):
+Google PMax by asset group (a campaign structure, not a store breakdown):
 
 ```sql
 select
-v.asset_group as store_asset_group
+v.asset_group as asset_group
 , round(sum(v.spend), 2) as spend
 , round(sum(v.conversions), 1) as conversions
 from `marketing-data-442316`.claude.ad_spend_daily v

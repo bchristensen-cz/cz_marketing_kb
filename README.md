@@ -34,6 +34,7 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset)
   sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
   date-dimensions/    Fiscal calendar (4-4-5 periods), week endings, holidays (claude.date_dim)
+  cowork-artifact-deploy/  How to change & redeploy an artifact (two-file lineage, drift diff, connector re-grant)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
 artifacts/            Click-to-answer HTML report builders (Cowork artifacts)

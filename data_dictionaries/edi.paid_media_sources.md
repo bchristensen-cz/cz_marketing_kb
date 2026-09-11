@@ -194,10 +194,14 @@ is no de-duplicated total-audience number in this dataset.
 Zupas Mon–Sat business week, nor with `claude.date_dim.week_ending`. Never join reach weeks to a
 sales week without saying they are offset.
 
-### 8. 🕳️ There is no store key anywhere in `edi`
+### 8. There is no store key anywhere in `edi` — and media is not reported by store
 
-No `store_id`, no `store_state`, nothing that joins to `store_info` or the order marts. Store-level
-and market-level media analysis has to parse names:
+No `store_id`, no `store_state`, nothing that joins to `store_info` or the order marts.
+**Steward decision 2026-09-11: that is fine — media is not reported by store**, and a
+campaign↔store mapping is explicitly not on the roadmap. Paid media is answered at chain,
+platform, campaign and ad level.
+
+Recorded here only so nobody mistakes a city in a name for a location dimension:
 
 - **Google PMax asset groups are store-named** and are the cleanest handle — `Greenfield`,
   `McKinney`, `Las Vegas`, `AG-SCHAUMBURG`, `AG-COON_RAPIDS`. Two naming eras: `AG-CITY_NAME`
@@ -206,9 +210,10 @@ and market-level media analysis has to parse names:
   store number; `PMAX-IL-VERNON_HILLS` does not.
 - Facebook / TikTok / Snapchat campaign and ad-group names are **not** consistently store-named.
 
-This is the gap behind the ad-group regex in the 2026-09-10 new-store media analysis. **A proper
-store↔campaign mapping is a genuine backlog item** — until it exists, any store-level media number
-is a regex, and must be labelled as one.
+These names are **campaign structure, not geography.** A name-matched "by store" number would
+cover only the fraction of spend whose campaigns happen to be named after a city and would read
+as a complete breakdown — which is why the 2026-09-10 new-store analysis had to hand-roll an
+ad-group regex. Don't repeat it: answer by campaign or by asset group, and call it that.
 
 ## Platform-level benchmarks (whole history, as of 2026-09-11)
 

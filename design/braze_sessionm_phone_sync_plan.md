@@ -180,6 +180,25 @@ Integrity on the planned set: 0 duplicates involving a planned user, 0 junk left
 
 Rule for any future run: **rebuild within 24 h of the drop** — ~0.5%/week of users change their own number.
 
+### Invalid-phone-format guard added 2026-09-11 (caught at the CSV, after r2) → file 3 = 781,636
+Spot-checking the first add row in the extracted CSV surfaced `2000000000` — NPA `200` unassigned, exchange `000`. The original junk rule only caught all-same-digit, `1234567890`-style sequences, and a leading `0`/`1` on the **area code**; it never checked the **central office code**. Measured across the 750,361 rows carrying a phone: **569 unroutable numbers (0.076%)** — 468 with an exchange starting `0`/`1` (a cluster of `20208…`), 31 with an N11 service area code, 72 on the `555` exchange (incl. `2005551212`, directory assistance), 16 ending in six zeros.
+
+All 569 were **pure adds to users holding no phone**, so excluding them is lossless: those customers stay empty rather than receiving a dead number, and no removal or replace depended on them. Marked `held_out_invalid_phone_format` in `sessionm_phone_sync_plan_r2`; `sessionm_phone_sync_file_r2` rows moved to `file_no = 0`.
+
+Final export `scratch.sessionm_phone_sync_file3_export`: **781,636 rows** = 749,792 phone writes + 31,844 removals. Verified: 0 suspect patterns, 0 non-10-digit values, 0 duplicate numbers within the file.
+
+**Add to the build script's junk definition** (`sql/scratch.sessionm_phone_sync_plan.sql`) so this is caught at plan time, not at the CSV: exchange `substr(ph,4,1) in ('0','1')`, N11 area code `substr(ph,2,2) = '11'`, `substr(ph,4,3) = '555'`, `substr(ph,5,6) = '000000'`. Note the same numbers presumably sit in SessionM today on the removal side — our `junk_only` rule still uses the narrow definition, so a **follow-up cleanup pass** should re-scan `user_phone_numbers` with the widened rule.
+
+### Export mechanics (corrected 2026-09-11)
+`EXPORT DATA` rejects a non-wildcard `uri` and a wildcard shards the output with a header per shard. Use `bq extract` against a flat two-column table instead (single-file URI is legal under 1 GB; this file is ~89 MB). Local `gsutil` is broken on Brent's machine (`Permission denied` reading its own `VERSION`) — use `gcloud storage cp`. `bq extract` quotes minimally rather than quote-all, which is still RFC 4180 and parses the same: `[]` unquoted for removals, the JSON array quoted with doubled inner quotes for writes.
+
+```powershell
+bq extract --project_id=marketing-data-442316 --destination_format=CSV --print_header=true `
+  marketing-data-442316:scratch.sessionm_phone_sync_file3_export `
+  gs://sessionm/phone_sync_exports/2026-09-11/file3_user_update.csv
+gcloud storage cp gs://sessionm/phone_sync_exports/2026-09-11/file3_user_update.csv C:\dev\cz_marketing_kb\artifacts\phone_sync\batches\
+```
+
 ### Worker (not built)
 Cloud Run job draining the plan in `(phase, action_id)` order: write the log row, PUT `request_body`, compare the echoed `phone_numbers` to `desired_phones`, mark `succeeded` / `failed` / `conflict`. Non-200 on a PUT = stop the batch and inspect; never blind-retry. Dry run on 50 users → 5,000 → the rest. Braze side: `/users/track` with `phone: null` for every row in `braze_phone_clear_plan`, after the SessionM phases complete.
 

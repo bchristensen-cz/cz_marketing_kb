@@ -47,9 +47,20 @@ setting and don't spend turns on it.
 
 Sessions that reach the machine through the remote-devices bridge (85–87 tools: shell,
 Filesystem, Desktop Commander, Windows-MCP, Braze, browser) have **not** had the artifact
-tools on any attempt since 2026-09-09. A session started fresh from the desktop app is not
-by itself sufficient — that was tried 2026-09-11 and produced another bridged session.
-The last confirmed successful `update_artifact` was **2026-08-21**.
+tools on any attempt since 2026-09-09.
+
+**There is no user-facing control for this.** Verified 2026-09-11 on desktop app
+`1.52386.0`: the Cowork new-task screen offers only Chat/Cowork, "Project or folder",
+permission mode (Auto) and the model picker. No cloud/local, machine, or execution-location
+selector exists. Starting the task fresh from the desktop app produces another bridged
+session — tried 2026-09-11, 85 tools, no artifact API. **Do not tell Brent to look for a
+setting; there isn't one.** The last confirmed successful `update_artifact` was
+**2026-08-21**, so treat this as an app-side change, not a misconfiguration.
+
+Untested hypothesis, worth one attempt before escalating: the artifact tools may be a
+**Chat**-mode capability rather than a Cowork-mode one (the new-task screen has that
+toggle). If a Chat session on the desktop exposes `update_artifact`, run the §6 one-liner
+there. Record the outcome here either way.
 
 So: if the tools are absent, go straight to §6 and hand off. Do the §2–3 work anyway —
 the diff and the two edited files are exactly what the handoff consumes.

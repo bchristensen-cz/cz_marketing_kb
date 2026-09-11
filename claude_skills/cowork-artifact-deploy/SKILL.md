@@ -25,13 +25,20 @@ The deploy file is the template plus exactly two additions, nothing else. For
 line moves 185 → 193: an 8-line meta block plus a longer resolved tool id. If your delta
 looks different, something else changed — go to §2.
 
-## 0. Two artifact stores — never cross them
+## 0. THREE artifact stores — never cross them
 
 1. **Cowork desktop artifacts.** `item-sales-builder` et al. Live in the desktop app's
    internal storage, **not** as a file on disk. Written only by `update_artifact` /
-   `create_artifact` / `list_artifacts`.
-2. **claude.ai Artifacts.** The top-level `Artifact` tool, reachable from cloud sessions.
-   A separate store with its own `claude.ai/code/artifact/<uuid>` URLs.
+   `create_artifact` / `list_artifacts` in a **Cowork** session.
+2. **Chat artifacts.** A desktop **Chat** session has artifact tools too, but they write
+   to a different store. A Chat session cannot update a Cowork artifact — it will happily
+   create a near-identical copy instead (see §1).
+3. **claude.ai Artifacts.** The top-level `Artifact` tool, reachable from cloud sessions.
+   A separate store again, with its own `claude.ai/code/artifact/<uuid>` URLs.
+
+**No session can write across these boundaries.** Having artifact tools is not the same as
+being able to reach *this* artifact — always confirm the tool can see the target id before
+trusting it, and treat a successful "create" as a red flag when you asked for an update.
 
 `Artifact action=list` does **not** return `item-sales-builder`. If the Cowork tools are
 missing, **do not** "solve" it by publishing the HTML through the `Artifact` tool. That
@@ -57,10 +64,19 @@ session — tried 2026-09-11, 85 tools, no artifact API. **Do not tell Brent to 
 setting; there isn't one.** The last confirmed successful `update_artifact` was
 **2026-08-21**, so treat this as an app-side change, not a misconfiguration.
 
-Untested hypothesis, worth one attempt before escalating: the artifact tools may be a
-**Chat**-mode capability rather than a Cowork-mode one (the new-task screen has that
-toggle). If a Chat session on the desktop exposes `update_artifact`, run the §6 one-liner
-there. Record the outcome here either way.
+**Chat mode is NOT the workaround — tested 2026-09-11, and it makes things worse.** A
+Chat session *does* have artifact tools, so the capability is gated on the Chat/Cowork
+toggle. But those tools write to the **chat artifact store**, not the Cowork one. Handed
+the §6 one-liner, the Chat session read the deploy file, reproduced it byte-for-byte
+(SHA256 `9a1a2308…913498`, 37,038 bytes) — and created a **brand-new chat artifact**,
+leaving the real Cowork `item-sales-builder` untouched and stale. That is exactly the
+duplicate-lineage failure §0 forbids, arrived at from the other direction.
+
+So the two-store rule has a third corner: **Chat artifacts, Cowork artifacts, and
+claude.ai Artifacts are three separate stores, and no session can write across them.**
+Being able to create an artifact is not being able to update *that* artifact. Delete any
+chat-store duplicate as soon as it appears — a stale copy that looks correct is worse than
+no copy.
 
 So: if the tools are absent, go straight to §6 and hand off. Do the §2–3 work anyway —
 the diff and the two edited files are exactly what the handoff consumes.

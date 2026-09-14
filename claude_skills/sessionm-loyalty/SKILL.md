@@ -203,6 +203,71 @@ and lb.current_balance > 0
 group by 1,2
 ```
 
+## Signup cohorts: "who joined and never ordered" (added 2026-09-14)
+
+**`registered_date` is the signup date and it lives on `claude.loyalty_user`.** Nobody had used it,
+so the question "contacts created in week W who have not ordered" was being answered by reading
+`pulse.customers.created_at` directly — a wall breach, observed twice on 2026-09-11 07:09 MT
+(current-year arm plus a `date_sub(current_date(), interval 364 day)` YoY arm). It does not need the
+raw table. The whole thing runs inside `claude.*` for **~0.1 GiB**:
+
+```sql
+with signups as (
+select
+lu.sm_external_user_id as cust_id
+, date_trunc(lu.registered_date, week(monday)) as wk
+from `marketing-data-442316`.claude.loyalty_user lu
+where 1=1
+and lu.registered_date between @start and @end
+and lu.sm_external_user_id is not null
+and lu.is_cater_email = false
+)
+, ordered as (
+select distinct oc.mapped_cust_id as cust_id
+from `marketing-data-442316`.claude.order_customer oc
+where 1=1
+and oc.business_date between @start and current_date('America/Denver')
+and oc.mapped_cust_id is not null
+and oc.customer_type = 'person'
+and oc.is_catering = false
+and oc.store_id not in (1111, 999)
+)
+select
+s.wk as week_start
+, count(*) as signups
+, countif(o.cust_id is null) as never_ordered
+, round(100 * countif(o.cust_id is null) / count(*), 1) as pct_never_ordered
+from signups s
+	left join ordered o
+	on o.cust_id = s.cust_id
+group by 1
+order by 1
+```
+
+Measured 2026-09-14 over the ten weeks to 2026-09-13: **25.2% – 31.4% never ordered**, rising
+through the window (2026-07-06 week 26.2% of 3,642 → 2026-09-07 week 31.4% of 5,141).
+
+Three things to say when you use it:
+
+- **`registered_date` is a LOYALTY signup, not a Pulse contact.** Over those same ten weeks
+  `loyalty_user.registered_date` runs **2% to 17% above** `pulse.customers` non-catering contacts
+  with a non-null email (5,703 vs 4,858 in the newest week), and the gap is widest on the newest
+  week. Different populations with different filters — call the series "loyalty signups" and do not
+  present it as the Pulse contact roster. A true contact-roster series still needs
+  `pulse.customers` exposed in `claude` (Asana 1217792657112397); until then, say so rather than
+  crossing the wall.
+- **The newest weeks are right-censored** exactly like a repeat rate. A member who registered on
+  Friday has had two days to place an order, so their "never ordered" share is inflated by the
+  measurement, not by behaviour. The rising trend above is partly this. Truncate the cohort list
+  to weeks that have had the full exposure you are claiming, and say which exposure you used —
+  same rule as the repeat-rate section in `sales-ops-orders`.
+- **`created_date` is not `registered_date`**, though they agree on ~99.9% of rows
+  (5,699 of 5,703 in the newest week). Use `registered_date` for signup cohorts.
+
+`sm_external_user_id` ↔ `order_customer.mapped_cust_id` is the join — same id space (see the join
+patterns above). `is_cater_email = false` drops catering-provisioned aliases; if the question is
+about catering accounts, use `is_catering_member` instead, never the email prefix.
+
 ## Validated query templates
 
 **Points expiring by month:**

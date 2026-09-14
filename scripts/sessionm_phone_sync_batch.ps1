@@ -1,4 +1,4 @@
-<#
+﻿<#
  sessionm_phone_sync_batch.ps1 -- executes one batch of scratch.sessionm_phone_sync_plan rows against the SessionM v1 users API.
  usage: .\scripts\sessionm_phone_sync_batch.ps1 -BatchFile artifacts\phone_sync\batches\batch_001_junk_only_50.json -BatchLabel batch_001 [-DelayMs 200]
  per row: GET current list -> compare to plan's current_phones (skip as 'stale' if SessionM has moved since the BigQuery snapshot)
@@ -51,8 +51,8 @@ foreach ($r in $rows) {
   } catch {
     $code = $null; try { $code = $_.Exception.Response.StatusCode.value__ } catch {}
     $rec.http_status = $code; $rec.response_body = "$($_.ErrorDetails.Message) $($_.Exception.Message)"
-    $rec.result = if ($code -in 409,422) { 'conflict' } else { 'failed' }
-    $stop = $true
+    if ($rec.response_body -match 'user_not_found') { $rec.result = 'deleted'; $stop = $false } else { $rec.result = if ($code -in 409,422) { 'conflict' } else { 'failed' } }
+    if ($rec.result -ne 'deleted') { $stop = $true }
   }
   ($rec | ConvertTo-Json -Compress) | Add-Content -Path $outFile
   Start-Sleep -Milliseconds $DelayMs
@@ -60,3 +60,4 @@ foreach ($r in $rows) {
 $sw.Stop()
 "rows=$n succeeded=$ok stopped=$stop elapsed_s=$([math]::Round($sw.Elapsed.TotalSeconds,1)) results=$outFile"
 Get-Content $outFile | ForEach-Object { $_ | ConvertFrom-Json } | Group-Object result | ForEach-Object { "  $($_.Name): $($_.Count)" }
+

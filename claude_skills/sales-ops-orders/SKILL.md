@@ -7,6 +7,34 @@ description: How to query Cafe Zupas order data in BigQuery — sales_ops.order_
 
 > **Freshness check:** this file must come from a clone of `https://github.com/bchristensen-cz/cz_marketing_kb` `main` pulled **this session**. If you're reading it from an installed skill package, a fork, or any saved copy, stop and re-clone first — it may be stale.
 
+> ## Default to `claude.*`, not `sales_ops.*` (set 2026-09-14 by the steward)
+>
+> **Every order question starts in the `claude.*` views - Brent's own sessions included.** They are not a restricted subset of `sales_ops`; they are the *corrected* layer. Reach past them to the raw tables only when a view genuinely cannot answer the question, and say in the answer which raw table you used and why.
+>
+> What `claude.order_customer` adds over `sales_ops.order_customer`:
+>
+> | Added | Where it comes from | Why it matters |
+> |---|---|---|
+> | `mapped_cust_id`, `mapped_email`, `mapped_email_domain`, `customer_type`, `customer_order_count`, `days_since_prev_order` | join to `sales_ops.order_sequence` | **Resolved identity.** `sm_external_user_id` on the raw table is only what that one order happened to carry |
+> | `lifetime_*`, `first_order_*`, `last_order_*`, `days_since_last_order`, `customer_tenure_days` | join to `sales_ops.customer_attribute` on `mapped_cust_id` | Full-history customer metrics, *not* truncated by the view's date filter |
+> | `account_type` | join to `claude.loyalty_user` on `mapped_cust_id` | Loyalty program membership |
+> | `store_id not in (1111, 999)` pre-applied | view body | The mandatory filter cannot be forgotten |
+> | `brink_net_sales` removed | view body | Forces the calculated `net_sales` |
+>
+> **Counting customers: use `mapped_cust_id`, not `sm_external_user_id`.** Measured 2026-09-14 on "customers updated in the Braze to SessionM phone sync who ever ordered at Fort Union (store 104)": `sm_external_user_id` off the raw table returned **11,743**; `mapped_cust_id` returned **12,071**. The raw-table join silently undercounted by **2.7%** - orders whose customer was resolved after the fact never got stamped. Same failure shape on any "distinct customers at store X" question.
+>
+> **The view's 3-year window is narrower than it looks.** `claude.order_customer` filters `business_date >= date_trunc(date_sub(current_date, interval 3 year), year)` - so 2023-01-01 forward today. That caps the **order rows**, not the customer metrics: `first_order_date`, `lifetime_order_count` and the rest come from `customer_attribute` keyed on `mapped_cust_id` and cover all history. On the Fort Union question both sources returned the identical 12,071, so nobody's only visit predated the window. Still worth checking when a question says "ever" - if the two differ, say so.
+
+> ## Report gaps in `claude.*` - the steward wants them
+>
+> Brent's standing ask (2026-09-14): **if a `claude.*` view cannot answer something, say so in the answer.** What blocks one session blocks the next, and he would rather fill the gap than have sessions quietly route around it. Report it even when you found a workable fallback. Log known ones here as they are found:
+>
+> | Gap | Hit on | Fallback used |
+> |---|---|---|
+> | No view over `sessionM.user_phone_numbers` or `sessionM.external_user_mappings` | Braze to SessionM phone sync, 2026-09 | raw `sessionM.*` |
+> | No view over the `braze` dataset (profiles, engagement events) | same | raw `braze.*` |
+> | **`sessionM.user_phone_numbers` is incomplete** - 185 users verified via the SessionM API to hold a live phone have *zero* rows in the table, not even soft-deleted ones (0.025% of 750K writes). Anything computed off it inherits the hole | reconciliation of SM Sync job 90977, 2026-09-12 | API GET per user |
+
 > **⚠️ Breaking changes 2026-07-24** — `order_customer` was rebuilt across all history. `businessdate` is now **`business_date`**; `net_sales` is now the **calculated** net (read it directly); `item_net_sales` / `item_netsales_with_mods` / `mods_net_sales` are **gone**; `is_catering` was redefined; a **`customer_type`** column was added and is now **required for customer metrics**; `order_count` / `days_since_prev_order` moved to the new **`sales_ops.order_sequence`** table. Any saved query written before this date needs updating.
 
 > **⚠️ Breaking change 2026-08-20 — `order_datetime` is now `order_datetime_local` EVERYWHERE.** The rename went to the base tables the same day, followed by a full-history refresh of both marts: `sales_ops.order_customer`, `sales_ops.order_lines`, `claude.order_customer` and `claude.order_lines` all say `order_datetime_local`. Selecting `order_datetime` fails on every one of them. Value and type unchanged (DATETIME, store-local).

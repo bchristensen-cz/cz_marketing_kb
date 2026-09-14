@@ -248,6 +248,15 @@ number is real.
 > Until it deploys, guest-identity questions (which email placed this guest order, guest→account
 > conversion by email, guest repeat behaviour across identities) are **unanswerable from the
 > marts — say so and log the question as a KB finding rather than crossing the wall.**
+>
+> **⚠️ A third `pulse.customers` purpose appeared 2026-09-11 07:09 MT, and this one the marts
+> already answer.** Two MCP queries (current year + a `date_sub(current_date(), interval 364 day)`
+> YoY arm) read `pulse.customers.created_at` to build "contacts created in week W who have never
+> ordered". **`claude.loyalty_user.registered_date` is the signup date** and joins to
+> `order_customer.mapped_cust_id` via `sm_external_user_id` — the whole cohort runs inside
+> `claude.*` for ~0.1 GiB. Recipe, measured numbers and the two caveats (it is a *loyalty* signup,
+> not a Pulse contact; the newest weeks are right-censored) are in **`sessionm-loyalty`, "Signup
+> cohorts"**. Reach for that before you reach for `pulse.*`.
 
 Rules:
 
@@ -310,6 +319,32 @@ again. The analyst tracker that scans `between date('2023-03-06') and current_da
 queries since 08-10 reached back 3+ years (323 GiB)** — all but ~15 of them were first-order
 floors, not questions about old years. The bounded shapes above read the cohort window only
 (tens of MiB).
+
+> **The rule landed 2026-09-09 and the tracker still ran on 2026-09-11** (07:09:35 MT, one
+> execution, `with eord as (…)` scanning `between date('2023-03-06') and current_date()`). Once,
+> not seventy times, so the rule is working — but it is not self-enforcing, and the shape survives
+> in whatever template the analyst is pasting from. Rewriting that template at source is the open
+> fix (Asana 1217645792289097); until it lands, expect this shape to reappear and replace it with
+> the bounded form rather than just noting it.
+>
+> **Related, same tracker, measured 2026-09-11/13: the metric drifts between runs.** The
+> "new customers and banked second orders since 2026-06-15" question ran nine times over the two
+> days with **four different definitions** — `countif(customer_order_count = 1)` in some runs and
+> `count(distinct oc.mapped_cust_id)` in others; `days_since_prev_order <= 90` sometimes inside the
+> `or` branch and sometimes only in the outer predicate (which changes which first orders enter the
+> cohort at all); and "banked through yesterday" written three ways (`business_date <
+> current_date`, `<= date_sub(current_date, 1)`, `< date_sub(current_date, 1)` — the last is two
+> days ago, not one). Same question, different answers, no way for the reader to tell which run
+> they got. **Name the definition once and quote the boundary in the answer**: cohort = first
+> orders in [start, end], banked = `customer_order_count = 2 and days_since_prev_order <= N` with
+> the cohort date recovered by `date_sub(business_date, interval days_since_prev_order day)`, and
+> "through yesterday" = `business_date <= date_sub(current_date('America/Denver'), interval 1 day)`.
+> A canonical first-order-cohort mart is the durable fix (Asana 1217493799685485).
+>
+> One harmless artefact in the same template, so nobody re-derives it: the filter
+> `lower(coalesce(oc.mapped_email, oc.email)) <> 'nan'` matches **nothing**. Measured 2026-09-14
+> over 2026-06-15 → 09-13, stores 1111/999 excluded, 2,095,686 orders: **zero** `'nan'` values in
+> `email`, `mapped_email`, or the coalesce. It is a pandas-export leftover, not a real sentinel.
 
 `customer_order_count = 1` on `claude.order_customer` already marks a customer's first order,
 and `days_since_prev_order` on the `= 2` row already gives days-to-second — both folded in

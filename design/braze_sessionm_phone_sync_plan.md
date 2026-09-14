@@ -211,3 +211,24 @@ Cloud Run job draining the plan in `(phase, action_id)` order: write the log row
 - `sessionM.user_phone_numbers` has rows with a NULL `phone_number`; they are excluded from the plan (an array with a NULL element fails the build).
 - `gcloud` auth on the Windows machine had expired 2026-09-04 (`bq` needs `gcloud auth login`); the review sample was exported through the MCP connector instead.
 - `.env.local.gitignore` was **not** ignored by git despite its name (`.gitignore` only listed `CLAUDE.md`). Added `.env.local.gitignore` and `.env*` to `.gitignore` 2026-09-04.
+
+### Reconciliation of SM Sync job 90977 (file 3) — 2026-09-12/14
+
+Live-state snapshot materialized as `scratch.sessionm_live_phones_20260912` (active, non-deleted rows from `sessionM.user_phone_numbers`, deduped on `phone_number_id, user_id` by latest `etl_time`). Gate passed first: mart `max(updated_at)` = 2026-09-12 06:31:05 UTC, post-dating the job's 22:33:08 finish; 790,950 rows touched since job start; table grew 414,936 to 1,174,025.
+
+| Outcome | Users |
+|---|---|
+| live list == desired list | **781,393** (99.969%) |
+| non-match | 243 |
+
+**185 of the 243 were not failures.** Every one had *zero* rows in `user_phone_numbers` — not even soft-deleted ones — the same signature as `9acc27b2`. Six spot-checked against the API all returned exactly the number we sent. So the mart drops a small slice of users entirely (185 / 750,361 adds = 0.025%); the writes landed. Marked `succeeded_mart_gap_file3`. **This is a mart completeness defect, not a sync defect** — worth raising with SessionM, since anything we compute off `user_phone_numbers` inherits it.
+
+**58 were real misses**, confirmed by API GET matching the mart exactly: 50 removals that never applied (41 conflict holders, 10 junk-only, and one 2-phone user), 7 adds where the old number stayed, 1 replace. **224 of the original 243 (92%) hold more than one `cafezupas` external_id**, against a 0.42% base rate in file 3 — the multi-mapping hypothesis is now effectively confirmed as the mechanism: the importer resolves `external_id` against an arbitrary mapping row and can land on a different profile than the one we targeted.
+
+**Repair batch `repair_001_file3_58`** ran against the API keyed on `sm_user_id` (no external_id resolution, so nothing to mis-resolve): **52 succeeded, 2 deleted profiles, 4 stale**. Of the 4 stale, three were already in the desired state (SessionM had already dropped two 9-digit junk numbers, one user already held only the winner); one (`8300508c`) had the customer type a different number since the snapshot, correctly left alone. **The file-3 gap is closed.**
+
+`scripts/sessionm_phone_sync_batch.ps1` patched: a `400 user_not_found` on the GET now records `deleted` and continues instead of halting the batch.
+
+**Duplicates:** 482 numbers now sit on more than one profile (1,006 users); 124 of them involve a number file 3 wrote. Baseline before the run was 265 among held-out users. The 50 unapplied removals account for most of the increase and are now repaired — a re-scan after the next mart load should show this fall back toward baseline.
+
+**Still open:** re-scan removals with the widened junk rule; the 1,474 privacy / 377 recent-edit / 201 conflict / 77 no-unique-id hold-outs; the Braze-side clear of losing profiles; and folding the privacy_requests exclusion and widened junk rule into `sql/scratch.sessionm_phone_sync_plan.sql`.

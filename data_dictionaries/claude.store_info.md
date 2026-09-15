@@ -24,17 +24,20 @@ Same as the [`sales_ops.store_info` dictionary](sales_ops.store_info.md), with t
 |---|---|---|
 | `market` | STRING | **Added.** An explicit alias of `store_state`. "Market" is the word users say, so it's in the schema — the canonical mapping can't be got wrong. **Values are full state names (`Arizona`, `Utah`, `Texas`…), not postal codes** — `store_state = 'AZ'` returns zero rows and reads as "no Arizona stores" (observed 2026-09-01; the correct literal is `'Arizona'`). Resolve the value against the data or use `like 'Ariz%'` when unsure |
 | `store_tz` | — | **Dropped.** Ambiguous abbreviations (`MDT` vs `CT` mixes DST and standard forms). Use `timezone_name` (IANA) |
+| `store_phone` | — | **Dropped.** Not exposed to standard users |
+| `store_comp_date` | — | **Dropped.** See the point-in-time comp note below |
 
-Everything else passes through unchanged: `store_id`, `store_name`, `store_short_name`,
-`store_address`, `store_city`, `store_state`, `store_zip`, `store_open_date`,
-`is_comp_store`, `latitude`, `longitude`, `weather_cluster_id`, `timezone_name`.
+Everything else passes through unchanged, **14 columns total** (verified 2026-09-15):
+`store_id`, `store_name`, `store_short_name`, `store_address`, `store_city`, `store_state`,
+`market`, `store_zip`, `store_open_date`, `is_comp_store`, `latitude`, `longitude`,
+`weather_cluster_id`, `timezone_name`.
 
 ## Divergences from the `sales_ops` parent
 
 **Three non-store rows are dropped** — `store_id` 0 (`Company`, every field blank, the
 source of the nameless group in any geography breakdown), 901 (`Zupas Lab2`), and 9001
-(`Zupas automation test`). All three carried zero orders. So this view is **96 rows**
-against the parent's 99.
+(`Zupas automation test`). All three carry zero orders. So this view is **98 rows**
+against the parent's 101 (verified 2026-09-15).
 
 **Store 101 (Corporate) and 113 / 114 (mall kiosks) are kept** — real locations with real
 addresses. They also carry zero orders, so `count(*)` here is still **not** the trading
@@ -42,7 +45,7 @@ store count.
 
 ## Gotchas
 
-- **`count(*)` is not "how many stores do we have."** 96 rows includes corporate and two
+- **`count(*)` is not "how many stores do we have."** 98 rows includes corporate and two
   kiosks, plus stores that haven't opened yet (`store_open_date` is NULL on several live
   and pre-opening rows). For trading stores, count distinct `store_id` on
   `order_customer` over the window in question.
@@ -78,21 +81,27 @@ never "comp".
 `having count(distinct business_date) = 6`, `store_open_date <= date_sub(launch, interval 365
 day)`, and `store_open_date <= '2025-06-14'`. Only the first is comp.
 
-> **Why the open-date proxies keep coming back, answered 2026-09-15.** `sales_ops.store_info`
-> carries a **`store_comp_date`** column that is exactly `is_comp_store` expressed as a date
-> (77 comp stores all past-dated, 21 non-comp all future-dated, zero disagreements). Every value
-> is a **January 1st** — comp entry is a finance-calendar decision, *not* store tenure. A store
-> opened 2024-08-08 comps on **2027-01-01**. So no "open at least N months" cutoff can ever
-> reproduce the comp base, and writing a longer offset does not help. The 2026-09-14 variant
+> **Why the open-date proxies keep coming back, and the rule that replaces them (updated
+> 2026-09-15).** `sales_ops.store_info` carries a **`store_comp_date`** column that is exactly
+> `is_comp_store` expressed as a date (77 past-dated, 24 future-or-null, zero disagreements across
+> all 101 rows). Since 2026-09-15 it is **derived by the build**, not hand-kept: a store comps on
+> the **first day of the year following 18 months of trading**,
+> `date_add(last_day(date_add(store_open_date, interval 18 month), year), interval 1 day)`.
+> Every value is therefore a **January 1st**, and a store opened 2024-08-08 does not comp until
+> **2027-01-01**, nearly two and a half years later.
+>
+> So comp entry *is* tenure-based, but snapped forward to the next fiscal year, which is why no
+> plain "open at least N months" cutoff reproduces the comp base and why writing a longer offset
+> never fixes it. Six analysts have now invented six different proxies. The 2026-09-14 variant
 > (`store_open_date <= '2025-06-14'`) returned **81 stores, not 77**, putting **$2.61M TY /
-> $2.64M LY** of non-comp sales into a comp number — and since those four stores are down ~1.1%,
-> the error drags the result rather than washing out. Full numbers and the per-store table are in
+> $2.64M LY** of non-comp sales into a comp number, and since those four stores are down ~1.1% the
+> error drags the result rather than washing out. Full numbers and the per-store table are in
 > [`sales_ops.store_info.md`](sales_ops.store_info.md).
 >
-> **`store_comp_date` is deliberately NOT on this view**, and it is hand-maintained upstream with
-> no sync or guard, so do not ask for it to be added casually. If a question genuinely needs a
-> *point-in-time* comp base ("what was comp in FY25?"), that is a steward request — say so rather
-> than approximating it from `store_open_date` (Asana 1217879256348882).
+> **`store_comp_date` is still not on this view.** For a *point-in-time* comp base ("what was comp
+> in FY25?") it is now the right column and it is safe to rely on, so exposing it is a smaller ask
+> than it was while it was hand-maintained. Until it is added, route that question to the steward
+> rather than approximating it from `store_open_date` (Asana 1217879256348882).
 
 > Routing note: this view already carries `is_comp_store`, `weather_cluster_id`, `market`,
 > lat/long and `timezone_name`. There is **no reason to reach into `sales_ops.store_info`**

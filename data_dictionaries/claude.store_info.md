@@ -73,6 +73,27 @@ same-question-different-answer failure this KB exists to prevent.
 wants "stores trading in both windows" — a valid but different question — name it that,
 never "comp".
 
+**Six variants have now been observed in the log** (2026-08-25, 09-03, 09-05, 09-08, 09-09,
+09-14): the canonical flag, a hand-typed 77-id `in (...)` list, "traded in both windows",
+`having count(distinct business_date) = 6`, `store_open_date <= date_sub(launch, interval 365
+day)`, and `store_open_date <= '2025-06-14'`. Only the first is comp.
+
+> **Why the open-date proxies keep coming back, answered 2026-09-15.** `sales_ops.store_info`
+> carries a **`store_comp_date`** column that is exactly `is_comp_store` expressed as a date
+> (77 comp stores all past-dated, 21 non-comp all future-dated, zero disagreements). Every value
+> is a **January 1st** — comp entry is a finance-calendar decision, *not* store tenure. A store
+> opened 2024-08-08 comps on **2027-01-01**. So no "open at least N months" cutoff can ever
+> reproduce the comp base, and writing a longer offset does not help. The 2026-09-14 variant
+> (`store_open_date <= '2025-06-14'`) returned **81 stores, not 77**, putting **$2.61M TY /
+> $2.64M LY** of non-comp sales into a comp number — and since those four stores are down ~1.1%,
+> the error drags the result rather than washing out. Full numbers and the per-store table are in
+> [`sales_ops.store_info.md`](sales_ops.store_info.md).
+>
+> **`store_comp_date` is deliberately NOT on this view**, and it is hand-maintained upstream with
+> no sync or guard, so do not ask for it to be added casually. If a question genuinely needs a
+> *point-in-time* comp base ("what was comp in FY25?"), that is a steward request — say so rather
+> than approximating it from `store_open_date` (Asana 1217879256348882).
+
 > Routing note: this view already carries `is_comp_store`, `weather_cluster_id`, `market`,
 > lat/long and `timezone_name`. There is **no reason to reach into `sales_ops.store_info`**
 > for a comp-store or geography question. Joining the `sales_ops` copy was the single most

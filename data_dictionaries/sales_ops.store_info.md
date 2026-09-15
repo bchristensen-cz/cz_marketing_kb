@@ -23,6 +23,7 @@ status. Join it to any order/line table on `store_id` to break results out by ge
 | `store_tz` | STRING | Abbreviation (`MDT`, `CT`, …), 6 distinct. **Prefer `timezone_name`** — abbreviations mix DST and standard forms |
 | `store_open_date` | DATE | 2004-10-01 → 2026-08-14. NULL on the non-store rows, on Corporate / the two kiosks, and on any store that has not yet had a >150-order day (step 3 of the build). Do not use it to build store-age cohorts without checking coverage — and note it is a *first busy day*, not a lease or announcement date |
 | `is_comp_store` | INTEGER | 1 = comp store (77), 0 = not (22). **INTEGER, not BOOL** — write `si.is_comp_store = 1`, not `= true` |
+| `store_comp_date` | DATE | **The date the store enters the comp base.** Undocumented until 2026-09-15 — see the section below. Perfectly consistent with `is_comp_store` as measured 2026-09-15, but it has **no sync and no guard** in the build script |
 | `latitude` | FLOAT | NULL on the non-store rows |
 | `longitude` | FLOAT | |
 | `weather_cluster_id` | INTEGER | 12 distinct. From `marketing_ops.zip_weather_cluster`, refreshed daily |
@@ -40,6 +41,7 @@ this table is derived in [`sql/sales_ops.store_info.sql`](../sql/sales_ops.store
 | `timezone_name`, `store_tz` | `store_state` → IANA map, step 4 | ✅ yes, is-null only |
 | `weather_cluster_id` | nearest metro cluster centroid, step 5 | ✅ yes, is-null only |
 | `latitude`, `longitude` | **human geocode — BigQuery cannot derive it** | ❌ no |
+| `store_comp_date` | **nothing — not fed, not derived, not guarded** | ❌ no (2026-09-15) |
 
 `store_phone` is fed, but **transformed**: staging holds it formatted (`801-613-3380`) and the
 column is INT64, so the INSERT strips non-digits before casting. A bare
@@ -50,6 +52,64 @@ failure signature as the timezone hole: correct on history, NULL on everything n
 **The general rule this table teaches: a derived column absent from the build script is a
 column that is NULL forever on every new store.** That is exactly how `timezone_name` went
 missing on six stores and silently NULLed `order_timestamp_utc`.
+
+### ⚠️ `store_comp_date` — the column that explains why every open-date comp proxy is wrong (2026-09-15)
+
+Measured 2026-09-15 over the 98 real store rows (`store_id not in (0, 901, 9001, 1111, 999)`):
+
+| `is_comp_store` | stores | `store_comp_date` range | NULLs | comp date reached? |
+|---|---|---|---|---|
+| 1 | 77 | 2007-01-01 → 2026-01-01 | 0 | 77 of 77 |
+| 0 | 21 | 2027-01-01 → 2029-01-01 | 6 | 0 of 21 |
+
+So **`is_comp_store = 1` is exactly `store_comp_date <= today`**, with no exceptions. The two
+columns do not disagree on a single store.
+
+The useful part is *what the dates are*: *every* value is a **January 1st**. Comp entry is a
+finance-calendar decision, not a tenure rule — a store that opened **2024-08-08 comps on
+2027-01-01**, nearly two and a half years later. That is the whole reason hand-rolled
+"open at least N months ago" filters keep producing a different comp base than the business
+uses, and why writing a *bigger* offset does not fix them: there is no offset that reproduces
+this, because the rule isn't an offset.
+
+**Worked example, the sixth comp variant (analyst session 2026-09-14).** `store_open_date <=
+DATE '2025-06-14' and store_id <> 50` was used as the comp base for a summer YoY. It returns
+**81 stores against the canonical 77**. The four extras:
+
+| store | name | state | opened | `store_comp_date` | TY net (06-03→09-08) | LY net |
+|---|---|---|---|---|---|---|
+| 185 | Zupas Brookfield | Wisconsin | 2024-12-19 | 2027-01-01 | $859,421 | $806,334 |
+| 183 | Zupas Burnsville | Minnesota | 2024-08-16 | 2027-01-01 | $825,315 | $830,954 |
+| 182 | Zupas Prasada | Arizona | 2024-08-08 | 2027-01-01 | $512,058 | $546,093 |
+| 184 | Zupas Surprise | Arizona | 2024-12-26 | 2027-01-01 | $413,842 | $455,947 |
+
+**$2,610,636 TY / $2,639,328 LY of non-comp sales inside a "comp" number**, and because the four
+are collectively down ~1.1% they drag the result — the error does not wash out. The same session
+also used `store_open_date <= '2025-06-03'` in other queries, so two comp bases were in play
+within one analysis.
+
+**Rules:**
+
+- "Comp" as of today → **`is_comp_store = 1`** (synced from the store master, step 2 of the
+  build). This stays the canonical answer and the one to quote.
+- A **historical or point-in-time** comp base ("what was comp in FY25?") → `is_comp_store` is a
+  property of *today* and will silently use today's 77 stores for a 2025 window.
+  `store_comp_date <= <window start>` is the point-in-time-correct form — **but verify it first**
+  (see the caveat below) and say in the answer which of the two you used.
+- Never `store_open_date <= <cutoff>`. Never "traded in both windows". Both are different
+  questions; if that is what someone wants, name it that way and never call it comp.
+
+**Caveat, and the reason this is a ⚠️ and not a ✅:** `store_comp_date` is **not in
+`staging.store_info` and not touched anywhere in the build script** — not inserted, not synced,
+not asserted. It is hand-maintained. It agrees perfectly with `is_comp_store` today, but nothing
+keeps it that way, and `is_comp_store` moves on its own when the store master updates. Treat
+`store_comp_date` as reliable for reading history and **re-check the two columns agree** before
+building anything durable on it. Bringing it into the feed (or deriving `is_comp_store` from it)
+is the fix that would make the point-in-time form safe — logged on Asana 1217879256348882.
+
+**It is also not exposed through `claude.store_info`**, so a standard user cannot see it at all:
+the only comp-ish columns they get are the `is_comp_store` flag and `store_open_date`. That gap
+is a large part of why analysts reach for the open-date proxy.
 
 ### Build behaviours that aren't obvious from reading the SQL
 

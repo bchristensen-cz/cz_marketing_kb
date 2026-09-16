@@ -86,6 +86,22 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 | `mapped_email` | STRING | Most recent non-null email across the customer's orders. **100% populated** in the 2026-07-29 build. Was 844 NULLs on 2026-07-28, so this is not guaranteed to stay at zero — don't assume non-null without checking. |
 | `mapped_email_domain` | STRING | Domain of the same order's email. |
 
+### Demographics — **new 2026-09-15, not yet exposed to standard users**
+| Column | Type | Description |
+|---|---|---|
+| `gender` | STRING | Closed two-value domain, **lowercase**: `female` / `male`. There is no `other` / `unknown` sentinel — absent is NULL. Measured 2026-09-16 on the 2026-09-15 build (1,335,690 rows): `female` **796,462 (59.63%)**, `male` **323,341 (24.21%)**, NULL **215,887 (16.16%)**. Quote gender splits on the **populated base**, not on all customers, or the 16% NULL silently shrinks both shares. |
+| `birthday` | DATE | **20.18%** populated (269,594). Range runs **1877-08-19 → 2022-10-13** — unvalidated at both ends, so a raw `min`/`max`/age-band rollup will carry junk. Filter to a plausible window before using it. |
+| `age` | INT64 | **9.03%** populated (120,568) — **less than half the birthday coverage**. ⚠️ `age` is never populated without a `birthday` (0 rows), but **149,026 rows carry a birthday with a NULL `age`** (55.3% of all birthdays). So `age` is *not* a plain `date_diff` off `birthday` and the two columns are not interchangeable. The reason for the gap is **not established** — read `sql/sales_ops.customer_attribute.sql` before offering one. It is also not fully sanity-checked: **6 rows under 13 and 27 over 100** survive (range 4 → 149), with 120,535 in a plausible 13–100. |
+
+> **🚨 These three columns are on `sales_ops.customer_attribute` only.** `claude.order_customer`
+> folds this table in through a **select list**, not `select *`, so the adds did **not**
+> propagate — verified against the live view 2026-09-16: `gender`, `birthday` and `age` are
+> absent from `claude.INFORMATION_SCHEMA.COLUMNS`. A standard user asking a demographic
+> question today gets `Unrecognized name`, not an answer. This is the same select-list-view
+> lesson as 2026-08-13 and 2026-08-17: **adds, renames and drops all require the redeploy.**
+> Exposing them is a steward call, not an oversight to patch silently — 9% age coverage may
+> not be worth publishing.
+
 ### Lifetime volume
 | Column | Type | Description |
 |---|---|---|

@@ -385,6 +385,21 @@ nothing about which address is "right".
   Healthy is **~28–33% `pct_sm_linked`**, **excluding the current business date** — see below.
   Anything under 15% on a *completed* day means that day is corrupted.
 
+- **🔑 The Pulse orders feed can stop on its own while every other `pulse.*` table keeps loading**
+  (observed 2026-09-15 05:51 MT → still stalled 2026-09-18). Settled-day identification fell from
+  ~55% to ~14% because only the SessionM arm was left: 09-15 / 16 / 17 carried 4,072 / 4,063 / 4,051
+  `sm_external_user_id` orders and 167 / 0 / 0 `pulse_order_id` orders; `order_source` was NULL on all
+  but 167 of 87,606 orders, `is_guest_order` NULL everywhere, `is_catering` fine (Brink-side).
+  Distinguish from the SessionM failure above by the columns: SessionM outage → `sm_external_user_id`
+  ≈ 0, Pulse outage → `pulse_order_id` = 0. Root cause sat upstream of BigQuery: the compute SA
+  loader (`286373888726-compute@developer.gserviceaccount.com`, nightly ~01:35 MT) ran the
+  `orders_stg` LOAD + `orders` MERGE on 09-13/14/15 and then did not submit either job at all on
+  09-16/17/18 (no `error_result`; 85 destination tables per night instead of 87), while
+  `order_customers`, `order_items`, `customers` merged normally. (A separate, older failure in the
+  same run — `customer_rewards_stg` parquet `discount_amount` INT32 type mismatch — fails every night
+  and is unrelated.) Recovery is automatic: once `pulse.orders` is backfilled the 5am full-history
+  reload re-identifies the gap days; verify with the daily `identified_pct` query and re-quote.
+
 - **🔑 SessionM loads ONCE PER DAY — merged into `sessionM.*` at 04:07 MT — so today's orders have
   no loyalty identity; yesterday is complete from the 05:02 full rebuild** (chain re-sequenced
   2026-09-08/09; supersedes the 2026-09-04 "06:15 / 07:02" note and the 2026-07-29 "~03:00" note).

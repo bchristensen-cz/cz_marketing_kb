@@ -234,6 +234,31 @@ Full definition, the `upper()` join trap on `root_offer_id`, the employee-meal o
 pre-2024 window rule are in [`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
 [`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
 
+### "App user" / "app customer" means the canonical App User definition (steward decision 2026-09-17)
+
+When an employee asks about app users, app customers, or "how many people use the app",
+resolve to the canonical definition in the sales-ops-orders skill and do **not** open a fork
+about what "app user" means. The definition is a person customer with an **app purchase in
+the trailing 12 months** (`oc.order_source in ('iOS', 'Android')` **or** `oc.in_store_scan =
+1`, because the steward's stated assumption is that an in-store scan is made with the app) **or**
+a **native-app session in the trailing 90 days** (`braze.app_sessionstart`, `workspace =
+'cafe_zupas'`, `platform in ('ios', 'android')`). State both windows in the answer.
+
+Two things still need resolving, and the data cannot answer them:
+
+- **As-of date.** The windows anchor to today unless the question names a date. If it does,
+  substitute that date in both windows and say so.
+- **Customer definition vs channel metric.** "App users" is a customer count. "App orders" or
+  "app sales" is a channel question: `oc.order_source in ('iOS', 'Android')` on orders, no
+  scan component, no session component. If the wording could be either, ask, with the
+  consequence in the label (customers counted once across 12 months vs orders in the period).
+
+Never substitute a share-of-orders cut ("more than half their orders in the app") for the
+definition; if it is requested, label it "app-primary" and present it as a separate, non-canonical
+number. Full rules, the platform gotcha and the canonical query live in
+[`claude_skills/sales-ops-orders/SKILL.md`](../sales-ops-orders/SKILL.md) under *"App user" is a
+canonical customer definition*.
+
 ## Step 2 — ask once, with clickable options
 
 Use `AskUserQuestion`. **Every option label must carry its consequence**, drawn from the

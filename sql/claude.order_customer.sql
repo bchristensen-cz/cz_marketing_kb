@@ -66,6 +66,12 @@
 -- NOT coalesced: a BOOL false would read as "not an app user" when the truth is "no customer".
 -- Test with `is_app_user is true` / `is_app_user is not true`, never `= false`. View is now 67
 -- columns. gender / birthday / age remain unexposed (separate steward call).
+--
+-- 2026-09-17 23:40 MT: gender, birthday and age exposed too (steward call, same session). View is
+-- now 70 columns. birthday year 1950 is the app's placeholder for "year not provided": month and
+-- day are real, the year is not, and age is NULL on exactly those rows (151,258 of 279,164
+-- birthdays on the 2026-09-16 build). Passed through unchanged so birthday-month work still
+-- works; never compute an age from birthday yourself, read the age column.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -91,6 +97,9 @@ oc.* except(brink_net_sales)
 , ca.customer_tenure_days
 , ca.is_app_user
 , ca.app_user_type
+, ca.gender
+, ca.birthday
+, ca.age
 , lu.member_program as account_type
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os

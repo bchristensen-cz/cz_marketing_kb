@@ -511,7 +511,13 @@ first** — that's the mistake made here.
   effectively 2023-03-06; a customer may well have ordered anonymously before that. Say so
   when presenting tenure or acquisition-cohort numbers.
 - **Catering is included** in every lifetime and window total. Net it out with
-  `lifetime_catering_order_count` if the question excludes catering.
+  `lifetime_catering_order_count` if the question excludes catering. **The window columns
+  (`orders_l30/l90/l365`, `net_sales_l30/l90/l365`) have no catering counterpart**, so a
+  trailing-window spend tier under the standard catering exclusion cannot be taken from this
+  table exactly (gap logged 2026-09-18 after an analyst re-aggregated `order_customer` for
+  364-day spend tiers). The residual is small — catering and individual customers are separate
+  identity populations by design (2,599 of 1.32M persons showed both, 2026-08-31) — so use the
+  `_l365` columns and state the inclusion rather than rescanning the fact table.
 - **⚠️ Reconciling this table against `order_customer` requires the build's WHERE clause
   verbatim** — `customer_type = 'person'` **and** `store_id <> 1111`, over
   `business_date between '2018-08-07' and attribute_asof_date`. Omit either filter and you

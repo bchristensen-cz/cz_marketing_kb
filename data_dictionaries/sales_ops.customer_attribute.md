@@ -210,8 +210,12 @@ makes every window whole-day and independent of run time. So a build on 2026-07-
 |---|---|---|
 | `orders_l30` / `orders_l90` / `orders_l365` | INT64 | Order count in the trailing 30 / 90 / 365 days. |
 | `net_sales_l30` / `net_sales_l90` / `net_sales_l365` | FLOAT | Net sales over the same windows. |
+| `catering_orders_l30` / `_l90` / `_l365` | INT64 | **Added 2026-09-18.** Subset of the matching `orders_lN` where `is_catering`. 0, never NULL. |
+| `catering_net_sales_l30` / `_l90` / `_l365` | FLOAT | **Added 2026-09-18.** Subset of the matching `net_sales_lN` where `is_catering`. Ex-catering spend = `net_sales_lN - catering_net_sales_lN`. Not part of `attribute_hash` (it already moves with the parent columns). |
 
-These are the columns that force the daily full recompute.
+These are the columns that force the daily full recompute. `orders_l365`, `net_sales_l365`,
+`catering_orders_l365` and `catering_net_sales_l365` are exposed on `claude.order_customer`
+since 2026-09-18 (the 30/90 pairs are `sales_ops`-only).
 
 ### App usage (new 2026-09-18)
 
@@ -511,13 +515,17 @@ first** — that's the mistake made here.
   effectively 2023-03-06; a customer may well have ordered anonymously before that. Say so
   when presenting tenure or acquisition-cohort numbers.
 - **Catering is included** in every lifetime and window total. Net it out with
-  `lifetime_catering_order_count` if the question excludes catering. **The window columns
-  (`orders_l30/l90/l365`, `net_sales_l30/l90/l365`) have no catering counterpart**, so a
-  trailing-window spend tier under the standard catering exclusion cannot be taken from this
-  table exactly (gap logged 2026-09-18 after an analyst re-aggregated `order_customer` for
-  364-day spend tiers). The residual is small — catering and individual customers are separate
-  identity populations by design (2,599 of 1.32M persons showed both, 2026-08-31) — so use the
-  `_l365` columns and state the inclusion rather than rescanning the fact table.
+  `lifetime_catering_order_count` if the question excludes catering. **Since 2026-09-18 the
+  window columns have a catering counterpart too**: `catering_orders_l30/l90/l365` and
+  `catering_net_sales_l30/l90/l365`, same windows, same inclusivity, so ex-catering =
+  `net_sales_l365 - catering_net_sales_l365`. Added after an analyst re-aggregated
+  `order_customer` (1.5 GiB) for 364-day spend tiers because the table could not honour the
+  catering exclusion (Asana 1218627569715877). **Do not call the catering share "small"**: on the
+  2026-09-18 build catering is **$20.10M of $86.38M `net_sales_l365` (23.3%)** across 22,698
+  customers with a catering order in the window, out of 676,555 active. Customers *mixing* the
+  two are rare (277) because catering and individual are separate identity populations, but the
+  dollar share is not — a spend tier that includes catering puts catering accounts in every top
+  band.
 - **⚠️ Reconciling this table against `order_customer` requires the build's WHERE clause
   verbatim** — `customer_type = 'person'` **and** `store_id <> 1111`, over
   `business_date between '2018-08-07' and attribute_asof_date`. Omit either filter and you

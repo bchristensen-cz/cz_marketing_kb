@@ -20,8 +20,9 @@
 > session in the trailing 90 days), materialised once a day. Full column list under
 > [App usage](#app-usage-new-2026-09-18); tie-out under Validation; the definition itself lives in
 > `claude_skills/sales-ops-orders/SKILL.md`. **`is_app_user` and `app_user_type` are exposed on
-> `claude.order_customer` since 2026-09-17 23:20 MT** (view redeployed the same evening; the other ten
-> columns and the demographics remain `sales_ops`-only) and `attribute_hash` now moves with the flag.
+> `claude.order_customer` since 2026-09-17 23:20 MT**, and `gender` / `birthday` / `age` since 23:40 MT
+> the same evening (the other ten app-usage columns remain `sales_ops`-only) and `attribute_hash` now
+> moves with the flag.
 
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
@@ -96,21 +97,20 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 | `mapped_email` | STRING | Most recent non-null email across the customer's orders. **100% populated** in the 2026-07-29 build. Was 844 NULLs on 2026-07-28, so this is not guaranteed to stay at zero — don't assume non-null without checking. |
 | `mapped_email_domain` | STRING | Domain of the same order's email. |
 
-### Demographics — **new 2026-09-15, not yet exposed to standard users**
+### Demographics — new 2026-09-15, **exposed on `claude.order_customer` since 2026-09-17**
 | Column | Type | Description |
 |---|---|---|
 | `gender` | STRING | Closed two-value domain, **lowercase**: `female` / `male`. There is no `other` / `unknown` sentinel — absent is NULL. Measured 2026-09-16 on the 2026-09-15 build (1,335,690 rows): `female` **796,462 (59.63%)**, `male` **323,341 (24.21%)**, NULL **215,887 (16.16%)**. Quote gender splits on the **populated base**, not on all customers, or the 16% NULL silently shrinks both shares. |
-| `birthday` | DATE | **20.18%** populated (269,594). Range runs **1877-08-19 → 2022-10-13** — unvalidated at both ends, so a raw `min`/`max`/age-band rollup will carry junk. Filter to a plausible window before using it. |
-| `age` | INT64 | **9.03%** populated (120,568) — **less than half the birthday coverage**. ⚠️ `age` is never populated without a `birthday` (0 rows), but **149,026 rows carry a birthday with a NULL `age`** (55.3% of all birthdays). So `age` is *not* a plain `date_diff` off `birthday` and the two columns are not interchangeable. The reason for the gap is **not established** — read `sql/sales_ops.customer_attribute.sql` before offering one. It is also not fully sanity-checked: **6 rows under 13 and 27 over 100** survive (range 4 → 149), with 120,535 in a plausible 13–100. |
+| `birthday` | DATE | **20.9%** populated (279,164 on the 2026-09-16 build). **Year `1950` is the app's placeholder for "year not provided"** (steward confirmation 2026-09-17): **151,258 rows, 54% of all birthdays**, spread across every month and day (759 on 01-01, then ~400 to ~520 per day), so **month and day are real and the year is not**. Birthday-month campaigns can use the whole column; anything needing the year must exclude `extract(year from birthday) = 1950`, or just use `age`. The remaining 127,906 real-year birthdays run **1877-08-19 → 2022-10-13**, unvalidated at both ends. |
+| `age` | INT64 | **9.6%** populated (127,906 on the 2026-09-16 build). ✅ **The gap is explained (2026-09-17):** the build nulls `age` when `extract(year from birthday) = 1950`, and 1950 is the placeholder year above, so `age` is populated on **exactly** the real-year birthdays: 127,906 real birthdays, 127,906 ages, 0 real birthdays without an age. The earlier "149,026 birthdays with a NULL age, reason not established" note described the placeholder rows. Still not range-validated: 127,867 of the 127,906 fall in a plausible 13 to 100; the rest inherit the 1877 → 2022 edges. Never derive an age from `birthday` yourself. |
 
-> **🚨 These three columns are on `sales_ops.customer_attribute` only.** `claude.order_customer`
-> folds this table in through a **select list**, not `select *`, so the adds did **not**
-> propagate — verified against the live view 2026-09-16: `gender`, `birthday` and `age` are
-> absent from `claude.INFORMATION_SCHEMA.COLUMNS`. A standard user asking a demographic
-> question today gets `Unrecognized name`, not an answer. This is the same select-list-view
-> lesson as 2026-08-13 and 2026-08-17: **adds, renames and drops all require the redeploy.**
-> Exposing them is a steward call, not an oversight to patch silently — 9% age coverage may
-> not be worth publishing.
+> **✅ Exposed on `claude.order_customer` 2026-09-17 23:40 MT (steward call).** Between 09-15 and
+> 09-17 the three columns were `sales_ops`-only: the view folds this table in through a **select
+> list**, not `select *`, so the adds did not propagate until the redeploy (same select-list-view
+> lesson as 2026-08-13 and 2026-08-17: **adds, renames and drops all require the redeploy**). They
+> are passed through unchanged, including the 1950 placeholder year, so the `claude` dictionary
+> carries the same three warnings. Coverage on the order view, week ending 2026-09-16: `gender` on
+> 79% of identified person orders, `birthday` on 43%, `age` on 28%.
 
 ### Lifetime volume
 | Column | Type | Description |
@@ -556,8 +556,12 @@ first** — that's the mistake made here.
       stray `and ca.lifetime_order_count > 0` on the `pulse.customers` join predicate (always true)
       was dropped.
 - [x] **`is_app_user` / `app_user_type` exposed through `claude.order_customer`** — steward call
-      2026-09-17, view redeployed 23:20 MT (67 columns). The other ten app-usage columns and the
-      demographics stay `sales_ops`-only.
+      2026-09-17, view redeployed 23:20 MT; `gender` / `birthday` / `age` followed at 23:40 MT (70
+      columns). The other ten app-usage columns stay `sales_ops`-only.
+- [ ] `birthday` placeholder year: consider nulling the **year** at source rather than leaving 1950 in
+      the column (a DATE cannot hold month/day alone, so this means either a separate
+      `birthday_month_day` STRING or accepting the sentinel). Until decided, the 1950 rule above is
+      the contract.
 - [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT (2026-07-29 09:40 build
       was a manual kickoff; first scheduled run is 2026-07-30 05:00).
 - [ ] **Check the first scheduled run (2026-07-30 05:00 MT) against the prediction below.**

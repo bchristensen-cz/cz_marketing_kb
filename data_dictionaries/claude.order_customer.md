@@ -124,7 +124,7 @@ customer email is `pulse.customers.email`, reaching this view only as the first 
 `mapped_email` (steward 2026-08-24). Neither is an identity key; `mapped_cust_id` is. See
 `sales_ops.order_customer.md` → "Order email vs canonical email".
 
-### Added columns (15)
+### Added columns (18)
 
 | Column | Type | Source | Description |
 |---|---|---|---|
@@ -142,9 +142,12 @@ customer email is `pulse.customers.email`, reaching this view only as the first 
 | `customer_tenure_days` | DATE→INT64 | `customer_attribute` | Days between first order and the attribute build |
 | `is_app_user` | BOOL | `customer_attribute` | **New 2026-09-17.** The canonical App User flag for the customer on this order: app order or in-store scan in the trailing 12 months, **or** a native-app session in the trailing 90 days, as of the attribute build. **NULL, not false, on unidentified and non-person orders** (~60% of orders) — filter `is_app_user is true`, and never read `is not true` as "not an app user" without also requiring `customer_type = 'person'`. Definition and rules: `sales-ops-orders` skill, *"App user" is a canonical customer definition* |
 | `app_user_type` | STRING | `customer_attribute` | **New 2026-09-17.** `purchase_and_session` / `purchase_only` / `session_only`; **NULL** when not an app user *and* when unidentified, so a NULL alone does not distinguish the two. Measured on the week ending 2026-09-16: of 47,284 identified person orders, **37,902 (80%)** were placed by `purchase_and_session` customers, 1,736 by `purchase_only`, 290 by `session_only`, 7,356 by non-app-users |
+| `gender` | STRING | `customer_attribute` | **New 2026-09-17.** Lowercase two-value domain, `female` / `male`; **NULL** when the customer never gave one and on unidentified / non-person orders. Quote splits on the populated base. Week ending 2026-09-16: populated on 37,158 of 47,284 identified person orders (79%) |
+| `birthday` | DATE | `customer_attribute` | **New 2026-09-17.** Customer's birthday as entered in the app. **Year `1950` is the placeholder for "year not provided": month and day are real, the year is not** (151,258 of 279,164 birthdays, 54%). Birthday-month and birthday-day work is fine on the whole column; anything that needs the year must exclude `extract(year from birthday) = 1950` or simply use `age`. Real birthdays still run 1877 → 2022 unvalidated at the edges. NULL on unidentified / non-person orders |
+| `age` | INT64 | `customer_attribute` | **New 2026-09-17.** Years since `birthday` as of the attribute build, **NULL when the birthday year is the 1950 placeholder**, so it is populated on exactly the real-year birthdays (127,906 customers, 9.6%; 127,867 of them in a plausible 13 to 100). Never derive an age from `birthday` yourself. Week ending 2026-09-16: populated on 13,369 of 47,284 identified person orders (28%), so an age-band split is a 28% sample of identified orders and must say so |
 | `account_type` | STRING | `loyalty_user.member_program` | **Account-level** catering flag: `'individual'` / `'catering'` / `'both'` / NULL. Derived from the SessionM tier system — the canonical catering-vs-individual member split. **NULL for 62.9% of orders** (June 2026) because only loyalty members have it. Distinct from `is_catering`, which describes the *order*, not the account |
 
-> **`customer_attribute` is as-of *yesterday*, not real-time.** All `lifetime_*`, `first/last_order_date`, `days_since_last_order`, `customer_tenure_days`, `is_app_user` and `app_user_type` values come from a daily build. They do **not** include today's orders, and on the current business date they lag. Don't expect `lifetime_order_count` to equal a `count(*)` you compute from this view over full history.
+> **`customer_attribute` is as-of *yesterday*, not real-time.** All `lifetime_*`, `first/last_order_date`, `days_since_last_order`, `customer_tenure_days`, `is_app_user`, `app_user_type`, `gender`, `birthday` and `age` values come from a daily build. They do **not** include today's orders, and on the current business date they lag. Don't expect `lifetime_order_count` to equal a `count(*)` you compute from this view over full history.
 
 ---
 

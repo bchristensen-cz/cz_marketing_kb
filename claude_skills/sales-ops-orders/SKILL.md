@@ -1159,7 +1159,10 @@ date, in which case substitute that date in **both** window expressions and say 
   at 05:20 MT with windows anchored on `attribute_asof_date`. Use the table for segmentation of
   known customers; use the query above when the as-of date is not yesterday or when the
   never-ordered session users matter (the table cannot hold them: 23,092 on 2026-09-16, see the
-  dictionary). **Not on `claude.order_customer`** until that select-list view is redeployed.
+  dictionary). **`is_app_user` and `app_user_type` are also on `claude.order_customer`** (view
+  redeployed 2026-09-17 23:20 MT), so standard users can split orders by app-user status directly:
+  both are **NULL on unidentified and non-person orders**, so filter `oc.is_app_user is true` and
+  pair any "not an app user" read with `oc.customer_type = 'person'`.
 - **The scan-as-app assumption, measured 2026-09-17:** 8.1% of customers who scanned in-store
   in the trailing 90 days had no native-app session in the window, versus 1.3% of customers
   who placed an app order (the Braze identification baseline). About 7,000 scanners are

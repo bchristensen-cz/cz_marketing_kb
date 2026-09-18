@@ -59,6 +59,14 @@
 -- plus a Catering override and lacked first_order_datetime / last_order_datetime; deployed had
 -- `except(brink_net_sales)`, no override, and both datetimes. Body below is the DEPLOYED text.
 -- =====================================================================================
+--
+-- 2026-09-17 23:20 MT: is_app_user and app_user_type exposed from customer_attribute (steward
+-- decision, same session as the flag's deploy). Live definition diffed against this file first:
+-- identical, no drift. Both columns are NULL on unidentified and non-person orders, deliberately
+-- NOT coalesced: a BOOL false would read as "not an app user" when the truth is "no customer".
+-- Test with `is_app_user is true` / `is_app_user is not true`, never `= false`. View is now 67
+-- columns. gender / birthday / age remain unexposed (separate steward call).
+-- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
 select
@@ -81,6 +89,8 @@ oc.* except(brink_net_sales)
 , ca.last_order_datetime
 , ca.days_since_last_order
 , ca.customer_tenure_days
+, ca.is_app_user
+, ca.app_user_type
 , lu.member_program as account_type
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.order_sequence os

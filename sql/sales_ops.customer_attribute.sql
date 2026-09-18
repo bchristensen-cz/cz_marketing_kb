@@ -156,6 +156,16 @@ select
 , round(sum(if(po.business_date > date_sub(asof_date, interval 90 day), po.net_sales, 0)), 2) as net_sales_l90
 , round(sum(if(po.business_date > date_sub(asof_date, interval 365 day), po.net_sales, 0)), 2) as net_sales_l365
 
+-- catering subset of each window (added 2026-09-18) so the standard catering exclusion can be
+-- honoured on a trailing-window figure: ex-catering = orders_lN - catering_orders_lN.
+-- Same windows, same inclusivity, same is_catering the lifetime counterpart uses.
+, countif(po.is_catering and po.business_date > date_sub(asof_date, interval 30 day)) as catering_orders_l30
+, countif(po.is_catering and po.business_date > date_sub(asof_date, interval 90 day)) as catering_orders_l90
+, countif(po.is_catering and po.business_date > date_sub(asof_date, interval 365 day)) as catering_orders_l365
+, round(sum(if(po.is_catering and po.business_date > date_sub(asof_date, interval 30 day), po.net_sales, 0)), 2) as catering_net_sales_l30
+, round(sum(if(po.is_catering and po.business_date > date_sub(asof_date, interval 90 day), po.net_sales, 0)), 2) as catering_net_sales_l90
+, round(sum(if(po.is_catering and po.business_date > date_sub(asof_date, interval 365 day), po.net_sales, 0)), 2) as catering_net_sales_l365
+
 -- app purchases (canonical App User definition, steward decision 2026-09-17): a native-app
 -- order OR an in-store loyalty scan. The steward's stated assumption is that an in-store scan is
 -- made with the app, so a scan counts as an app purchase. Trailing window is 12 months, inclusive
@@ -247,6 +257,14 @@ select
 , ca.net_sales_l30
 , ca.net_sales_l90
 , ca.net_sales_l365
+-- catering subset of the same windows (2026-09-18). Not in attribute_hash: it moves with the
+-- parent window columns already.
+, ca.catering_orders_l30
+, ca.catering_orders_l90
+, ca.catering_orders_l365
+, ca.catering_net_sales_l30
+, ca.catering_net_sales_l90
+, ca.catering_net_sales_l365
 
 -- ---------- app usage (canonical App User definition, steward decision 2026-09-17) ----------
 -- is_app_user = app purchase (app order OR in-store scan) in the trailing 12 months

@@ -72,6 +72,13 @@
 -- day are real, the year is not, and age is NULL on exactly those rows (151,258 of 279,164
 -- birthdays on the 2026-09-16 build). Passed through unchanged so birthday-month work still
 -- works; never compute an age from birthday yourself, read the age column.
+--
+-- 2026-09-18: orders_l365, net_sales_l365, catering_orders_l365, catering_net_sales_l365 exposed
+-- from customer_attribute (Asana 1218627569715877 — an analyst rescanned order_customer for
+-- trailing-365 spend tiers because no window column reached this view). Live definition diffed
+-- against this file first: identical. Left NULL (not coalesced) on unidentified / non-person orders,
+-- same convention as lifetime_net_sales. Window = 365 days to attribute_asof_date (yesterday).
+-- View is now 74 columns.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -95,6 +102,10 @@ oc.* except(brink_net_sales)
 , ca.last_order_datetime
 , ca.days_since_last_order
 , ca.customer_tenure_days
+, ca.orders_l365
+, ca.net_sales_l365
+, ca.catering_orders_l365
+, ca.catering_net_sales_l365
 , ca.is_app_user
 , ca.app_user_type
 , ca.gender

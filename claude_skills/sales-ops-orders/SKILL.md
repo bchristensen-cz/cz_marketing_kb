@@ -2586,6 +2586,20 @@ in the answer and exclude or caveat those dates** rather than reporting the numb
 >   yesterday at 0.0%). Check `LOAD` vs `MERGE` times for `bigquery-loader-sa` on
 >   `JOBS_BY_PROJECT` before blaming the order_customer script — full write-up in
 >   `data_dictionaries/sales_ops.order_customer.md` § "SessionM loads once per day".
+> - **If a settled day reads ~14% identified with `countif(pulse_order_id is not null) = 0`, it is
+>   the PULSE orders feed, not SessionM** (happened 2026-09-15 → at least 09-18). Normal settled days
+>   run ~55% identified = ~40% Pulse (digital + POS account lookups) + ~30% SessionM scans, overlapping.
+>   The signature: `sm_external_user_id` normal (~4,050/day), `pulse_order_id` / `pulse_customer_id` /
+>   `order_source` all 0, `is_guest_order` all NULL, and channel mix collapses to 100% "in-store" while
+>   net sales stay right (Brink). Diagnosis: `pulse.orders` `max(created_at)` stalls while
+>   `pulse.order_customers` stays current, and on `JOBS_BY_PROJECT` the compute SA
+>   (`286373888726-compute@`) nightly ~01:35 MT loader runs its `orders_stg` LOAD + `orders` MERGE on
+>   good days and **skips both with no BigQuery error** on bad days (85 tables touched instead of 87) —
+>   the fault is upstream of BigQuery, in the extractor. Downstream: every customer-grain figure,
+>   `order_source` channel mix, guest checkout, `customer_attribute`, Braze CDI and the social CAPI /
+>   Google offline-conversion uploads are wrong for the gap days. Because the 5am chained run reloads
+>   full history, the marts self-heal the morning after `pulse.orders` is backfilled — nothing to
+>   re-run on our side; re-quote the gap days then.
 > - **Sales, order counts and channel mix for today are fine** — those come from Brink, which
 >   loads intraday every hour.
 

@@ -943,6 +943,7 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Delivery (first-party) | `destination = 'CZ Delivery'` (steward rule 2026-08-04). Marketplace orders (`revenue_category = 'Third_Party'`) are NOT "delivery" unless explicitly requested — see protocol item 6 |
 | Digital source | `order_source` (NULL = in-store POS) |
+| App user | **Canonical customer definition (steward decision 2026-09-17).** A `person` customer with an **app purchase in the trailing 12 months** (`order_source in ('iOS', 'Android')` **or** `in_store_scan = 1`; an in-store scan counts as an app purchase by steward assumption) **or** a **native-app session in the trailing 90 days** (`braze.app_sessionstart`, `platform in ('ios', 'android')`, `workspace = 'cafe_zupas'`). Full rules, gotchas and the canonical query: see *"App user" is a canonical customer definition* below |
 | First-time order | `order_sequence.customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 (see gotchas) |
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
 | Lifetime orders per customer | **`customer_attribute.lifetime_order_count`** — one row per person customer, already person-only and store-1111-excluded. **`order_sequence.lifetime_customer_order_count` was DROPPED 2026-07-29** — any query using it now errors |
@@ -1098,6 +1099,107 @@ State which you did whenever it affects the answer.
 > **⚠️ Anti-pattern — "loyalty orders" is NOT `mapped_cust_id is not null`** (observed in analyst MCP SQL 2026-08-11, labeled `loyalty_orders`). An *identified* order is not a *loyalty* order: `mapped_cust_id` is populated on kiosk, internal and aggregator orders too (38% of identified orders — the aggregator id alone is ~108K orders/month), so this definition counts DoorDash feed orders as "loyalty." Call `mapped_cust_id is not null` what it is — **identified orders** — and note that the KB has no canonical "loyalty order" metric on `order_customer` yet: loyalty *membership* lives in `claude.loyalty_user` / `account_type`, and in-store scan reporting currently lives only in the steward's QuickSight tables (`shared_datasets.qs_in_store_app_scans_by_store`, undocumented — Asana 1216920434852093). If a user asks for loyalty penetration, surface that gap instead of quietly substituting identified-order share.
 
 **It's order-level, not customer-level** (steward decision 2026-07-27). The same `mapped_cust_id` can carry different types across its orders — June 2026: 30 ids / 108,313 orders, with `19192` splitting 107,807 `aggregator` + 196 `person`. This is deliberate: `19192` doesn't exist in `pulse.customers` (dev ticket open), so there's no reliable customer-level attribute to collapse onto. Practical effect: `count(distinct mapped_cust_id) where customer_type = 'person'` slightly overcounts. Filtering *orders* by `customer_type = 'person'` is still the correct rule. `order_sequence` applies its own customer-level guard, so sequencing and lifetime counts are unaffected.
+
+### "App user" is a canonical customer definition (steward decision 2026-09-17)
+
+An **app user** is a `person` customer who satisfies **either** test:
+
+1. **App purchase in the trailing 12 months.** At least one `claude.order_customer` row with
+   `order_source in ('iOS', 'Android')` **or** `in_store_scan = 1`. The steward's stated
+   assumption is that an in-store loyalty scan is made with the app, so **a scan counts as an
+   app purchase** for this definition. State that assumption whenever the scan share matters
+   to the answer.
+2. **Native-app session in the trailing 90 days.** At least one `braze.app_sessionstart` event
+   with `workspace = 'cafe_zupas'` and `platform in ('ios', 'android')`, joined on
+   `safe_cast(external_user_id as int64) = oc.mapped_cust_id`.
+
+Both windows anchor to `current_date('America/Denver')` unless the question names an as-of
+date, in which case substitute that date in **both** window expressions and say so.
+
+**Rules and gotchas**
+
+- **`platform` is the whole game on the Braze side.** `app_sessionstart` is not app-only: the
+  web SDK and landing pages log to the same table. Trailing 90 days measured 2026-09-17,
+  `cafe_zupas` workspace: **web 1,132,440 users**, ios 257,285, android 63,241,
+  landing_page 3,454. Without `platform in ('ios', 'android')` the "app user" count roughly
+  quadruples. Braze platform values are **lowercase** (`'ios'`, `'android'`); the order-mart
+  values are **mixed case** (`'iOS'`, `'Android'`). Both spellings above are the live ones.
+- **Join on the customer id, never on email.** `safe_cast(s.external_user_id as int64) =
+  oc.mapped_cust_id`, per the braze-campaigns skill. Rows whose `external_user_id` does not
+  cast are anonymous or non-customer profiles and drop out of the definition by design.
+- **It is a customer-level metric**, so `customer_type = 'person'` applies to the order side
+  (kiosk, internal and aggregator ids never qualify). Report `count(distinct mapped_cust_id)`.
+- **What is deliberately NOT in the definition:** in-app message or content card
+  impressions and clicks, push opens, and any share-of-orders threshold. Impressions are a
+  by-product of a session and add nothing over `app_sessionstart`; push opens happen outside
+  the app and the session they trigger is already counted. Keep those as engagement metrics
+  measured *within* the app-user population. A "50%+ of orders via the app" cut is **not
+  canonical**; if someone asks for it, present it as a labelled fork ("app-primary") and never
+  substitute it for the definition above.
+- **This is not "loyalty member", "digital customer" or "app orders".** Loyalty membership
+  lives in `claude.loyalty_user`; "digital" is `revenue_category = 'Digital'`; and a
+  channel question about **app orders** is `order_source in ('iOS', 'Android')` on orders,
+  with no scan component and no session component. The scan-as-purchase assumption is for the
+  customer definition only.
+- **Four sub-populations are worth reporting alongside the headline** because the two tests
+  measure different things: app purchasers (test 1), session users (test 2), session-only
+  (installed and active, no attributable purchase in 12 months) and purchase-only (bought or
+  scanned in the last 12 months, no native session in 90 days, i.e. lapsing or uninstalled).
+- **Measured 2026-09-17** (windows ending that day): **468,851 app users**; 417,711 app
+  purchasers (246,649 with an app order, 278,382 with a scan; the two overlap); 310,623
+  session users; 51,140 session-only; 158,228 purchase-only. Quote these only as the
+  as-of-date sizes they are.
+- **Freshness:** `app_sessionstart` backfills for ~2 days (see the braze-campaigns skill), so
+  a same-day count is a few sessions light at the edge of the 90-day window. Immaterial for
+  the headline; label it if the question is about the most recent days.
+
+**Canonical query** (one row per app user, with the flags needed for the sub-populations):
+
+```sql
+with app_purchasers as (
+select
+oc.mapped_cust_id as mapped_cust_id
+, countif(oc.order_source in ('iOS', 'Android')) as app_orders
+, countif(oc.in_store_scan = 1) as in_store_scans
+, max(oc.business_date) as last_app_purchase_date
+from `marketing-data-442316`.claude.order_customer oc
+where 1=1
+and oc.business_date >= date_sub(current_date('America/Denver'), interval 12 month)
+and oc.mapped_cust_id is not null
+and oc.customer_type = 'person'
+and (oc.order_source in ('iOS', 'Android') or oc.in_store_scan = 1)
+group by oc.mapped_cust_id
+)
+, app_sessions as (
+select
+safe_cast(s.external_user_id as int64) as mapped_cust_id
+, count(distinct s.event_date) as session_days
+, max(s.event_date) as last_session_date
+from `marketing-data-442316`.braze.app_sessionstart s
+where 1=1
+and s.event_date >= date_sub(current_date('America/Denver'), interval 90 day)
+and s.workspace = 'cafe_zupas'
+and s.platform in ('ios', 'android')
+and safe_cast(s.external_user_id as int64) is not null
+group by 1
+)
+select
+coalesce(ap.mapped_cust_id, se.mapped_cust_id) as mapped_cust_id
+, ap.mapped_cust_id is not null as is_app_purchaser
+, se.mapped_cust_id is not null as is_app_session_user
+, coalesce(ap.app_orders, 0) as app_orders
+, coalesce(ap.in_store_scans, 0) as in_store_scans
+, coalesce(se.session_days, 0) as session_days
+, ap.last_app_purchase_date as last_app_purchase_date
+, se.last_session_date as last_session_date
+from app_purchasers ap
+	full outer join app_sessions se
+	on se.mapped_cust_id = ap.mapped_cust_id
+```
+
+Headline: `count(*)` over that result is the app-user count. Verified 2026-09-17 against
+`claude.order_customer` and `braze.app_sessionstart`; the partition filters are constant
+expressions on purpose (a value pulled from a CTE would not prune either table).
 
 ## Pre-query clarification protocol (steward rule 2026-07-28 — MANDATORY)
 

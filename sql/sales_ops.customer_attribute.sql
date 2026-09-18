@@ -31,6 +31,7 @@ select
 , oc.is_guest_order
 , oc.mapped_email
 , oc.mapped_email_domain
+, oc.in_store_scan
 -- 2026-09-08: reads the claude.order_customer VIEW, not the sales_ops table. The identity rework
 -- moved mapped_cust_id / customer_type off sales_ops.order_customer onto sales_ops.order_sequence;
 -- the view joins them back (and excludes stores 1111/999, which the filter below repeats).
@@ -71,6 +72,27 @@ select
     order by cs.store_order_count desc, cs.store_last_order_date desc, cs.store_id
   ) as lifetime_stores
 from customer_store cs
+group by 1
+)
+
+-- Native-app sessions in the trailing 90 days (canonical App User definition, steward decision
+-- 2026-09-17). app_sessionstart is NOT app-only: the web SDK and landing pages log to the same
+-- table and web is ~4x the native user count, so platform in ('ios', 'android') is load-bearing.
+-- Braze platform values are lowercase; the order mart's order_source values ('iOS', 'Android')
+-- are mixed case. Join key is the customer id cast from external_user_id, never email.
+-- Window is inclusive of asof_date: event_date > asof_date - 90 and <= asof_date.
+, app_sessions as (
+select
+  safe_cast(s.external_user_id as int64) as mapped_cust_id
+, count(distinct s.event_date) as app_session_days_l90
+, max(s.event_date) as last_app_session_date
+from `marketing-data-442316`.braze.app_sessionstart s
+where 1=1
+and s.event_date > date_sub(asof_date, interval 90 day)
+and s.event_date <= asof_date
+and s.workspace = 'cafe_zupas'
+and s.platform in ('ios', 'android')
+and safe_cast(s.external_user_id as int64) is not null
 group by 1
 )
 
@@ -134,6 +156,18 @@ select
 , round(sum(if(po.business_date > date_sub(asof_date, interval 90 day), po.net_sales, 0)), 2) as net_sales_l90
 , round(sum(if(po.business_date > date_sub(asof_date, interval 365 day), po.net_sales, 0)), 2) as net_sales_l365
 
+-- app purchases (canonical App User definition, steward decision 2026-09-17): a native-app
+-- order OR an in-store loyalty scan. The steward's stated assumption is that an in-store scan is
+-- made with the app, so a scan counts as an app purchase. Trailing window is 12 months, inclusive
+-- of asof_date, so it equals "business_date >= run_date - 12 months" as the KB's canonical query
+-- writes it.
+, countif(po.order_source in ('iOS', 'Android')) as lifetime_app_order_count
+, countif(po.in_store_scan = 1) as lifetime_in_store_scan_count
+, countif(po.order_source in ('iOS', 'Android') and po.business_date > date_sub(asof_date, interval 12 month)) as app_orders_l12m
+, countif(po.in_store_scan = 1 and po.business_date > date_sub(asof_date, interval 12 month)) as in_store_scans_l12m
+, max(if(po.order_source in ('iOS', 'Android'), po.business_date, null)) as last_app_order_date
+, max(if(po.in_store_scan = 1, po.business_date, null)) as last_in_store_scan_date
+
 from person_orders po
 group by 1
 )
@@ -144,6 +178,13 @@ select
 , cast(ca.mapped_cust_id as string) as braze_external_id
 , ca.email_rec.mapped_email as mapped_email
 , ca.email_rec.mapped_email_domain as mapped_email_domain
+
+-- ---------- demographics (deployed 2026-09-15, synced to the repo 2026-09-18) ----------
+, c.gender as gender
+, c.birthday as birthday
+, case when extract(year from c.birthday) = 1950 then null
+      else date_diff(current_date(), c.birthday, year)
+  end as age
 
 -- ---------- lifetime volume ----------
 , ca.lifetime_order_count
@@ -207,6 +248,30 @@ select
 , ca.net_sales_l90
 , ca.net_sales_l365
 
+-- ---------- app usage (canonical App User definition, steward decision 2026-09-17) ----------
+-- is_app_user = app purchase (app order OR in-store scan) in the trailing 12 months
+--            OR native-app session in the trailing 90 days.
+-- Grain caveat: this table only holds customers with at least one identified person order, so a
+-- Braze session user who has never placed an identified order is an app user by the canonical
+-- query but has no row here.
+, ca.lifetime_app_order_count
+, ca.lifetime_in_store_scan_count
+, ca.app_orders_l12m
+, ca.in_store_scans_l12m
+, ca.last_app_order_date
+, ca.last_in_store_scan_date
+, coalesce(aps.app_session_days_l90, 0) as app_session_days_l90
+, aps.last_app_session_date as last_app_session_date
+, (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 as is_app_purchaser
+, aps.mapped_cust_id is not null as is_app_session_user
+, ((ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 or aps.mapped_cust_id is not null) as is_app_user
+, case
+    when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 and aps.mapped_cust_id is not null then 'purchase_and_session'
+    when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 then 'purchase_only'
+    when aps.mapped_cust_id is not null then 'session_only'
+    else null
+  end as app_user_type
+
 -- ---------- housekeeping ----------
 , asof_date as attribute_asof_date
 -- Change-detection key for the Braze export: only push customers whose hash moved since
@@ -221,10 +286,23 @@ select
   , ca.orders_l30
   , ca.orders_l90
   , ca.orders_l365
+  -- 2026-09-18: app-user state added so the Braze delta push fires when someone becomes or
+  -- stops being an app user. One-time hash move for every row on the first build.
+  , ((ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 or aps.mapped_cust_id is not null) as is_app_user
+  , case
+      when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 and aps.mapped_cust_id is not null then 'purchase_and_session'
+      when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 then 'purchase_only'
+      when aps.mapped_cust_id is not null then 'session_only'
+      else null
+    end as app_user_type
   ))) as attribute_hash
 , current_timestamp() as updated_at
 
 from customer_agg ca
 	join customer_stores cst
 	on cst.mapped_cust_id = ca.mapped_cust_id
+		left join `marketing-data-442316`.pulse.customers c
+		on c.id = ca.mapped_cust_id
+			left join app_sessions aps
+			on aps.mapped_cust_id = ca.mapped_cust_id
 ;

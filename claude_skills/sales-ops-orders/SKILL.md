@@ -1152,6 +1152,19 @@ date, in which case substitute that date in **both** window expressions and say 
 - **Freshness:** `app_sessionstart` backfills for ~2 days (see the braze-campaigns skill), so
   a same-day count is a few sessions light at the edge of the 90-day window. Immaterial for
   the headline; label it if the question is about the most recent days.
+- **Materialised on `sales_ops.customer_attribute` since 2026-09-18:** `is_app_user`,
+  `app_user_type` (`purchase_and_session` / `purchase_only` / `session_only` / NULL),
+  `is_app_purchaser`, `is_app_session_user`, `app_orders_l12m`, `in_store_scans_l12m`,
+  `app_session_days_l90`, the three `last_*_date` columns and two lifetime counts, rebuilt daily
+  at 05:20 MT with windows anchored on `attribute_asof_date`. Use the table for segmentation of
+  known customers; use the query above when the as-of date is not yesterday or when the
+  never-ordered session users matter (the table cannot hold them: 23,092 on 2026-09-16, see the
+  dictionary). **Not on `claude.order_customer`** until that select-list view is redeployed.
+- **The scan-as-app assumption, measured 2026-09-17:** 8.1% of customers who scanned in-store
+  in the trailing 90 days had no native-app session in the window, versus 1.3% of customers
+  who placed an app order (the Braze identification baseline). About 7,000 scanners are
+  therefore counted as app users without the app being visible in Braze. Intentional; state it
+  when the scan share drives the answer.
 
 **Canonical query** (one row per app user, with the flags needed for the sub-populations):
 

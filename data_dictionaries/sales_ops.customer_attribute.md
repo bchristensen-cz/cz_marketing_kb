@@ -19,8 +19,9 @@
 > App User definition (app order **or** in-store scan in the trailing 12 months, **or** a native-app
 > session in the trailing 90 days), materialised once a day. Full column list under
 > [App usage](#app-usage-new-2026-09-18); tie-out under Validation; the definition itself lives in
-> `claude_skills/sales-ops-orders/SKILL.md`. **Not exposed on `claude.order_customer`** (select-list
-> view, same lesson as the demographics) and `attribute_hash` now moves with the flag.
+> `claude_skills/sales-ops-orders/SKILL.md`. **`is_app_user` and `app_user_type` are exposed on
+> `claude.order_customer` since 2026-09-17 23:20 MT** (view redeployed the same evening; the other ten
+> columns and the demographics remain `sales_ops`-only) and `attribute_hash` now moves with the flag.
 
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
@@ -554,9 +555,9 @@ first** — that's the mistake made here.
       deployed text: the 2026-09-15 demographics block was deployed but never committed, and a
       stray `and ca.lifetime_order_count > 0` on the `pulse.customers` join predicate (always true)
       was dropped.
-- [ ] Decide whether `is_app_user` / `app_user_type` should be exposed through
-      `claude.order_customer` (select-list view; needs the redeploy) so standard users can filter
-      on them. Same call as the demographics.
+- [x] **`is_app_user` / `app_user_type` exposed through `claude.order_customer`** — steward call
+      2026-09-17, view redeployed 23:20 MT (67 columns). The other ten app-usage columns and the
+      demographics stay `sales_ops`-only.
 - [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT (2026-07-29 09:40 build
       was a manual kickoff; first scheduled run is 2026-07-30 05:00).
 - [ ] **Check the first scheduled run (2026-07-30 05:00 MT) against the prediction below.**

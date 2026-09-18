@@ -13,6 +13,15 @@
 > [Upstream defect](#-upstream-defect-sessionm-identity-loss-found-2026-07-29-fixed) for what
 > happened and the two remaining mechanisms that move per-customer figures between builds.
 
+> ## 📱 App-user flag added 2026-09-18 (steward decision 2026-09-17)
+>
+> Ten **app usage** columns landed on the table on **2026-09-17 23:04 MT** (scheduled query `sales_ops customer_attribute`, config `6a7bb56c-0000-2ccb-aeca-94eb2c09e074`, text replaced with `bq update --transfer_config --flagfile`; manual run `6af29e7f` DONE in 30 s / 3.6 GB, `attribute_asof_date` 2026-09-16, live counts identical to the scratch validation below; first scheduled run with the flag 2026-09-18 05:20 MT). `is_app_user` is the canonical
+> App User definition (app order **or** in-store scan in the trailing 12 months, **or** a native-app
+> session in the trailing 90 days), materialised once a day. Full column list under
+> [App usage](#app-usage-new-2026-09-18); tie-out under Validation; the definition itself lives in
+> `claude_skills/sales-ops-orders/SKILL.md`. **Not exposed on `claude.order_customer`** (select-list
+> view, same lesson as the demographics) and `attribute_hash` now moves with the flag.
+
 **One row per customer** (`mapped_cust_id`), **person only**. Lifetime and trailing-window
 aggregates. This is a *dimension* — a customer's current state — not a fact table.
 
@@ -30,9 +39,9 @@ Two consumers:
 | Partitioned by | none — it's a ~1.4M-row dimension, partitioning buys nothing |
 | Clustered by | `mapped_cust_id` |
 | Refresh | **Daily at 05:20 MT** (moved from 05:00 on 2026-09-08), full `create or replace`. Deliberately after the **05:02** `order_customer` + `order_sequence` full rebuild, which itself follows the 04:07 SessionM merge — see Gotchas and `sales_ops.order_customer.md` § "SessionM loads once per day". |
-| Cost | ~3.8 GB scanned / ~985 slot-seconds per run ≈ $0.019/run |
+| Cost | ~3.6 GB scanned / ~1,840 slot-seconds on the 2026-09-18 test build (the Braze session CTE adds ~0.45 GB; the `event_date` filter on the scripting variable prunes correctly, verified by bytes billed) ≈ $0.02/run |
 | Source build script | `sql/sales_ops.customer_attribute.sql` |
-| Upstream | `claude.order_customer` (the view) since 2026-09-08 — it supplies `mapped_cust_id` / `customer_type` from `sales_ops.order_sequence` after the identity rework moved those columns off `sales_ops.order_customer`. Before 2026-09-08: `sales_ops.order_customer` only. |
+| Upstream | `claude.order_customer` (the view) since 2026-09-08 — it supplies `mapped_cust_id` / `customer_type` from `sales_ops.order_sequence` after the identity rework moved those columns off `sales_ops.order_customer`. Before 2026-09-08: `sales_ops.order_customer` only. **Since 2026-09-18 also `braze.app_sessionstart`** (trailing 90 days, `workspace = 'cafe_zupas'`, `platform in ('ios', 'android')`) for the app-user columns, and `pulse.customers` for the demographics. |
 
 ## Why full rebuild, not MERGE
 
@@ -203,11 +212,51 @@ makes every window whole-day and independent of run time. So a build on 2026-07-
 
 These are the columns that force the daily full recompute.
 
+### App usage (new 2026-09-18)
+
+The canonical **App User** definition (steward decision 2026-09-17), materialised. Windows anchor on
+`attribute_asof_date` and are inclusive of it (`business_date > asof - 12 month`, `event_date >
+asof - 90 day and <= asof`), which is the same window the KB's canonical query writes as
+`>= current_date - N` when it runs the morning after. An in-store scan counts as an app purchase
+by the steward's stated assumption that the scan is made with the app.
+
+| Column | Type | Description |
+|---|---|---|
+| `lifetime_app_order_count` | INT64 | Person orders with `order_source in ('iOS', 'Android')`, full history. |
+| `lifetime_in_store_scan_count` | INT64 | Person orders with `in_store_scan = 1`, full history. |
+| `app_orders_l12m` | INT64 | App orders in the trailing 12 months. |
+| `in_store_scans_l12m` | INT64 | In-store scans in the trailing 12 months. |
+| `last_app_order_date` | DATE | Most recent app order; NULL if never. |
+| `last_in_store_scan_date` | DATE | Most recent in-store scan; NULL if never. |
+| `app_session_days_l90` | INT64 | Distinct `event_date`s with a native-app `app_sessionstart` (ios/android, `cafe_zupas` workspace) in the trailing 90 days. **0, never NULL.** |
+| `last_app_session_date` | DATE | Most recent native-app session day in the window; NULL if none. |
+| `is_app_purchaser` | BOOL | `app_orders_l12m + in_store_scans_l12m > 0`. Never NULL. |
+| `is_app_session_user` | BOOL | Had a native-app session in the trailing 90 days. Never NULL. |
+| `is_app_user` | BOOL | **The canonical flag:** `is_app_purchaser or is_app_session_user`. Never NULL. |
+| `app_user_type` | STRING | `purchase_and_session` / `purchase_only` / `session_only`; **NULL when not an app user.** Segment on this for lifecycle work: `purchase_only` is bought-or-scanned-but-no-native-session-in-90-days (lapsing or uninstalled), `session_only` is active in the app with no attributable purchase in 12 months. |
+
+Three things to know before using them:
+
+- **Grain gap, by design.** This table only holds customers with at least one identified person
+  order. A Braze session user who has never placed an identified order is an app user by the
+  canonical query but has no row here. Measured 2026-09-16: **23,092** such users (467,775 by the
+  canonical query vs 444,683 flagged here). Everyone who *is* in the table is flagged identically
+  to the canonical query (0 disagreements). For audience sizing quote the canonical query; for
+  segmentation of known customers use the table.
+- **Braze `platform` is the whole game.** `app_sessionstart` also logs the web SDK and landing
+  pages (web is ~4x the native user count); the build filters `platform in ('ios', 'android')`.
+  Do not "widen" that filter.
+- **The scan-as-app assumption has a measurable edge.** Of customers who scanned in-store in the
+  trailing 90 days (2026-09-17), **8.1%** had no native-app session in the same window, against a
+  **1.3%** no-session rate for customers who placed an app order (the Braze identification
+  baseline). So roughly 7 points of scanners, ~7,000 people, scan without the app being visible in
+  Braze. The definition counts them as app users on purpose; say so if the number matters.
+
 ### Housekeeping
 | Column | Type | Description |
 |---|---|---|
 | `attribute_asof_date` | DATE | The last complete business day the windows are anchored to — **`run_date - 1`**, not the run date. Every row shares it. Check it to detect a stale build. |
-| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. |
+| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. **Since 2026-09-18 includes `is_app_user` and `app_user_type`**, so a customer becoming or ceasing to be an app user is a pushable change. Every row's hash moved once on the first build with the flag. |
 | `updated_at` | TIMESTAMP | Build time. |
 
 **`attribute_hash` deliberately excludes `days_since_last_order` and `attribute_asof_date`.**
@@ -275,6 +324,22 @@ SessionM-only customers *are* in Braze — only 1,227 are missing).
 - **Delta sends:** use `attribute_hash`, not a full daily push.
 
 ## Validation
+
+### App-user columns, test build vs canonical query (2026-09-18, `attribute_asof_date` 2026-09-16)
+
+Built into `scratch.customer_attribute_app_user_test` before touching the live table. All
+pre-existing measures identical to the live 05:20 build (1,336,019 rows, 7,584,114 orders,
+$227,074,813.71 net, `orders_l30` 237,937, `orders_l365` 2,769,122, 1,119,864 gender populated).
+Against the canonical query with both windows closed on 2026-09-16:
+
+| Measure | canonical query | `customer_attribute` | Note |
+|---|---|---|---|
+| App purchasers (12m) | 417,711 | 417,711 | ✅ exact |
+| Purchase-only | 159,104 | 159,104 | ✅ exact |
+| Session users (90d) | 308,671 | 285,579 | 23,092 have no identified order, so no row here |
+| Session-only | 50,064 | 26,972 | same 23,092 |
+| App users | 467,775 | 444,683 | same 23,092 |
+| In table but not flagged | 0 | | ✅ |
 
 ### Post-deploy, against the live table (2026-07-29)
 
@@ -484,6 +549,14 @@ first** — that's the mistake made here.
 
 ## Roadmap
 
+- [x] **App-user flag** (`is_app_user`, `app_user_type` and eight supporting columns), deployed
+      2026-09-18 per steward decision 2026-09-17. Repo `sql/` copy also re-synced with the
+      deployed text: the 2026-09-15 demographics block was deployed but never committed, and a
+      stray `and ca.lifetime_order_count > 0` on the `pulse.customers` join predicate (always true)
+      was dropped.
+- [ ] Decide whether `is_app_user` / `app_user_type` should be exposed through
+      `claude.order_customer` (select-list view; needs the redeploy) so standard users can filter
+      on them. Same call as the demographics.
 - [x] Deploy the scheduled query — **done 2026-07-29**, daily 5am MT (2026-07-29 09:40 build
       was a manual kickoff; first scheduled run is 2026-07-30 05:00).
 - [ ] **Check the first scheduled run (2026-07-30 05:00 MT) against the prediction below.**

@@ -386,7 +386,7 @@ nothing about which address is "right".
   Anything under 15% on a *completed* day means that day is corrupted.
 
 - **🔑 The Pulse orders feed can stop on its own while every other `pulse.*` table keeps loading**
-  (observed 2026-09-15 05:51 MT → still stalled 2026-09-18). Settled-day identification fell from
+  (observed 2026-09-15 05:51 MT → still stalled 2026-09-21 09:30 MT, day 7: last job writing `pulse.orders` is 09-15 01:35, `pulse_new.orders` merges nightly plus three manual SA merges the morning of 09-21). Settled-day identification fell from
   ~55% to ~14% because only the SessionM arm was left: 09-15 / 16 / 17 carried 4,072 / 4,063 / 4,051
   `sm_external_user_id` orders and 167 / 0 / 0 `pulse_order_id` orders; `order_source` was NULL on all
   but 167 of 87,606 orders, `is_guest_order` NULL everywhere, `is_catering` fine (Brink-side).

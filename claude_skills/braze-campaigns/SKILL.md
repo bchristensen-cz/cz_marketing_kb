@@ -352,7 +352,19 @@ These templates attribute an engagement to a campaign by matching `program_id` o
   > 1. **It re-introduces the identity-fragmentation problem the KB exists to route around.** `mapped_cust_id` is the canonical person key; email is not. An email bridge silently merges the duplicate-id clusters the CRM hygiene project is chartered to resolve, and post-2026-07 guest checkout made those clusters the majority of new ids.
   > 2. **Braze merges are not reflected in Currents**, so a merged profile keeps its losing `external_user_id` in `braze.*` forever. An email join papers over that inconsistently — matching whichever profile happens to hold that address today.
   > 3. **It costs a full `braze.users` scan** (the table is unpartitioned) to build a bridge that `external_id` already provides for free.
-  >
+  
+  > **Exception (steward, 2026-09-21): the `braze` dashboard tab bridges on email.** Production keeps no
+  > change history of `pulse.customers.id` and backdates it, so Braze holds orphaned `external_user_id`s
+  > that no longer exist in `order_customer.mapped_cust_id`. Measured on 60 days of `email_send`
+  > (1,014,185 ids): 71.3% match a customer by id, 75.7% by email; the email bridge recovers 48,538 ids
+  > (4.8%) the id join loses and drops 4,355 (0.4%) it keeps. For `dashboard.braze_send_day` and the
+  > Braze effectiveness tab only, join `lower(es.email_address) = oc.mapped_email` (email sends carry the
+  > address on the row); push, SMS and RCS sends bridge through a nightly `dashboard.braze_user_dim`
+  > built once from `braze.users`, never a per-query `users` scan. The fragmentation objection above is
+  > accepted and does not apply here: the tab counts sends, orders and dollars, not people, so folding a
+  > person's duplicate ids onto one address is the intended behaviour. The rule above still holds for
+  > customer counts, ad hoc analysis, and anything keyed on `external_id`.  
+  
   > Join `safe_cast(<event table>.external_user_id as int64) = oc.mapped_cust_id` directly, and use `braze.users` only for attributes you actually need (app adoption, subscription state) — never as an id translation layer. If someone's saved template does the email bridge, that is a rewrite, not a caveat.
 - **`braze.load_watermark.watermark` is already a TIMESTAMP** — it is not epoch seconds. `timestamp_seconds(cast(watermark as int64))` fails with `Invalid cast from TIMESTAMP to INT64` (observed 2026-07-27). Select `watermark` and `updated_at` as-is.
 - **`customevent` payloads** — `properties` is a JSON *string*; read fields with `json_value(properties, '$.field')`. Filter `name = '<event>'` **and** the `event_date` partition. `local_event_datetime` gives the user-local time if you need daypart.

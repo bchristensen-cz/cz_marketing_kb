@@ -13,6 +13,20 @@
 > [Upstream defect](#-upstream-defect-sessionm-identity-loss-found-2026-07-29-fixed) for what
 > happened and the two remaining mechanisms that move per-customer figures between builds.
 
+> ## 📱 App-user definition REVISED 2026-09-22: a session alone is no longer an app user; `app_purchase_mode` added
+>
+> Steward decision 2026-09-22. **`is_app_user` is now the 12-month purchase test only** (app order or
+> in-store scan); a native-app session without a purchase does not qualify. `app_user_type` lost its
+> `session_only` value (now `purchase_and_session` / `purchase_only` / NULL) and a new column
+> **`app_purchase_mode`** (`app_orders_and_scans` / `app_orders_only` / `scans_only` / NULL) splits the
+> purchase test into its two halves. Session columns (`is_app_session_user`, `app_session_days_l90`,
+> `last_app_session_date`) are unchanged and still populated; they are descriptive, not qualifying.
+> Effect on the 2026-09-21 build: 27,512 `session_only` rows flip to `is_app_user = false`, 417,691
+> purchasers are unchanged; `attribute_hash` moves once for every app user (new struct field) and for
+> the flipped rows. `app_purchase_mode` is exposed on `claude.order_customer` (75 columns). Details
+> under [App usage](#app-usage-new-2026-09-18-revised-2026-09-22). The 2026-09-18 note below is kept
+> for history; read "or a native-app session" there as superseded.
+>
 > ## 📱 App-user flag added 2026-09-18 (steward decision 2026-09-17)
 >
 > Ten **app usage** columns landed on the table on **2026-09-17 23:04 MT** (scheduled query `sales_ops customer_attribute`, config `6a7bb56c-0000-2ccb-aeca-94eb2c09e074`, text replaced with `bq update --transfer_config --flagfile`; manual run `6af29e7f` DONE in 30 s / 3.6 GB, `attribute_asof_date` 2026-09-16, live counts identical to the scratch validation below; first scheduled run with the flag 2026-09-18 05:20 MT). `is_app_user` is the canonical
@@ -217,13 +231,16 @@ These are the columns that force the daily full recompute. `orders_l365`, `net_s
 `catering_orders_l365` and `catering_net_sales_l365` are exposed on `claude.order_customer`
 since 2026-09-18 (the 30/90 pairs are `sales_ops`-only).
 
-### App usage (new 2026-09-18)
+### App usage (new 2026-09-18, revised 2026-09-22)
 
-The canonical **App User** definition (steward decision 2026-09-17), materialised. Windows anchor on
-`attribute_asof_date` and are inclusive of it (`business_date > asof - 12 month`, `event_date >
-asof - 90 day and <= asof`), which is the same window the KB's canonical query writes as
-`>= current_date - N` when it runs the morning after. An in-store scan counts as an app purchase
-by the steward's stated assumption that the scan is made with the app.
+The canonical **App User** definition (steward decision 2026-09-17, revised 2026-09-22), materialised.
+**An app user is a person customer with an app order or an in-store scan in the trailing 12 months.
+Opening the app without buying does not qualify** (revision 2026-09-22; before that a native-app
+session in the trailing 90 days also qualified). Windows anchor on `attribute_asof_date` and are
+inclusive of it (`business_date > asof - 12 month`, `event_date > asof - 90 day and <= asof`), which
+is the same window the KB's canonical query writes as `>= current_date - N` when it runs the morning
+after. An in-store scan counts as an app purchase by the steward's stated assumption that the scan
+is made with the app.
 
 | Column | Type | Description |
 |---|---|---|
@@ -235,19 +252,20 @@ by the steward's stated assumption that the scan is made with the app.
 | `last_in_store_scan_date` | DATE | Most recent in-store scan; NULL if never. |
 | `app_session_days_l90` | INT64 | Distinct `event_date`s with a native-app `app_sessionstart` (ios/android, `cafe_zupas` workspace) in the trailing 90 days. **0, never NULL.** |
 | `last_app_session_date` | DATE | Most recent native-app session day in the window; NULL if none. |
-| `is_app_purchaser` | BOOL | `app_orders_l12m + in_store_scans_l12m > 0`. Never NULL. |
-| `is_app_session_user` | BOOL | Had a native-app session in the trailing 90 days. Never NULL. |
-| `is_app_user` | BOOL | **The canonical flag:** `is_app_purchaser or is_app_session_user`. Never NULL. |
-| `app_user_type` | STRING | `purchase_and_session` / `purchase_only` / `session_only`; **NULL when not an app user.** Segment on this for lifecycle work: `purchase_only` is bought-or-scanned-but-no-native-session-in-90-days (lapsing or uninstalled), `session_only` is active in the app with no attributable purchase in 12 months. |
+| `is_app_purchaser` | BOOL | `app_orders_l12m + in_store_scans_l12m > 0`. Never NULL. Since 2026-09-22 identical to `is_app_user`; kept for anything written against it. |
+| `is_app_session_user` | BOOL | Had a native-app session in the trailing 90 days. Never NULL. **Descriptive only since 2026-09-22**: it no longer feeds `is_app_user`. |
+| `is_app_user` | BOOL | **The canonical flag.** Since 2026-09-22: `is_app_purchaser` (app order or in-store scan in the trailing 12 months). 2026-09-18 to 09-21 it was `is_app_purchaser or is_app_session_user`. Never NULL. |
+| `app_user_type` | STRING | `purchase_and_session` / `purchase_only`; **NULL when not an app user.** `purchase_only` is bought-or-scanned-but-no-native-session-in-90-days (lapsing or uninstalled). The `session_only` value was **retired 2026-09-22**: browsers who have not bought are not app users. To find them use `is_app_session_user and not is_app_user` (27,512 on the 2026-09-21 build; a further ~23k session users have no row here at all). |
+| `app_purchase_mode` | STRING | **New 2026-09-22.** How the app user buys: `app_orders_and_scans` (both in the 12 months), `app_orders_only`, `scans_only`; **NULL when not an app user.** Mutually exclusive. On the value analysis to 2026-09-14 (`claude/app-segments-value-2026-09-22.md` in the Analysis project): both 107k customers at 9.5 orders / $220 a year ex catering, app-orders-only 140k and scans-only 170k both at ~4 orders / $92-97 a year; 81% of scans-only have never placed an app order in their lifetime. Exposed on `claude.order_customer`. |
 
 Three things to know before using them:
 
-- **Grain gap, by design.** This table only holds customers with at least one identified person
-  order. A Braze session user who has never placed an identified order is an app user by the
-  canonical query but has no row here. Measured 2026-09-16: **23,092** such users (467,775 by the
-  canonical query vs 444,683 flagged here). Everyone who *is* in the table is flagged identically
-  to the canonical query (0 disagreements). For audience sizing quote the canonical query; for
-  segmentation of known customers use the table.
+- **Grain gap, mostly closed by the 2026-09-22 revision.** This table only holds customers with at
+  least one identified person order. Under the 2026-09-18 definition a Braze session user who had
+  never placed an identified order was an app user with no row here (**23,092** on 2026-09-16:
+  467,775 by the canonical query vs 444,683 flagged). Since a purchase is now required, every app
+  user has an identified order and therefore a row; the table and the canonical query should agree
+  exactly. Session-only users still have no row unless they have ordered some other way.
 - **Braze `platform` is the whole game.** `app_sessionstart` also logs the web SDK and landing
   pages (web is ~4x the native user count); the build filters `platform in ('ios', 'android')`.
   Do not "widen" that filter.
@@ -261,7 +279,7 @@ Three things to know before using them:
 | Column | Type | Description |
 |---|---|---|
 | `attribute_asof_date` | DATE | The last complete business day the windows are anchored to — **`run_date - 1`**, not the run date. Every row shares it. Check it to detect a stale build. |
-| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. **Since 2026-09-18 includes `is_app_user` and `app_user_type`**, so a customer becoming or ceasing to be an app user is a pushable change. Every row's hash moved once on the first build with the flag. |
+| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. **Since 2026-09-18 includes `is_app_user` and `app_user_type`, since 2026-09-22 also `app_purchase_mode`**, so a customer becoming or ceasing to be an app user, or changing how they buy, is a pushable change. Every row's hash moved once on the first build with the flag (2026-09-18); every app user's and every former session-only row's hash moved again on the first build with the revision (2026-09-22). |
 | `updated_at` | TIMESTAMP | Build time. |
 
 **`attribute_hash` deliberately excludes `days_since_last_order` and `attribute_asof_date`.**
@@ -329,6 +347,26 @@ SessionM-only customers *are* in Braze — only 1,227 are missing).
 - **Delta sends:** use `attribute_hash`, not a full daily push.
 
 ## Validation
+
+### App-user revision and `app_purchase_mode`, test build vs live (2026-09-22, `attribute_asof_date` 2026-09-21)
+
+Built into `scratch.customer_attribute_app_mode_test` from the revised script before touching the
+live table (3.6 GB, dropped afterwards). Same 1,337,254 rows as the live 09-21 build.
+
+| Measure | Live 09-21 build (old text) | Test build (new text) |
+|---|---|---|
+| `is_app_user` | 445,203 | **417,691** (the 27,512 `session_only` rows flipped) |
+| `is_app_session_user and not is_app_user` | 27,512 | 27,512 |
+| `app_user_type = 'session_only'` | 27,512 | 0 (retired) |
+| `app_purchase_mode = 'app_orders_and_scans'` | 107,049 (derived) | 107,049 |
+| `app_purchase_mode = 'app_orders_only'` | 138,121 (derived) | 138,121 |
+| `app_purchase_mode = 'scans_only'` | 172,521 (derived) | 172,521 |
+| app users with NULL mode / non-app users with a mode / `is_app_user != is_app_purchaser` | n/a | 0 / 0 / 0 |
+
+`purchase_and_session` moved by 4 (258,727 to 258,731) because `app_sessionstart` backfilled
+between the 05:20 build and the test; expected. Note the 09-21 window still carries the Pulse
+stall (app orders for 09-15 to 09-21 read as unidentified), so `app_orders_only` is a few
+thousand light and `scans_only` correspondingly heavy until the 09-24 build.
 
 ### App-user columns, test build vs canonical query (2026-09-18, `attribute_asof_date` 2026-09-16)
 
@@ -572,6 +610,10 @@ first** — that's the mistake made here.
 - [x] **`is_app_user` / `app_user_type` exposed through `claude.order_customer`** — steward call
       2026-09-17, view redeployed 23:20 MT; `gender` / `birthday` / `age` followed at 23:40 MT (70
       columns). The other ten app-usage columns stay `sales_ops`-only.
+- [x] **App-user definition revised and `app_purchase_mode` added** (steward decision 2026-09-22):
+      `is_app_user` = purchase test only, `app_user_type` drops `session_only`, `app_purchase_mode`
+      materialised and exposed on `claude.order_customer` (75 columns). Deployed the same day via
+      `bq update --transfer_config --flagfile` + manual run; hash moved for every app user once.
 - [ ] `birthday` placeholder year: consider nulling the **year** at source rather than leaving 1950 in
       the column (a DATE cannot hold month/day alone, so this means either a separate
       `birthday_month_day` STRING or accepting the sentinel). Until decided, the 1950 rule above is

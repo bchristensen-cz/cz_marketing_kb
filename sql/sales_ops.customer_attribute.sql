@@ -75,8 +75,9 @@ from customer_store cs
 group by 1
 )
 
--- Native-app sessions in the trailing 90 days (canonical App User definition, steward decision
--- 2026-09-17). app_sessionstart is NOT app-only: the web SDK and landing pages log to the same
+-- Native-app sessions in the trailing 90 days. Descriptive only since the 2026-09-22 revision
+-- (feeds is_app_session_user, app_session_days_l90 and the app_user_type split; does not set
+-- is_app_user). app_sessionstart is NOT app-only: the web SDK and landing pages log to the same
 -- table and web is ~4x the native user count, so platform in ('ios', 'android') is load-bearing.
 -- Braze platform values are lowercase; the order mart's order_source values ('iOS', 'Android')
 -- are mixed case. Join key is the customer id cast from external_user_id, never email.
@@ -266,12 +267,14 @@ select
 , ca.catering_net_sales_l90
 , ca.catering_net_sales_l365
 
--- ---------- app usage (canonical App User definition, steward decision 2026-09-17) ----------
--- is_app_user = app purchase (app order OR in-store scan) in the trailing 12 months
---            OR native-app session in the trailing 90 days.
--- Grain caveat: this table only holds customers with at least one identified person order, so a
--- Braze session user who has never placed an identified order is an app user by the canonical
--- query but has no row here.
+-- ---------- app usage (canonical App User definition, steward decision 2026-09-17, revised 2026-09-22) ----------
+-- is_app_user = app purchase (app order OR in-store scan) in the trailing 12 months.
+-- 2026-09-22 revision (steward): a native-app session on its own no longer makes an app user.
+-- Browsing without buying is not app usage. Session state is still carried in
+-- is_app_session_user / app_session_days_l90 / last_app_session_date and inside app_user_type,
+-- but it never sets is_app_user. The 27.5k 'session_only' customers on the 2026-09-21 build
+-- flipped to is_app_user = false on the first build with this text (one-time hash move).
+-- is_app_purchaser is kept as an alias of is_app_user for anything written against it.
 , ca.lifetime_app_order_count
 , ca.lifetime_in_store_scan_count
 , ca.app_orders_l12m
@@ -282,13 +285,24 @@ select
 , aps.last_app_session_date as last_app_session_date
 , (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 as is_app_purchaser
 , aps.mapped_cust_id is not null as is_app_session_user
-, ((ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 or aps.mapped_cust_id is not null) as is_app_user
+, (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 as is_app_user
+-- app_user_type: engagement shape of an app user. NULL for anyone who is not an app user,
+-- including session-only browsers (the former 'session_only' value is retired 2026-09-22).
 , case
     when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 and aps.mapped_cust_id is not null then 'purchase_and_session'
     when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 then 'purchase_only'
-    when aps.mapped_cust_id is not null then 'session_only'
     else null
   end as app_user_type
+-- app_purchase_mode (added 2026-09-22): how the app user buys, the two halves of the purchase
+-- test split out. Mutually exclusive; NULL for non-app users. Value analysis 2026-09-22 (window to
+-- 09-14): 'app_orders_and_scans' 107k customers at 9.5 orders / $220 a year ex catering,
+-- 'app_orders_only' 140k and 'scans_only' 170k both at ~4 orders / $92-97 a year.
+, case
+    when ca.app_orders_l12m > 0 and ca.in_store_scans_l12m > 0 then 'app_orders_and_scans'
+    when ca.app_orders_l12m > 0 then 'app_orders_only'
+    when ca.in_store_scans_l12m > 0 then 'scans_only'
+    else null
+  end as app_purchase_mode
 
 -- ---------- housekeeping ----------
 , asof_date as attribute_asof_date
@@ -306,13 +320,20 @@ select
   , ca.orders_l365
   -- 2026-09-18: app-user state added so the Braze delta push fires when someone becomes or
   -- stops being an app user. One-time hash move for every row on the first build.
-  , ((ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 or aps.mapped_cust_id is not null) as is_app_user
+  -- 2026-09-22: session no longer sets is_app_user; app_purchase_mode added. Hash moves once for
+  -- every app user (new struct field) and for the former session-only rows.
+  , (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 as is_app_user
   , case
       when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 and aps.mapped_cust_id is not null then 'purchase_and_session'
       when (ca.app_orders_l12m + ca.in_store_scans_l12m) > 0 then 'purchase_only'
-      when aps.mapped_cust_id is not null then 'session_only'
       else null
     end as app_user_type
+  , case
+      when ca.app_orders_l12m > 0 and ca.in_store_scans_l12m > 0 then 'app_orders_and_scans'
+      when ca.app_orders_l12m > 0 then 'app_orders_only'
+      when ca.in_store_scans_l12m > 0 then 'scans_only'
+      else null
+    end as app_purchase_mode
   ))) as attribute_hash
 , current_timestamp() as updated_at
 

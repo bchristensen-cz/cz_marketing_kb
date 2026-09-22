@@ -79,6 +79,12 @@
 -- against this file first: identical. Left NULL (not coalesced) on unidentified / non-person orders,
 -- same convention as lifetime_net_sales. Window = 365 days to attribute_asof_date (yesterday).
 -- View is now 74 columns.
+--
+-- 2026-09-22: app_purchase_mode exposed from customer_attribute (steward decision, same session as
+-- the app-user revision: a session alone no longer makes an app user, so is_app_user is the
+-- 12-month purchase test and app_user_type no longer emits 'session_only'). Live definition diffed
+-- against this file first: identical. NULL on unidentified / non-person orders and on non-app
+-- users, deliberately not coalesced. View is now 75 columns.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -108,6 +114,7 @@ oc.* except(brink_net_sales)
 , ca.catering_net_sales_l365
 , ca.is_app_user
 , ca.app_user_type
+, ca.app_purchase_mode
 , ca.gender
 , ca.birthday
 , ca.age

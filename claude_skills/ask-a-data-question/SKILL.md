@@ -234,15 +234,20 @@ Full definition, the `upper()` join trap on `root_offer_id`, the employee-meal o
 pre-2024 window rule are in [`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
 [`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
 
-### "App user" / "app customer" means the canonical App User definition (steward decision 2026-09-17)
+### "App user" / "app customer" means the canonical App User definition (steward decision 2026-09-17, revised 2026-09-22)
 
 When an employee asks about app users, app customers, or "how many people use the app",
 resolve to the canonical definition in the sales-ops-orders skill and do **not** open a fork
 about what "app user" means. The definition is a person customer with an **app purchase in
 the trailing 12 months** (`oc.order_source in ('iOS', 'Android')` **or** `oc.in_store_scan =
-1`, because the steward's stated assumption is that an in-store scan is made with the app) **or**
-a **native-app session in the trailing 90 days** (`braze.app_sessionstart`, `workspace =
-'cafe_zupas'`, `platform in ('ios', 'android')`). State both windows in the answer.
+1`, because the steward's stated assumption is that an in-store scan is made with the app).
+**Opening the app without buying does not count** (revision 2026-09-22; from 09-18 to 09-21 a
+native-app session in 90 days also qualified, so numbers quoted in that window are not
+comparable). State the window in the answer. If the question is about how app users buy, the
+three modes are `app_purchase_mode` = `app_orders_and_scans` / `app_orders_only` / `scans_only`,
+materialised on `customer_attribute` and exposed on `claude.order_customer`. If the question is
+about people who open the app but do not buy, that is a separate population ("app openers"),
+never a kind of app user; the sales-ops-orders skill says how to count it.
 
 Two things still need resolving, and the data cannot answer them:
 
@@ -250,7 +255,7 @@ Two things still need resolving, and the data cannot answer them:
   substitute that date in both windows and say so.
 - **Customer definition vs channel metric.** "App users" is a customer count. "App orders" or
   "app sales" is a channel question: `oc.order_source in ('iOS', 'Android')` on orders, no
-  scan component, no session component. If the wording could be either, ask, with the
+  scan component. If the wording could be either, ask, with the
   consequence in the label (customers counted once across 12 months vs orders in the period).
 
 Never substitute a share-of-orders cut ("more than half their orders in the app") for the

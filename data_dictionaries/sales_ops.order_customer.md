@@ -1,5 +1,25 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.order_customer`
 
+> # ⚠️ 2026-09-23 — the `pulse` dataset changed column TYPES; the build broke 08:02–12:02 MT and is fixed
+>
+> The Pulse feed was reloaded on 2026-09-23 and several raw columns arrived with new BigQuery types (the change landed between the 07:02 and 08:02 MT runs). Nothing in this table's schema changed, but the build script had to cast:
+>
+> | raw column | was | now | build change (`sql/sales_ops.order_marts.sql`) |
+> |---|---|---|---|
+> | `pulse.orders.id` | INT64 | **NUMERIC** | `cast(po.id as int64)` in `pulse_orders` and in `order_lines_detail` — `pulse_order_id` stays INT64 |
+> | `pulse.orders.brink_order_id` | INT64 | **NUMERIC** | none needed (INT64 = NUMERIC comparison coerces) |
+> | `pulse.orders.is_catering` | BOOL | **INT64** (0/1) | `case when po.is_catering = 1 then true else false end` — `is_catering` stays BOOLEAN |
+> | `pulse.order_customers.is_loyalty_user` | BOOL | **INT64** (0/1) | `ocs.is_loyalty_user = 0` in the `is_guest_order` predicate (was `= false`) |
+> | `pulse.order_customers.phone` | STRING | **INT64** | already `cast(ocs.phone as string)` — `phone` stays STRING |
+> | `pulse.customers.id` | INT64 | **NUMERIC** | none needed (joins coerce); `pulse_customer_id` is still `pulse.orders.customer_id` (INT64) |
+> | `pulse.customers.is_catering` | BOOL | **INT64** | not read by this build; **does break `sales_ops.cust_map`** — see that dictionary |
+> | `pulse.customers.phone` | INT64 | **STRING** | `cast(c.phone as string)` is now a no-op — `acct_phone` stays STRING |
+> | `pulse.order_payments.is_processed` etc. | BOOL | **INT64** | not read here; broke `claude.order_payment_tender` — redeployed 2026-09-23 |
+>
+> Run history (from `INFORMATION_SCHEMA.JOBS_BY_PROJECT`): 05:02 full-history and 07:02 succeeded on the old types; 08:02, 09:02, 10:02, 11:02 failed on `COALESCE(INT64, BOOL)` (the `is_catering` coalesce); the 11:50 / 11:58 / 12:02 attempts failed on `NUMERIC cannot be inserted into pulse_order_id`; a manual run at **12:17** and the scheduled 13:02 succeeded with the full fix. Because the intraday path reloads **today only**, the 12:17 run recovered every hour that had failed — **no business date was lost**. The `delete` at the top of each failed transaction was rolled back, so the table was never left empty for the day. **All three marts share one transaction chain, so `order_lines` and `order_line_discount_detail` were stale for the same four hours.**
+>
+> Lesson for the steward: the raw `pulse.*` types are not stable across feed reloads. Any build that compares a raw Pulse flag to `true`/`false`, or inserts a raw Pulse id into an INT64 column, will fail the next time the feed changes shape. Prefer `= 1` / `cast(... as int64)` at the point of ingestion.
+
 **One row per order.** Order-level financials, channel attribution, and customer identity. This is the canonical table for sales, order counts, channel mix, and customer/loyalty questions.
 
 > # 🚨 Rebuilt 2026-09-08 16:16 MT — identity columns MOVED OFF this table (breaking)
@@ -125,7 +145,7 @@
 | Column | Type | Description |
 |---|---|---|
 | `is_catering` | BOOLEAN | TRUE when the Brink destination name contains `cater`, **or** the order is at **store 50** (Middleton Mobile), **or** the pulse order is flagged catering. **Widened 2026-08-17** to add store 50, per finance's definition — 807 orders / $10.3K net in the 30 days to 2026-08-16, none of which any earlier rule caught (store 50's Brink destinations are Takeout / To Stay / Drive Thru / Fundraiser and its pulse `is_catering` is always false). **Redefined 2026-07-24** — the destination test previously never evaluated (dead code behind a NULL/false branch), which flagged POS-only catering orders as FALSE. June 2026 impact: 641 orders / $70.7K net moved from FALSE to TRUE. **⚠️ `order_lines.is_catering` does not yet carry the store-50 rule — see Gotchas.** |
-| `is_guest_order` | BOOLEAN | **Tightened 2026-09-08:** also requires **`sm_email is null`** (no SessionM identity resolved on the order). **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = false`. FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
+| `is_guest_order` | BOOLEAN | **Tightened 2026-09-08:** also requires **`sm_email is null`** (no SessionM identity resolved on the order). **Redefined 2026-07-29.** TRUE only when the order is **first-party digital** (`po.source in ('mobile_web_source','web_source','iOS','Android','mobile_source')`) **and** `pulse.order_customers.is_loyalty_user = 0` (the predicate read `= false` until 2026-09-23, when the raw column became INT64 — same meaning). FALSE for everything else — POS, third-party (`checkmate`, `ezcater`), `Outdoor Kiosk`, `operator`, and digital orders by loyalty members. Before this fix the column was an exact alias for `pulse_order_id is null` and carried no loyalty information at all — see the gotcha. `is_guest_order = 1` has not worked since 2026-07-27 (BOOLEAN, not INTEGER). |
 | `has_order_items` | BOOLEAN | **New 2026-08-04 (synced 2026-08-13), for auditing.** FALSE = the order row exists but no `brinkOrderItem` rows survived the item filters (not cleared/voided/deleted, sales > 0) — `item_gross_sales`, `mods_gross_sales`, tip-item and fee columns are NULL on these rows. ~2.4% of rows in the trailing 8 days. **Corrected 2026-08-24 (steward ruling) — the zeros on these rows are RIGHT.** These are voided/comped shells: Brink zeroes the header and voids the items. `total_discount_amount`, `total_promotions_amount` and `net_sales` all read $0.00, and **an order with no sellable lines cannot carry a discount or a promotion** — so that is the correct answer, not missing data. Verified 2026-08-24 over 2026-07-20 → 08-22: `gross_sales` is 0 on **12,327 of 12,327** such orders, and `claude.order_line_discount_detail` carries **zero** lines against them, so both marts agree at $0.00. Treat this as an audit flag, never as a correction factor — do not add these orders back into a giveaway figure. (A 2026-08-15 revision called this a join-key bug and said `net_sales` "inherits the error"; retracted 2026-08-24.) |
 | ~~`is_employee_discount`~~ | — | **REMOVED 2026-08-17. The column does not exist; naming it errors.** It was an order-level 0/1 matched on Brink discount names (`%Team%`, `%Employee%`) plus SessionM offers (`%Meal%`, `%Emp%`, `%Team%`). Use **`order_line_discount_detail.is_employee_meal_discount`** instead — line-level, never NULL, covers all four eras of the benefit. Aggregate to order grain with `max()` / `logical_or()` if you need an order-level flag. |
 
@@ -532,7 +552,7 @@ nothing about which address is "right".
   guest choice.
 
   ```sql
-  ocs.is_loyalty_user = false
+  ocs.is_loyalty_user = 0   -- raw column is INT64 0/1 since 2026-09-23; was `= false`
   and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
   ```
 

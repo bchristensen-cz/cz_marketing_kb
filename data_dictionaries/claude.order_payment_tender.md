@@ -1,7 +1,7 @@
 # Data Dictionary: `marketing-data-442316.claude.order_payment_tender`
 
 **One row per `brink_order_id`** — same grain and population as `claude.order_customer`
-(rolling 3-year window, `store_id <> 1111`). View over the raw payment tables
+(rolling 3-year window, `store_id not in (1111, 999)`). View over the raw payment tables
 (`pulse.order_payments`, `pulse.stripe_order_payments`, `pulse.tenders`,
 `brink.brinkOrderPayment`, `brink.brinkTenders`). Build script:
 [`sql/claude.order_payment_tender.sql`](../sql/claude.order_payment_tender.sql).
@@ -134,6 +134,8 @@ Every `order_customer` row has exactly one row here and `payment_tender` is neve
 so inner vs left join gives the same result — left is the house convention.
 
 ## Gotchas
+
+- **Broke and was redeployed 2026-09-23.** The Pulse feed reload changed `pulse.order_payments.is_processed / is_cancelled / is_failed / is_refund / is_removed` from BOOL to INT64 (0/1), and the view stopped parsing (`No matching signature for function IFNULL: INT64, BOOL`) for every query from ~07:30 to ~14:30 MT. The five predicates now compare to `1` / `0`; output and semantics are unchanged (verified: yesterday's tender mix reads visa 13,431 / doordash 3,562 / mastercard 3,054 / apple pay 2,805 / amex 1,590 / cash 1,489). Raw Pulse flag types are not stable across feed reloads — see the `order_customer` dictionary header for the full list of columns that changed.
 
 - **🛑 Access: the view reads `pulse` and `brink`, which need the authorized-dataset
   entry.** `sales_ops` carries `{dataset: claude, targetTypes: [VIEWS]}` in its access

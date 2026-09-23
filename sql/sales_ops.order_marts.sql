@@ -254,10 +254,10 @@ qualify row_number() over(
 
 , pulse_orders as (
 select
-po.id
+cast(po.id as int64) as id
 , po.business_date
 , po.customer_id
-, po.is_catering
+, case when po.is_catering = 1 then true else false end as is_catering
 , po.promise_time
 , po.source
 , po.brink_order_id
@@ -288,7 +288,7 @@ bo.Id as brink_order_id
 	when bo.FKStoreId = 50 then true  -- '2026-08-17' including store 50 in the catering flag
 	else coalesce(po.is_catering, false) end as is_catering
 , case
-		when ocs.is_loyalty_user = false and lower(po.source) in ('mobile_web_source', 'web_source', 'ios', 'android', 'mobile_source') and t.email is null
+		when ocs.is_loyalty_user = 0 and lower(po.source) in ('mobile_web_source', 'web_source', 'ios', 'android', 'mobile_source') and t.email is null
 		then true else false end as is_guest_order  -- '2026-07-29' must be digital to be a guest and must not be a loyalty order
 , po.customer_id as pulse_customer_id
 --, t.external_user_id as sm_external_user_id  -- '2026-08-27' removed and will map using email address
@@ -435,20 +435,20 @@ select oc.brink_order_id
 , oc.pulse_customer_id
 , oc.email
 , coalesce(
-	case when oc.is_sys_order_email = 0 and oc.is_sys_acct_email = 0 and oc.acct_email is not null then oc.pulse_customer_id end
-	, case when oc.is_catering = true then coalesce(oc.pulse_customer_id, oc.sm_external_user_id) end
-	, case when oc.is_guest_order = true then m.max_acct_id end
-	, case when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 then oc.pulse_customer_id end
-	, case when oc.is_sys_order_email = 0 and oc.is_sys_acct_email = 1 and oc.email is not null then coalesce(m.final_acct_id, m.max_acct_id) end
-	, case when oc.sm_email is not null then ms.final_acct_id end
-	, case when oc.sm_email is not null then oc.sm_external_user_id end
+	case when oc.is_catering = true then coalesce(oc.pulse_customer_id, oc.sm_external_user_id) end -- catering accounts are their own identity population
+	, case when oc.is_sys_order_email = 0 and oc.email is not null then m.acct_id end    -- the person, by the email on the order: guest, authenticated, or sys-account order alike
+	, case when oc.is_sys_acct_email = 0 and oc.acct_email is not null then ma.acct_id end -- order email is a system email or missing: the person by the account's own email (kiosk / operator loyalty scans)
+	, case when oc.sm_email is not null then coalesce(ms.acct_id, oc.sm_external_user_id) end                   -- no usable Pulse email anywhere: SessionM identity
+	, case when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 then oc.pulse_customer_id end            -- pure system identities: kiosk terminal, checkmate
 ) as mapped_cust_id
 , oc.order_datetime_local
 from `marketing-data-442316`.sales_ops.order_customer oc
-	left join `marketing-data-442316`.sales_ops.cust_map  m
-	on m.email = oc.email
-		left join `marketing-data-442316`.sales_ops.cust_map  ms
-		on ms.email = oc.sm_email
+	left join `marketing-data-442316`.sales_ops.cust_map m
+	on m.email = oc.email                       -- the order email
+		left join `marketing-data-442316`.sales_ops.cust_map ma
+		on ma.email = oc.acct_email             -- the signed-in account's own email
+			left join `marketing-data-442316`.sales_ops.cust_map ms
+			on ms.email = oc.sm_email           -- the SessionM email
 where 1=1
 and oc.store_id not in (1111,999)
 )
@@ -771,7 +771,7 @@ from items i
 , order_lines_detail as (
 select
 bol.order_id as brink_order_id
-, po.id as pulse_order_id
+, cast(po.id as int64) as pulse_order_id
 , bo.business_date
 , bo.is_catering
 , bo.order_datetime_local

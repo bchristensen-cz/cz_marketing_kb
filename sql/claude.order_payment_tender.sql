@@ -3,7 +3,14 @@ claude.order_payment_tender
 ---------------------------
 Order-level payment tender for the Claude surface. One row per brink_order_id
 (same grain and population as claude.order_customer: business_date >= jan 1 three
-calendar years back, store_id <> 1111).
+calendar years back, store_id not in (1111, 999)).
+
+2026-09-23 redeploy (type change in the pulse dataset): pulse.order_payments.is_processed /
+is_cancelled / is_failed / is_refund / is_removed arrived as INT64 (0/1) instead of BOOL, and the
+view stopped parsing ("No matching signature for function IFNULL: INT64, BOOL") for every
+standard-user query from roughly 07:30 MT until the redeploy at ~14:30 MT. The five predicates
+below now compare to 0/1. Live definition diffed against this file first: identical apart from
+the header's store filter, which had drifted (deployed not in (1111, 999), file said <> 1111).
 
 This view is the sanctioned wrapper around the raw payment tables
 (pulse.order_payments, pulse.stripe_order_payments, pulse.tenders,
@@ -59,11 +66,11 @@ from `marketing-data-442316`.pulse.order_payments op
 		on t.id = op.tender_id
 where 1=1
 and op.order_id is not null
-and ifnull(op.is_processed, false) = true
-and ifnull(op.is_cancelled, false) = false
-and ifnull(op.is_failed, false) = false
-and ifnull(op.is_refund, false) = false
-and ifnull(op.is_removed, false) = false
+and ifnull(op.is_processed, 0) = 1
+and ifnull(op.is_cancelled, 0) = 0
+and ifnull(op.is_failed, 0) = 0
+and ifnull(op.is_refund, 0) = 0
+and ifnull(op.is_removed, 0) = 0
 and op.deleted_at is null
 group by 1, 2
 )

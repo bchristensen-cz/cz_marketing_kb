@@ -386,7 +386,7 @@ nothing about which address is "right".
   Anything under 15% on a *completed* day means that day is corrupted.
 
 - **🔑 The Pulse orders feed can stop on its own while every other `pulse.*` table keeps loading**
-  (observed 2026-09-15 05:51 MT → stalled through 09-21; **backfill merged 2026-09-22 07:57 MT**, 75,213 rows inserted into `pulse.orders` by a manual SA run of the old loader; marts heal on the 09-23 05:02 full-history run, `customer_attribute` on 09-24 05:00; re-run the identified-% check before quoting identity figures for 09-15 onward). Settled-day identification fell from
+  (observed 2026-09-15 05:51 MT → stalled through 09-21; **backfill merged 2026-09-22 07:57 MT**, 75,213 rows inserted into `pulse.orders` by a manual SA run of the old loader; marts heal on the 09-23 05:02 full-history run, `customer_attribute` healed the same morning (it fires at 05:20, after the 05:02 run finished at 05:07:35; job-log verified 2026-09-23); re-run the identified-% check before quoting identity figures for 09-15 onward). Settled-day identification fell from
   ~55% to ~14% because only the SessionM arm was left: 09-15 / 16 / 17 carried 4,072 / 4,063 / 4,051
   `sm_external_user_id` orders and 167 / 0 / 0 `pulse_order_id` orders; `order_source` was NULL on all
   but 167 of 87,606 orders, `is_guest_order` NULL everywhere, `is_catering` fine (Brink-side).

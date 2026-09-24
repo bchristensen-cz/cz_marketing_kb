@@ -776,6 +776,19 @@ With a 10% holdout on each of two canvases the both-held cell is **1% of the ove
 
 None has a holdout isolating the channel, and the first three are structurally blocked — the experiment step sits above the channel routing, so control users carry no branch label, and an impression requires an app session. Fix forward by routing first and running an experiment step inside each branch, or by stamping a custom attribute at each routing step. Until then their Track A numbers describe their audience, not their effect. Do not promise a value for them.
 
+## Canvas x canvas message report, and the `is_automated` flag (steward 2026-09-24)
+
+Analysis SQL: `sql/analysis/braze_canvas_message_report.sql`. One row per canvas x `canvas_step_id` x channel (a step is one channel) with first/last send date, sends, deliveries, human opens, non-bot clicks, D-026 last-touch attributed orders / net sales, and **window orders / net sales** (every recipient order inside the same 24h / Saturday-48h window, no last-touch competition). Holdout rows sit in the same table: one per canvas x experiment step x control split from `canvas_experimentstep_splitentry` (`in_control_group` OR the name regex in the holdout section), with the control users' window orders measured from the split-entry instant. **Compare holdout rows to the treatment WINDOW columns, never to the attributed columns** -- a control user has no send to win last touch. Materialised once to `scratch` (135 GB for nine months; `splitentry` is most of it), re-cut from there.
+
+- **Deliveries:** `email_delivery` / `sms_delivery` / `rcs_delivery` `count(distinct id)`; push has no delivery event, so push deliveries = sends minus `pushnotification_bounce`.
+- **`is_automated`** (TRUE = trigger or scheduled automation, FALSE = one-off broadcast), decided in this order:
+  1. Explicit send-type token in `canvas_name`: `| Automated |` or `st:automat*` = TRUE; `| Broadcast |` or `st:broadcast` = FALSE.
+  2. `cm:` token containing `automat` = TRUE (e.g. `cm:journey_to_3_1to2_month2_automated`, `cm:SMSdownloadAutomated`).
+  3. Otherwise cadence: **5 or more distinct send days** in the window = TRUE. Catches the monthly points automations (`Points_Monthly_Statement`, `expiring_points_day_5/15/25`: 7-8 send days) and `slot_machine_promo_winner_confirmation` (5); everything below 5 in the 2025-12-29 -> 2026-09-24 window was a one-day broadcast or a test canvas.
+  
+  **Do not use the audience token (`a:new`, `a:all`, `a:custom`...) for this.** It says who was targeted, not what triggers the canvas: `a:all_remaining`, `a:coldweatherstores`, `a:utah_idaho`, `a:ohio_store`, `a:new | cm:lapsed_salad_doublepoints_send_2` are all one-day broadcasts. A first pass used it and mis-flagged ~20 broadcasts as automated. Carry an `is_automated_source` column so the deciding branch is visible per row.
+- Measured 2025-12-29 -> 2026-09-24, workspace `cafe_zupas`: 38 automated canvases / 8.53M sends / 222,633 attributed orders / $6.14M vs 205 broadcast canvases / 120.95M sends / 563,333 / $13.38M. Sends tie to `dashboard.braze_send_day` within 0.01%, attributed orders within 0.04% (the cache restates only the trailing 8 days).
+
 ## Files
 
 | File | What it is |

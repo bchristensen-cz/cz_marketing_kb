@@ -10,8 +10,9 @@ description: Weekly steward check for menu and item-structure changes (new ids, 
 
 ## Why this exists
 
-On 2026-06-01 the Kids Combo was restructured in Brink: a new `Composite` id **643647054**
-(`item_name_raw = 'Kids Combo '`, trailing space, `$0.00`) took about half of Kids Combo volume,
+On 2026-06-01 the POS Kids Combo was restructured in Brink: a new `Composite` id **643647054**
+(`item_name_raw = 'Kids Combo '`, trailing space, `$0.00`) took the POS half of Kids Combo volume
+(digital and third-party orders stayed on 642361971, which is still live),
 the price moved onto the kids entree lines (Grilled Cheese Sandwich / Chicken Tenders / Fruit Cup /
 Soup went from `$0` modifiers to `$3.39` items), and because the build rule is
 `bi.name = 'Kids Combo'` with no `trim()`, the new id landed in `item_type = 'Entree'` while the
@@ -86,19 +87,31 @@ For each **event** (not each row):
 
 ## Standing findings from the first run (2026-09-24)
 
-- **Kids Combo is two ids.** 642361971 (`Regular`, `$6.79`, `item_type = 'Kids Meals'`, the
-  priced combo) and 643647054 (`Kids`, `$0.00`, `Composite`, `item_type = 'Entree'`, the
-  restructured header). A kids-combo count is `item_id in (642361971, 643647054)` by units; a
-  kids-combo **revenue** number must use `rev_center_name = 'Kids Meals'` at the order or line
-  level, because half the price now sits on the entree lines.
+- **Kids Combo is two LIVE ids, split by ordering channel. Neither is old.** 642361971 (`Regular`,
+  `$6.79`, Brink `Normal`, `item_type = 'Kids Meals'`) is what Pulse digital and every third-party menu
+  send: one priced line, selections as `$0` modifiers. 643647054 (`Kids`, `$0.00`, Brink `Composite`,
+  `item_type = 'Entree'`) is what the POS menu has rung since 2026-06-01: a `$0` header with the two
+  food selections as priced `item` components at `$3.40` each, the Try 2 Combo construct
+  (`composite_item_id` points at the header). Week ending 2026-09-20: POS 10,328 vs 1,040 (Drive Thru)
+  on the two ids; digital 5,263 and third party 3,056, all on 642361971. A kids-combo count is header
+  lines `item_id in (642361971, 643647054)`; kids-combo **revenue** is `rev_center_name = 'Kids Meals'`
+  or `parent_item_grp_name = 'Kids Combo'` over header plus components, because on POS the price sits
+  on the entree lines. Component `price` is `0.00`; use `item_gross_sales`.
 - **Build defect, steward call open:** `sql/sales_ops.order_marts.sql` line ~807,
   `when brc.name = 'Kids Meals' and bi.name = 'Kids Combo' then 'Kids Meals'` misses the
   trailing-space name. Proposed fix: `trim(bi.name) = 'Kids Combo'` on both branches, deploy and
-  commit together, then the 5am reload restates history. Until then `item_type = 'Kids Meals'`
-  undercounts kids combos by ~52% for every week since 2026-06-01.
+  commit together, then the 5am reload restates history. Until then `item_type = 'Kids Meals'` is a
+  digital-plus-drive-thru number, ~48% of kids combos, for every week since 2026-06-01.
 - Kids entree items (`Grilled Cheese Sandwich` / `Chicken Tenders` / `Fruit Cup` / `Soup`, size
   `Kids`) now sell about 55-70% as priced `item` lines. Any "kids entree attach" measure built on
-  `line_item_type = 'modifier'` lost half its population on 2026-06-01.
+  `line_item_type = 'modifier'` lost the POS half of its population on 2026-06-01. The sale-shape
+  test `parent_rev_center_name <> rev_center_name` reads those POS components as sold alone; use
+  `composite_item_id is not null` for "inside a combo".
+- **General rule this proved:** the same product can carry a different `item_id` per ordering
+  channel, because the Pulse digital menu and the Brink POS menu are configured separately. When
+  block 6 shows one name on several ids, break the ids out by `order_customer.destination` before
+  calling either one old or new. I called 642361971 "old" on the first pass and was wrong; the
+  channel split is what the data actually said.
 
 ## Running it by hand
 

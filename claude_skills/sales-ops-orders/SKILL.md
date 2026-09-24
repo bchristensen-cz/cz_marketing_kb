@@ -2359,7 +2359,7 @@ where business_date between '2026-08-24' and '2026-08-26'
 the **zero-priced combo slot** — the entrée recorded as a `modifier` selection. That third
 shape is not a rounding error: for the entrée classes it applies to, the split between priced
 components and $0 modifier lines runs roughly **56/44 across all 88 stores and both combo
-types** (documented in the taxonomy above; still an open question *why*). So a Try 2 Combo
+types** (documented in the taxonomy above). The *why* is settled: it is the POS-vs-digital channel split described in the taxonomy note corrected 2026-07-30, and since 2026-09-24 it is also visible on the dimension side as separate `item_id`s per channel (Try 2: POS 642388932 / 642388929 / 642388930 `$0` composites vs Pulse 642361973 `$12.99`; Kids Combo: POS 643647054 vs Pulse 642361971, see the `order_lines` dictionary Kids Meals gotcha). So a Try 2 Combo
 containing a salad can register as "did not buy a salad", and it does so **only for combo
 buyers** — a behavioural segment, not a random sample. In a lift test that is a biased
 denominator, not noise.

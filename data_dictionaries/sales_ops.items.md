@@ -178,10 +178,12 @@ called or where it sat. [`sales_ops.items_snapshot`](sales_ops.items_snapshot.md
 [`sql/checks/menu_drift_weekly.sql`](../sql/checks/menu_drift_weekly.sql) diffs it and scans
 `item_daily` for new ids, volume breaks, price / line-type shifts and name splits. Worked example and
 reading guide: `claude_skills/menu-drift-check/SKILL.md`. Standing fact from its first run: **`Kids Combo`
-is two live ids split by channel** (642361971 `Regular` `$6.79` `Normal` = Pulse digital and third party;
-643647054 `Kids` `$0` `Composite` = POS since 2026-06-01, Try 2-style header with priced components), and
-only the first is `item_type = 'Kids Meals'` because the second's raw name carries a trailing space. Neither is
-old. See the `order_lines` dictionary Kids Meals gotcha for the rules.
+is two live ids split by channel** (642361971 `$6.79` `Normal` = Pulse digital and third party; 643647054
+`$0` `Composite` = POS since 2026-06-01, Try 2-style header with priced components). Neither is old. Since the
+2026-09-24 build fix (`trim(bi.name)`) both carry `item_name = 'Kids Combo'`, `item_size = 'Regular'` and
+`item_type = 'Kids Meals'`; only `item_id` separates them. Try 2 Combo splits the same way (POS 642388932 /
+642388929 / 642388930 `$0` composites vs Pulse 642361973 `$12.99`). See the `order_lines` dictionary Kids
+Meals gotcha for the rules.
 
 ## Related
 

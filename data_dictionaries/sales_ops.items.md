@@ -178,8 +178,10 @@ called or where it sat. [`sales_ops.items_snapshot`](sales_ops.items_snapshot.md
 [`sql/checks/menu_drift_weekly.sql`](../sql/checks/menu_drift_weekly.sql) diffs it and scans
 `item_daily` for new ids, volume breaks, price / line-type shifts and name splits. Worked example and
 reading guide: `claude_skills/menu-drift-check/SKILL.md`. Standing fact from its first run: **`Kids Combo`
-is two ids since 2026-05-05** (642361971 priced `Regular`, 643647054 `$0` `Composite` `Kids`), and only
-the first is `item_type = 'Kids Meals'`.
+is two live ids split by channel** (642361971 `Regular` `$6.79` `Normal` = Pulse digital and third party;
+643647054 `Kids` `$0` `Composite` = POS since 2026-06-01, Try 2-style header with priced components), and
+only the first is `item_type = 'Kids Meals'` because the second's raw name carries a trailing space. Neither is
+old. See the `order_lines` dictionary Kids Meals gotcha for the rules.
 
 ## Related
 

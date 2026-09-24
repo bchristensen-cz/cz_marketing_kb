@@ -16,7 +16,7 @@ This KB is **pull-based**: every Claude session works from a fresh copy of `main
      Clone into the session's temporary working area. If an older copy exists, delete it first.
    - Without a shell (regular chat / browser): fetch the raw files from
      `https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/`, starting with `README.md`. Fetch each file whole — never work from a summary or a truncated fetch.
-2. Read this README, then **`claude_skills/ask-a-data-question/SKILL.md`**, then the relevant domain skill in `claude_skills/`, then the data dictionaries it references — from the fresh copy only. `ask-a-data-question` comes first on every question: it resolves fuzzy terms against the data and presents the remaining scope choices as clickable options (plain-text questions where clickable options aren't available), so nobody has to word a question well to get a right answer.
+2. Read this README, then **`decisions/DECISIONS.md`** (the cross-project decision ledger: what was ruled, when, and where it applies), then **`claude_skills/ask-a-data-question/SKILL.md`**, then the relevant domain skill in `claude_skills/`, then the data dictionaries it references — from the fresh copy only. `ask-a-data-question` comes first on every question: it resolves fuzzy terms against the data and presents the remaining scope choices as clickable options (plain-text questions where clickable options aren't available), so nobody has to word a question well to get a right answer.
 3. **State the KB version** in the first data answer of the session — `git log -1 --format='%h %ad'` with a shell, or fetch `https://api.github.com/repos/bchristensen-cz/cz_marketing_kb/commits/main` and report the short sha and commit date — so stale copies are visible.
 4. Users never push, fork, or edit this repo. Findings go to the steward via Asana (see Ground rules).
 5. **A failed pull is a hard stop.** If neither the clone nor the raw-file fetch succeeds, say the KB is unavailable and stop — do not answer from general knowledge, do not guess table or column names, and do not query BigQuery. There is deliberately no local fallback: the walls in these skills (approved tables only, canonical definitions, partition filters, the pre-query clarification protocol) exist precisely because unguided querying of this warehouse produces confident wrong answers. Answering without the KB is worse than not answering.
@@ -28,6 +28,7 @@ Provisioning a new person (Claude seat, BigQuery access, Asana, verification, qu
 ## Structure
 
 ```
+decisions/            Decision ledger (DECISIONS.md) — one row per ruling that more than one project, tab, mart or skill depends on; read after this README
 claude_skills/        Skills — how to query each domain (canonical definitions, joins, gotchas)
   ask-a-data-question/  START HERE — scope any question via clickable choices before querying
   sales-ops-orders/   Order & sales data (order_customer, order_lines, order_sequence)

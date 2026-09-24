@@ -170,6 +170,17 @@ and i.item_status = 'selling'
 order by i.units_28d desc;
 ```
 
+## Weekly snapshot and drift check
+
+This table is rebuilt in full every morning and carries no history of what an item used to be
+called or where it sat. [`sales_ops.items_snapshot`](sales_ops.items_snapshot.md) keeps a weekly copy
+(Mondays, from the "Weekly menu drift check" scheduled task) and
+[`sql/checks/menu_drift_weekly.sql`](../sql/checks/menu_drift_weekly.sql) diffs it and scans
+`item_daily` for new ids, volume breaks, price / line-type shifts and name splits. Worked example and
+reading guide: `claude_skills/menu-drift-check/SKILL.md`. Standing fact from its first run: **`Kids Combo`
+is two ids since 2026-05-05** (642361971 priced `Regular`, 643647054 `$0` `Composite` `Kids`), and only
+the first is `item_type = 'Kids Meals'`.
+
 ## Related
 
 - [`sales_ops.item_daily`](sales_ops.item_daily.md) — the item × day fact this is built from

@@ -36,6 +36,7 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   date-dimensions/    Fiscal calendar (4-4-5 periods), week endings, holidays (claude.date_dim)
   paid-media/         Ad spend & reach across Meta, Google Ads, TikTok, Snapchat, Spotify (claude.ad_spend_daily, claude.ad_reach_weekly)
   cowork-artifact-deploy/  How to change & redeploy an artifact (two-file lineage, drift diff, connector re-grant)
+  menu-drift-check/   Steward routine: weekly detector for item renames, new ids, category/item_type moves, price and line-type shifts (sql/checks/menu_drift_weekly.sql)
 data_dictionaries/    Column-level documentation per table
 sql/                  Build scripts for data marts + validated query templates
 artifacts/            Click-to-answer HTML report builders (Cowork artifacts)

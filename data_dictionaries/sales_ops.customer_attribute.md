@@ -187,6 +187,43 @@ Ordering is by `order_datetime` with `brink_order_id` as tie-break — the same 
 > `Bowls-Soups` / `Soups-Sandwiches` style already in Braze as `first_purch_cat`) requires a
 > pass over `order_lines` and is deferred to v2 — see Roadmap.
 
+### Guest status (new 2026-09-22)
+
+The customer-level reading of the order flag `is_guest_order` (a first-party digital order by a
+non-loyalty user with no SessionM identity; see `sales_ops.order_customer.md`). Steward decision
+2026-09-22: **authentication wins.** Once a customer has placed an authenticated order we hold a
+reachable identity, so a later forgotten login does not demote them; and a converted guest is
+still an account holder, just one we can measure conversion on.
+
+| Column | Type | Description |
+|---|---|---|
+| `guest_status` | STRING | `guest` (never authenticated: every identified order is a guest order), `converted_guest` (first identified order was a guest order, has since placed an authenticated order), `account` (authenticated first; an occasional later guest order keeps them here). Never NULL. **Exposed on `claude.order_customer`.** |
+| `first_order_was_guest` | BOOL | The first order (same ordering as the first-order context above) was a guest order. Never NULL (a NULL `is_guest_order` reads as false). |
+| `last_order_was_guest` | BOOL | The most recent order was a guest order. The "account holder who keeps checking out as a guest" signal. |
+| `guest_orders_l365` | INT64 | Guest orders in the 365 days ending `attribute_asof_date`. 0, never NULL. |
+
+Three things to know:
+
+- **NULL `is_guest_order` counts as authenticated.** The Pulse feed gap of 2026-09-15 to 09-21 left
+  the flag NULL on every order of those days; those orders still carry a `mapped_cust_id` from
+  SessionM, so the build reads them as not-guest rather than dropping them. `lifetime_authenticated_order_count`
+  (build-internal, not a column) is `countif(not ifnull(is_guest_order, false))`.
+- **Guest checkout has two eras.** 173,012 guest orders in 2023, effectively none in 2024 and 2025
+  (113 and 176), then 50,520 from 2026-07-01 to 09-14 after the relaunch. The status is lifetime,
+  so most `guest` customers are 2023 one-timers who never returned; for the relaunch cohort use
+  `guest_orders_l365` or filter on `first_order_date >= '2026-07-01'`.
+- **The mixed states only exist where identity was resolved.** A guest order usually creates its
+  own `mapped_cust_id`; `converted_guest` and the account-then-guest cases appear only where
+  `sales_ops.cust_map` tied the guest email to an account. Expect them to grow when the email-based
+  guest identity mapping deploys (Asana 1218000084425507).
+
+Test build against the 2026-09-21 data (`scratch.customer_attribute_guest_test`, dropped):
+`account` 1,192,959 (10,501 with a guest last order), `converted_guest` 58,079, `guest` 86,216
+(74,442 with a single order, 28,319 with a guest order in the last 365 days). Consistency checks
+all zero: no `guest` with a non-guest order, no `converted_guest` without a guest first order, no
+`account` whose orders are all guest. `pct_app_user`: account 33.6%, converted_guest 29.8%,
+guest 0.0% (a guest cannot scan or order in the app, which is the definition).
+
 ### Stores
 | Column | Type | Description |
 |---|---|---|
@@ -234,9 +271,11 @@ since 2026-09-18 (the 30/90 pairs are `sales_ops`-only).
 ### App usage (new 2026-09-18, revised 2026-09-22)
 
 The canonical **App User** definition (steward decision 2026-09-17, revised 2026-09-22), materialised.
-**An app user is a person customer with an app order or an in-store scan in the trailing 12 months.
-Opening the app without buying does not qualify** (revision 2026-09-22; before that a native-app
-session in the trailing 90 days also qualified). Windows anchor on `attribute_asof_date` and are
+**An app user is a person customer with a non-catering app order or in-store scan in the trailing 12
+months. Opening the app without buying does not qualify** (revision 2026-09-22; before that a
+native-app session in the trailing 90 days also qualified), **and catering orders never count**
+(revision 2026-09-23: 1,433 catering-only accounts had been qualifying through catering orders placed
+in the app; `is_catering` orders are excluded from all six app-purchase columns below). Windows anchor on `attribute_asof_date` and are
 inclusive of it (`business_date > asof - 12 month`, `event_date > asof - 90 day and <= asof`), which
 is the same window the KB's canonical query writes as `>= current_date - N` when it runs the morning
 after. An in-store scan counts as an app purchase by the steward's stated assumption that the scan
@@ -244,12 +283,12 @@ is made with the app.
 
 | Column | Type | Description |
 |---|---|---|
-| `lifetime_app_order_count` | INT64 | Person orders with `order_source in ('iOS', 'Android')`, full history. |
-| `lifetime_in_store_scan_count` | INT64 | Person orders with `in_store_scan = 1`, full history. |
-| `app_orders_l12m` | INT64 | App orders in the trailing 12 months. |
-| `in_store_scans_l12m` | INT64 | In-store scans in the trailing 12 months. |
-| `last_app_order_date` | DATE | Most recent app order; NULL if never. |
-| `last_in_store_scan_date` | DATE | Most recent in-store scan; NULL if never. |
+| `lifetime_app_order_count` | INT64 | Non-catering person orders with `order_source in ('iOS', 'Android')`, full history. Catering excluded since 2026-09-23. |
+| `lifetime_in_store_scan_count` | INT64 | Non-catering person orders with `in_store_scan = 1`, full history. Catering excluded since 2026-09-23. |
+| `app_orders_l12m` | INT64 | Non-catering app orders in the trailing 12 months. |
+| `in_store_scans_l12m` | INT64 | Non-catering in-store scans in the trailing 12 months. |
+| `last_app_order_date` | DATE | Most recent non-catering app order; NULL if never. |
+| `last_in_store_scan_date` | DATE | Most recent non-catering in-store scan; NULL if never. |
 | `app_session_days_l90` | INT64 | Distinct `event_date`s with a native-app `app_sessionstart` (ios/android, `cafe_zupas` workspace) in the trailing 90 days. **0, never NULL.** |
 | `last_app_session_date` | DATE | Most recent native-app session day in the window; NULL if none. |
 | `is_app_purchaser` | BOOL | `app_orders_l12m + in_store_scans_l12m > 0`. Never NULL. Since 2026-09-22 identical to `is_app_user`; kept for anything written against it. |
@@ -279,7 +318,7 @@ Three things to know before using them:
 | Column | Type | Description |
 |---|---|---|
 | `attribute_asof_date` | DATE | The last complete business day the windows are anchored to — **`run_date - 1`**, not the run date. Every row shares it. Check it to detect a stale build. |
-| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. **Since 2026-09-18 includes `is_app_user` and `app_user_type`, since 2026-09-22 also `app_purchase_mode`**, so a customer becoming or ceasing to be an app user, or changing how they buy, is a pushable change. Every row's hash moved once on the first build with the flag (2026-09-18); every app user's and every former session-only row's hash moved again on the first build with the revision (2026-09-22). |
+| `attribute_hash` | INT64 | `farm_fingerprint` over the *material* attributes, for Braze change detection. **Since 2026-09-18 includes `is_app_user` and `app_user_type`, since 2026-09-22 also `app_purchase_mode` and `guest_status`**, so a customer becoming or ceasing to be an app user, or changing how they buy, is a pushable change. Every row's hash moved once on the first build with the flag (2026-09-18); every app user's and every former session-only row's hash moved again on the first build with the revision (2026-09-22). |
 | `updated_at` | TIMESTAMP | Build time. |
 
 **`attribute_hash` deliberately excludes `days_since_last_order` and `attribute_asof_date`.**
@@ -347,6 +386,22 @@ SessionM-only customers *are* in Braze — only 1,227 are missing).
 - **Delta sends:** use `attribute_hash`, not a full daily push.
 
 ## Validation
+
+### Catering exclusion and guest_status, test build vs live (2026-09-23, `attribute_asof_date` 2026-09-22)
+
+Built into `scratch.customer_attribute_cat_test` from the combined script (catering excluded from
+the app-purchase test, guest_status columns) before touching the live table; dropped afterwards.
+
+| Measure | Live 09-22 build (catering counted) | Test build (catering excluded) |
+|---|---|---|
+| `is_app_user` | 420,049 | **418,637** |
+| `app_purchase_mode` both / app only / scans only | 108,241 / 140,420 / 171,388 | 108,154 / 139,008 / 171,475 |
+| app users with zero non-catering orders in 365 days | 1,432 | **0** |
+| `guest_status` guest / converted_guest / account | n/a | 89,345 / 58,322 / 1,196,162 |
+| `guest` rows with a non-guest order, app users with NULL mode | n/a | 0 / 0 |
+
+1,412 catering-only accounts left the flag; 87 customers whose only app order was a catering order
+moved from `app_orders_and_scans` to `scans_only`.
 
 ### App-user revision and `app_purchase_mode`, test build vs live (2026-09-22, `attribute_asof_date` 2026-09-21)
 
@@ -614,6 +669,11 @@ first** — that's the mistake made here.
       `is_app_user` = purchase test only, `app_user_type` drops `session_only`, `app_purchase_mode`
       materialised and exposed on `claude.order_customer` (75 columns). Deployed the same day via
       `bq update --transfer_config --flagfile` + manual run; hash moved for every app user once.
+- [x] **Catering orders excluded from the app-purchase test** (steward decision 2026-09-23): 1,433
+      catering-only accounts leave `is_app_user`; deployed with the guest_status build.
+- [x] **`guest_status` and supporting columns** (`first_order_was_guest`, `last_order_was_guest`,
+      `guest_orders_l365`), steward decision 2026-09-22, validated in scratch and deployed the same
+      evening; `guest_status` exposed on `claude.order_customer` (76 columns).
 - [ ] `birthday` placeholder year: consider nulling the **year** at source rather than leaving 1950 in
       the column (a DATE cannot hold month/day alone, so this means either a separate
       `birthday_month_day` STRING or accepting the sentinel). Until decided, the 1950 rule above is

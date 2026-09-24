@@ -85,6 +85,12 @@
 -- 12-month purchase test and app_user_type no longer emits 'session_only'). Live definition diffed
 -- against this file first: identical. NULL on unidentified / non-person orders and on non-app
 -- users, deliberately not coalesced. View is now 75 columns.
+--
+-- 2026-09-22 (later the same evening): guest_status exposed from customer_attribute (steward
+-- decision; guest / converted_guest / account, authentication wins). Live definition diffed
+-- against this file first: identical. NULL on unidentified / non-person orders, never coalesced.
+-- The supporting columns (first_order_was_guest, last_order_was_guest, guest_orders_l365) stay
+-- sales_ops-only. View is now 76 columns.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -115,6 +121,7 @@ oc.* except(brink_net_sales)
 , ca.is_app_user
 , ca.app_user_type
 , ca.app_purchase_mode
+, ca.guest_status
 , ca.gender
 , ca.birthday
 , ca.age

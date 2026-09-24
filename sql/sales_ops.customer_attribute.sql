@@ -105,6 +105,10 @@ select
 , count(*) as lifetime_order_count
 , countif(po.is_catering) as lifetime_catering_order_count
 , countif(po.is_guest_order) as lifetime_guest_order_count
+-- 2026-09-22 guest status (steward decision): NULL is_guest_order (Pulse feed gaps) counts as
+-- authenticated, because the order still carries an identity we can reach.
+, countif(not ifnull(po.is_guest_order, false)) as lifetime_authenticated_order_count
+, countif(po.is_guest_order and po.business_date > date_sub(asof_date, interval 365 day)) as guest_orders_l365
 
 -- lifetime value
 , round(sum(po.net_sales), 2) as lifetime_net_sales
@@ -125,6 +129,7 @@ select
     , po.store_id as store_id
     , po.store_name as store_name
     , po.order_source as order_source
+    , ifnull(po.is_guest_order, false) as is_guest_order
     )
     order by po.order_datetime_local asc, po.brink_order_id asc
     limit 1
@@ -136,6 +141,7 @@ select
     , po.store_id as store_id
     , po.store_name as store_name
     , po.order_source as order_source
+    , ifnull(po.is_guest_order, false) as is_guest_order
     )
     order by po.order_datetime_local desc, po.brink_order_id desc
     limit 1
@@ -172,12 +178,16 @@ select
 -- made with the app, so a scan counts as an app purchase. Trailing window is 12 months, inclusive
 -- of asof_date, so it equals "business_date >= run_date - 12 months" as the KB's canonical query
 -- writes it.
-, countif(po.order_source in ('iOS', 'Android')) as lifetime_app_order_count
-, countif(po.in_store_scan = 1) as lifetime_in_store_scan_count
-, countif(po.order_source in ('iOS', 'Android') and po.business_date > date_sub(asof_date, interval 12 month)) as app_orders_l12m
-, countif(po.in_store_scan = 1 and po.business_date > date_sub(asof_date, interval 12 month)) as in_store_scans_l12m
-, max(if(po.order_source in ('iOS', 'Android'), po.business_date, null)) as last_app_order_date
-, max(if(po.in_store_scan = 1, po.business_date, null)) as last_in_store_scan_date
+-- 2026-09-23 (steward): catering orders never count as app purchases. 1,433 catering-only
+-- accounts were qualifying as app users through catering orders placed in the app; the app-user
+-- definition is about the in-store customer relationship, so is_catering orders are excluded from
+-- both halves of the test (app order and scan) and from the lifetime counts and last dates.
+, countif(po.order_source in ('iOS', 'Android') and not po.is_catering) as lifetime_app_order_count
+, countif(po.in_store_scan = 1 and not po.is_catering) as lifetime_in_store_scan_count
+, countif(po.order_source in ('iOS', 'Android') and not po.is_catering and po.business_date > date_sub(asof_date, interval 12 month)) as app_orders_l12m
+, countif(po.in_store_scan = 1 and not po.is_catering and po.business_date > date_sub(asof_date, interval 12 month)) as in_store_scans_l12m
+, max(if(po.order_source in ('iOS', 'Android') and not po.is_catering, po.business_date, null)) as last_app_order_date
+, max(if(po.in_store_scan = 1 and not po.is_catering, po.business_date, null)) as last_in_store_scan_date
 
 from person_orders po
 group by 1
@@ -225,6 +235,26 @@ select
 , ca.last_order.store_id as last_order_store_id
 , ca.last_order.store_name as last_order_store_name
 
+-- ---------- guest status (steward decision 2026-09-22) ----------
+-- Customer-level reading of the order flag is_guest_order (first-party digital order by a
+-- non-loyalty user with no SessionM identity; guest checkout exists from 2026-07-01).
+-- Authentication wins: once a customer has placed an authenticated order we hold a reachable
+-- identity, so a later forgotten login does not demote them.
+--   guest            never authenticated: every identified order is a guest order
+--   converted_guest  first identified order was a guest order, has since authenticated
+--   account          authenticated first (an occasional later guest order keeps them here)
+-- Measured 2026-07-01 to 09-14: 39,651 guest / 2,018 converted / 955 account-then-guest /
+-- 243,615 authenticated only. The mixed cases only exist where sales_ops.cust_map tied the
+-- guest email to an account, so they will grow when the email-based guest mapping deploys.
+, ca.first_order.is_guest_order as first_order_was_guest
+, ca.last_order.is_guest_order as last_order_was_guest
+, ca.guest_orders_l365
+, case
+    when ca.lifetime_guest_order_count > 0 and ca.lifetime_authenticated_order_count = 0 then 'guest'
+    when ca.first_order.is_guest_order and ca.lifetime_authenticated_order_count > 0 then 'converted_guest'
+    else 'account'
+  end as guest_status
+
 -- ---------- stores ----------
 , cst.lifetime_store_count
 , cst.lifetime_stores                       -- ARRAY<STRUCT<store_id, store_name, orders, last_order_date>>
@@ -268,7 +298,7 @@ select
 , ca.catering_net_sales_l365
 
 -- ---------- app usage (canonical App User definition, steward decision 2026-09-17, revised 2026-09-22) ----------
--- is_app_user = app purchase (app order OR in-store scan) in the trailing 12 months.
+-- is_app_user = app purchase (app order OR in-store scan, catering orders excluded) in the trailing 12 months.
 -- 2026-09-22 revision (steward): a native-app session on its own no longer makes an app user.
 -- Browsing without buying is not app usage. Session state is still carried in
 -- is_app_session_user / app_session_days_l90 / last_app_session_date and inside app_user_type,
@@ -334,6 +364,13 @@ select
       when ca.in_store_scans_l12m > 0 then 'scans_only'
       else null
     end as app_purchase_mode
+  -- 2026-09-22: guest_status added so a guest converting to an account is a pushable change.
+  -- One-time hash move for every row on the first build with this field.
+  , case
+      when ca.lifetime_guest_order_count > 0 and ca.lifetime_authenticated_order_count = 0 then 'guest'
+      when ca.first_order.is_guest_order and ca.lifetime_authenticated_order_count > 0 then 'converted_guest'
+      else 'account'
+    end as guest_status
   ))) as attribute_hash
 , current_timestamp() as updated_at
 

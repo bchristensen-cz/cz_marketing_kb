@@ -87,26 +87,34 @@ For each **event** (not each row):
 
 ## Standing findings from the first run (2026-09-24)
 
-- **Kids Combo is two LIVE ids, split by ordering channel. Neither is old.** 642361971 (`Regular`,
-  `$6.79`, Brink `Normal`, `item_type = 'Kids Meals'`) is what Pulse digital and every third-party menu
-  send: one priced line, selections as `$0` modifiers. 643647054 (`Kids`, `$0.00`, Brink `Composite`,
-  `item_type = 'Entree'`) is what the POS menu has rung since 2026-06-01: a `$0` header with the two
-  food selections as priced `item` components at `$3.40` each, the Try 2 Combo construct
+- **Kids Combo is two LIVE ids, split by ordering channel. Neither is old.** 642361971 (`$6.79`,
+  Brink `Normal`) is what Pulse digital and every third-party menu send: one priced header line,
+  selections as `$0` modifiers. 643647054 (`$0.00`, Brink `Composite`, raw name `'Kids Combo '` with a
+  trailing space) is what the POS menu has rung since 2026-06-01: a `$0` header with the two food
+  selections as priced `item` components at `$3.40` each, the Try 2 Combo construct
   (`composite_item_id` points at the header). Week ending 2026-09-20: POS 10,328 vs 1,040 (Drive Thru)
   on the two ids; digital 5,263 and third party 3,056, all on 642361971. A kids-combo count is header
   lines `item_id in (642361971, 643647054)`; kids-combo **revenue** is `rev_center_name = 'Kids Meals'`
   or `parent_item_grp_name = 'Kids Combo'` over header plus components, because on POS the price sits
   on the entree lines. Component `price` is `0.00`; use `item_gross_sales`.
-- **Build defect, steward call open:** `sql/sales_ops.order_marts.sql` line ~807,
-  `when brc.name = 'Kids Meals' and bi.name = 'Kids Combo' then 'Kids Meals'` misses the
-  trailing-space name. Proposed fix: `trim(bi.name) = 'Kids Combo'` on both branches, deploy and
-  commit together, then the 5am reload restates history. Until then `item_type = 'Kids Meals'` is a
-  digital-plus-drive-thru number, ~48% of kids combos, for every week since 2026-06-01.
+- **Build defect FIXED 2026-09-24** (Asana 1218830982693996): `bi.name = 'Kids Combo'` missed the
+  trailing space, so the POS header was `item_type = 'Entree'` and `item_type = 'Kids Meals'` was a
+  digital-plus-drive-thru number for 16 weeks. `sql/sales_ops.order_marts.sql` now trims `bi.name` in
+  the `brink_items` CTE; history restated by a manual full reload at 13:51 MT and the config redeployed
+  at 14:16 MT (the 14:02 hourly run in between had already rewritten the day back to `Entree`, which
+  is why the deployed text, not the table, is the thing to verify). Side effect: the POS id's
+  `item_size` moved from `Kids` to `Regular`, so both ids now read `Kids Combo / Regular / Kids Meals`
+  and only `item_id` separates them.
 - Kids entree items (`Grilled Cheese Sandwich` / `Chicken Tenders` / `Fruit Cup` / `Soup`, size
   `Kids`) now sell about 55-70% as priced `item` lines. Any "kids entree attach" measure built on
   `line_item_type = 'modifier'` lost the POS half of its population on 2026-06-01. The sale-shape
   test `parent_rev_center_name <> rev_center_name` reads those POS components as sold alone; use
   `composite_item_id is not null` for "inside a combo".
+- **Try 2 Combo splits the same way and always has**: POS rings three `$0` composite headers
+  (642388932 Sandwiches & Soups, 642388929 Salads & Sandwiches, 642388930 Salads & Soups); Pulse and
+  third party send the single priced header 642361973 at `$12.99` with `$0` modifier selections. The
+  `sales-ops-orders` skill documented the POS-vs-digital shape split on 2026-07-30; the id split is the
+  same fact seen from the dimension side.
 - **General rule this proved:** the same product can carry a different `item_id` per ordering
   channel, because the Pulse digital menu and the Brink POS menu are configured separately. When
   block 6 shows one name on several ids, break the ids out by `order_customer.destination` before

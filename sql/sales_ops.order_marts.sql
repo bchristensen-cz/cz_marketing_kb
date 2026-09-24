@@ -26,6 +26,8 @@ set start_date = case
   else null
 end;
 
+--set start_date = '2018-08-07';
+
 if start_date is null then
   return;
 end if;
@@ -33,7 +35,7 @@ end if;
 begin transaction;
 
 delete `marketing-data-442316`.sales_ops.order_customer
-where business_date >= start_date;  -- '2026-07-27' updated to business_date
+where business_date >= start_date;  -- '2026-07-27' updated to business_date 
 
 insert into `marketing-data-442316`.sales_ops.order_customer
 
@@ -43,7 +45,7 @@ insert into `marketing-data-442316`.sales_ops.order_customer
 -- create or replace table `marketing-data-442316`.sales_ops.order_customer
 -- partition by business_date
 -- cluster by brink_order_id, pulse_customer_id, email, sm_email
--- as
+-- as 
 
 with brink_order as (
 select bo.*
@@ -59,7 +61,7 @@ select i.id, i.name
 from `marketing-data-442316`.brink.brinkItems i
 where regexp_contains(i.name, r'(?i)\bfee\b')
 qualify row_number() over(partition by i.id order by i.name) = 1
-)
+) 
 
 , tip_items as (
 select i.id, i.name
@@ -70,7 +72,7 @@ qualify row_number() over(partition by i.id order by i.name) = 1
 
 
 , brink_order_item as (
-select
+select 
 boi.orderId
 , sum(case when t.id is null then boi.ItemGrossSales end) as item_gross_sales
 , sum(case when f.id is not null then boi.ItemGrossSales end) as total_fees_amount
@@ -94,7 +96,7 @@ having sum(boi.ItemGrossSales) > 0 or sum(boi.ItemNetSales) > 0
 
 
 , brink_order_item_modifiers as (
-select
+select 
 boim.orderid
 , sum(boim.ItemGrossSales) as mods_gross_sales
 --, sum(boim.ItemNetSales) as mods_net_sales -- '2026-07-24' net sales will now be a calc of gross sales + (discounts) + (promotions)
@@ -140,7 +142,7 @@ select od.orderid as order_id
 , sum(od.amount)*-1 as discount_amount  -- '2026-08-17' added the *-1 so i could sum the values with gross_sales to validate quickly
 from `marketing-data-442316`.brink.brinkOrderDiscount od
 	join brink_order bo
-	on bo.id = od.orderid
+	on bo.id = od.orderid	
 	-- left join instore_discount_codes cd
 	-- on cd.id = od.DiscountId
 where 1=1
@@ -153,16 +155,16 @@ group by 1
 select p.orderid, sum(p.amount)*-1 as promotions_amount  -- '2026-08-17' added the *-1 so i could sum the values with gross_sales to validate quickly
 from `marketing-data-442316`.brink.brinkOrderPromotion p
 	join brink_order bo
-	on bo.id = p.orderid
+	on bo.id = p.orderid	
 where 1=1
 and p.isdeleted = false
 group by 1
 )
 
 , all_trans_users as (
-select
+select  
 t.transaction_id
-, lower(t.user_id) as user_id --'2026-07-29' added lower() for consistency
+, lower(t.user_id) as user_id --'2026-07-29' added lower() for consistency 
 , t.last_updated_at AS updated_date
 from `marketing-data-442316`.sessionM.user_point_transactions t
 where  1=1
@@ -170,7 +172,7 @@ and t.transaction_id IS NOT NULL
 and t.user_id IS NOT NULL
 and t.last_updated_at >= timestamp(start_date)
 
-union all
+union all  
 
         -- Discounts
 select
@@ -181,15 +183,15 @@ from `marketing-data-442316`.sessionM.transaction_discounts d
 where d.transaction_id IS NOT NULL
 and d.user_id IS NOT NULL
 and d.last_updated_at >= timestamp(start_date)
-
+          
 
 union all   -- switched from UNION → UNION ALL for performance
 
     -- Payments
-select
+select 
 tp.transaction_id
-, lower(tp.user_id) --'2026-07-29' added lower() for consistency
-, tp.last_updated_at as updated_date
+, lower(tp.user_id) --'2026-07-29' added lower() for consistency 
+, tp.last_updated_at as updated_date       
 from `marketing-data-442316`.sessionM.transaction_payments tp
 where 1=1
 and tp.transaction_id is not null
@@ -203,12 +205,12 @@ and tp.last_updated_at >= timestamp(start_date)
 -- from all_trans_users u
 -- qualify row_number() over(partition by u.transaction_id order by u.updated_date desc) = 1
 -- )
-
+          
 
 , sm_external_user_map as (
 select lower(u.user_id) as user_id
 , u.external_user_id
---, lower(uu.email) as email  --'2026-07-29' added lower() for consistency
+--, lower(uu.email) as email  --'2026-07-29' added lower() for consistency 
 , regexp_replace(lower(trim(uu.email)), r'^cater_', '') as email --'2026-07-29' updated to make all catering emails the same
 from `marketing-data-442316`.sessionM.external_user_mappings u
 	join `marketing-data-442316`.`sessionM.users` uu
@@ -216,7 +218,7 @@ from `marketing-data-442316`.sessionM.external_user_mappings u
 where 1=1
 and u.external_user_id_type = 'cafezupas'
 qualify row_number() over(partition by u.user_id order by u.updated_at desc) = 1
-)
+) 
 
 , header_trans as (
 select safe_cast(h.pos_transaction_key as int64) as pos_transaction_key
@@ -225,10 +227,10 @@ from `marketing-data-442316`.sessionM.transaction_headers h
 where 1=1
 and h.create_date >= start_date --'2026-07-29' added =
 qualify row_number() over(partition by h.pos_transaction_key order by h.last_updated_at desc) = 1
-)
+) 
 
 , cust_trans as (  -- '2026-07-29' updated to include all_trans_users
-select
+select  
  h.pos_transaction_key
 , safe_cast(m.external_user_id as int64) as external_user_id
 , lower(m.email) as email
@@ -252,8 +254,8 @@ qualify row_number() over(
 -- )
 
 
-, pulse_orders as (
-select
+, pulse_orders as ( 
+select 
 cast(po.id as int64) as id
 , po.business_date
 , po.customer_id
@@ -270,8 +272,8 @@ qualify row_number() over(partition by po.brink_order_id order by po.id desc) = 
 )
 
 
-, pulse_customer as (  -- i had to add since data was changed in source tables
-select
+, pulse_customer as (  -- i had to add since data was changed in source tables 
+select 
 c.id
 , lower(trim(c.email)) as acct_email
 , cast(c.phone as string) as acct_phone
@@ -280,14 +282,14 @@ from `marketing-data-442316`.pulse.customers c
 )
 
 
-select
+select 
 bo.Id as brink_order_id
 , po.id as pulse_order_id
-, case
-	when lower(bd.name) like '%cater%' then true
+, case 
+	when lower(bd.name) like '%cater%' then true	
 	when bo.FKStoreId = 50 then true  -- '2026-08-17' including store 50 in the catering flag
 	else coalesce(po.is_catering, false) end as is_catering
-, case
+, case 
 		when ocs.is_loyalty_user = 0 and lower(po.source) in ('mobile_web_source', 'web_source', 'ios', 'android', 'mobile_source') and t.email is null
 		then true else false end as is_guest_order  -- '2026-07-29' must be digital to be a guest and must not be a loyalty order
 , po.customer_id as pulse_customer_id
@@ -300,13 +302,13 @@ bo.Id as brink_order_id
 , s.store_state  -- '2026-07-30' changed back to store_state for consistency with store_info and order_lines
 , case   -- '2026-08-14' added reclassifications for finance for store 50 and then extended the pulse catering flag to destinations
 		when bo.FKStoreId = 50 and coalesce(boi.total_fees_amount,0) > 0 then 642414069
---		when bo.FKStoreId = 50 then 999999999
+--		when bo.FKStoreId = 50 then 999999999 		
 		when bo.FKStoreId = 50 then 642414070
 		else bo.DestinationId end as destination_id  -- '2026-08-13' added for finance
-, case
+, case 
 --		when bo.FKStoreId = 50 then 'Middleton Mobile Catering'
 		when bo.FKStoreId = 50 and coalesce(boi.total_fees_amount,0) > 0 then 'Catering Online Delivery'
-		when bo.FKStoreId = 50 then 'Catering Online Takeout'
+		when bo.FKStoreId = 50 then 'Catering Online Takeout'		
 		else bd.name end as destination
 , po.`source`
 , case
@@ -339,7 +341,7 @@ bo.Id as brink_order_id
 , coalesce(d.discount_amount,0) as discount_amount
 , coalesce(bp.promotions_amount,0) as promotions_amount
 , coalesce(d.discount_amount,0) + coalesce(bp.promotions_amount,0) as total_discount_amount
--- , case
+-- , case 
 -- 	when do.pos_transaction_key is not null then 1
 -- 	when d.is_employee_discount = 1 then 1 else 0 end as is_employee_discount  -- '2026-08-17' removed since we have the much better and more accurate order_line_discount_detail
 , coalesce(p.total_tip_amount,0) as total_tip_amount
@@ -358,7 +360,7 @@ bo.Id as brink_order_id
 , case when boi.orderid is null then false else true end as has_order_items  --'2026-08-04' added for auditing
 , lower(trim(ocs.email)) as email
 , cast(ocs.phone as string) as phone
-, c.acct_email
+, c.acct_email 
 , c.acct_phone
 , t.email as sm_email
 , t.external_user_id as sm_external_user_id
@@ -366,7 +368,7 @@ bo.Id as brink_order_id
 	when lower(trim(ocs.email)) like '%@guest.doordash.com' then 1
 	when lower(trim(ocs.email)) like '%@itsacheckmate.com' then 1
 	when lower(trim(ocs.email)) = 'support@doordash.com' then 1
-	when lower(trim(ocs.email)) like '%outdoor%@cafezupas.com' then 1
+	when lower(trim(ocs.email)) like '%outdoor%@cafezupas.com' then 1  
 	else 0
 end as is_sys_order_email
 , case
@@ -384,14 +386,14 @@ from brink_order bo
 			left join pulse_orders po
 			on po.brink_order_id = bo.Id
 				left join `marketing-data-442316`.sales_ops.store_info s
-				on s.store_id = bo.FKStoreId
+				on s.store_id = bo.FKStoreId	
 					left join total_payment p
 					on p.order_id = bo.Id
 						left join pulse_customer c
 						on c.id = po.customer_id
 							left join `marketing-data-442316`.pulse.order_customers ocs
 							on ocs.order_id = po.id
-								left join cust_trans t
+								left join cust_trans t								
 								on t.pos_transaction_key = coalesce(po.id, bo.id)
 									left join `marketing-data-442316`.brink.brinkDestinations bd
 									on bd.Id = bo.DestinationId
@@ -403,7 +405,7 @@ from brink_order bo
 												left join brink_promotions bp
 												on bp.orderid = boi.orderid
 													left join gift_card_purchase gc
-													on gc.orderid = bo.id
+													on gc.orderid = bo.id		
 
 
 ;
@@ -460,10 +462,10 @@ select
 , oc.mapped_cust_id
 , lower(coalesce(c.email, oc.email)) as mapped_email
 , split(lower(coalesce(c.email, oc.email)), '@')[safe_offset(1)] as mapped_email_domain
-, case
+, case 
 		when coalesce(c.email, oc.email) like '%outdoor%@cafezupas.com' then 'kiosk'
 		when coalesce(c.email, oc.email) like '%ezcater%@zupas.com' then 'aggregator'
-		when coalesce(c.email, oc.email) = 'checkmate_user@cafezupas.com' then 'aggregator'
+		when coalesce(c.email, oc.email) = 'checkmate_user@cafezupas.com' then 'aggregator'		
     when regexp_contains(coalesce(c.email, oc.email), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
 		else 'person'
 		end as customer_type
@@ -511,7 +513,7 @@ insert into `marketing-data-442316`.sales_ops.order_lines
 -- as
 
 with brink_order as (
-select
+select 
 oc.brink_order_id
 , oc.business_date
 , oc.store_id
@@ -590,8 +592,8 @@ and boi.IsDeleted = false
 , valid_order_lines as (  -- '2026-08-17' removes orders with 0 valid order items
 select ol.order_id
 , sum(ol.amount) as total_amount
-from order_lines ol
-group by 1
+from order_lines ol 
+group by 1 
 having (sum(ol.amount) > 0 or sum(ol.item_net_sales) > 0)
 )
 
@@ -684,7 +686,7 @@ from `marketing-data-442316`.brink.brinkOrderPromotion p
     on pn.id = p.promotionid
     and pn.storeid = bo.store_id
       join valid_order_lines vol -- '2026-08-17' removes orders with 0 valid order items
-      on vol.order_id = p.orderid
+      on vol.order_id = p.orderid    
 
 union all
 
@@ -706,31 +708,31 @@ from `marketing-data-442316`.brink.brinkOrderSurcharge s
 )
 
 , brink_items as (
- with items as (
-  select
-    bi.id
-    , bi.name
-    , bi.revenuecenterid
-    , bi.storeid
-    , trim(bi.name) as name_trimmed
-    , regexp_extract(bi.name, r'^(REG|Mini|LG|PRTY|HALF|Kids|LARGE|Medium|Tray|QUART) ') as size_prefix
-    , bi.price
-  from `marketing-data-442316`.brink.brinkItems bi
 
-union all -- '2026-08-12' added discounts to items so we wouldn't have blank descriptions and have better item names
+	with items as (
+	select
+	bi.id
+	, trim(bi.name) as name
+	, bi.revenuecenterid
+	, bi.storeid
+	, trim(bi.name) as name_trimmed
+	, regexp_extract(bi.name, r'^(REG|Mini|LG|PRTY|HALF|Kids|LARGE|Medium|Tray|QUART) ') as size_prefix
+	, bi.price
+	from `marketing-data-442316`.brink.brinkItems bi
 
-select
-d.Id
-, d.Name
-, 1000000000001 as revenuecenterid
-, d.StoreID
-, trim(d.Name) as name_trimmed
-, null as size
-, d.Amount
-from `marketing-data-442316`.brink.brinkDiscounts d
+	union all -- '2026-08-12' added discounts to items so we wouldn't have blank descriptions and have better item names
 
+	select 
+	d.Id
+	, trim(d.Name) as name
+	, 1000000000001 as revenuecenterid
+	, d.StoreID
+	, trim(d.Name) as name_trimmed
+	, null as size
+	, d.Amount
+	from `marketing-data-442316`.brink.brinkDiscounts d
+	)
 
-)
 select
   i.id
   , i.name
@@ -764,7 +766,7 @@ select
         end
       else null
     end as item_size
-    , i.price
+  , i.price
 from items i
 )
 
@@ -790,10 +792,10 @@ bol.order_id as brink_order_id
 , coalesce(bi.item_grp_name, bol.description) as item_grp_name
 , bi.item_size
 , bol.item_modifier
-, case
-  when bol.line_item_type = 'discount' then 'Discount'
+, case 
+  when bol.line_item_type = 'discount' then 'Discount' 
   when bol.line_item_type = 'promotion' then 'Promotion'  -- '2026-07-31'  added promotion
-  when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge
+  when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge  
   else brc.name end as rev_center_name
 , bol.item_gross_sales
 , bi.price
@@ -809,7 +811,7 @@ case when coalesce(safe_divide(bol.item_gross_sales,bi.price),0) < 1 then 1 else
     when brc.name in ('Bottled Beverages','Foutain Beverages') then 'Beverage'
     when bol.line_item_type = 'discount' then 'Discount' -- '2026-07-30'  added discount
     when bol.line_item_type = 'promotion' then 'Promotion' -- '2026-07-31'  added promotion
-    when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge
+    when bol.line_item_type = 'surcharge' then 'Surcharge'  -- '2026-07-31'  added surcharge  
     else 'Other' -- '2026-07-31'  added other
   end as item_type
 from brink_order_item_lines bol
@@ -886,7 +888,7 @@ l.brink_order_id
 , l.item_net_sales
 , l.item_type
 , case
-  when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount
+  when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount	
   when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion
   when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo'
 	else coalesce(c.rev_center_name, l.description) end as parent_rev_center_name
@@ -894,7 +896,7 @@ l.brink_order_id
 	when coalesce(c.rev_center_name, l.description) = 'Combos' then 'Try 2 Combo ' || ca.attr_list
 	when coalesce(c.rev_center_name, l.description) = 'Foutain Beverages' then 'Fountain Beverage'
   when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount
-when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion
+when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion  
 	else coalesce(c.item_grp_name, l.description) end as parent_item_grp_name
 from order_lines_detail l
 	left join order_lines_detail c
@@ -930,7 +932,7 @@ commit transaction;
 begin transaction;
 
 delete `marketing-data-442316`.sales_ops.order_line_discount_detail
-where business_date >= start_date;
+where business_date >= start_date;  
 
 insert into `marketing-data-442316`.sales_ops.order_line_discount_detail
 
@@ -940,12 +942,12 @@ insert into `marketing-data-442316`.sales_ops.order_line_discount_detail
 -- create or replace table `marketing-data-442316`.sales_ops.order_line_discount_detail
 -- partition by business_date
 -- cluster by store_id, discount_type, discount_origin
--- as
+-- as 
 
 
 with brink_discount_lines as (
 
-select
+select 
 ol.brink_order_id
 , ol.pulse_order_id
 , ol.is_catering
@@ -957,7 +959,7 @@ ol.brink_order_id
 , oc.order_source
 , ol.line_item_type
 , ol.description
-, ol.item_id
+, ol.item_id 
 , ol.item_name
 , round(ol.amount,2) as amount
 from `marketing-data-442316`.sales_ops.order_lines ol
@@ -972,7 +974,7 @@ and ol.store_id not in (1111, 999)
 )
 
 , pulse_discounts as (
-select
+select 
 od.order_id
 , od.points
 , od.`type`
@@ -987,7 +989,7 @@ where 1=1
 and od.deleted_at is null
 and od.amount > 0
 and od.created_at >= datetime(start_date - 60)
-)
+) 
 
 , header_trans as (
 select safe_cast(h.pos_transaction_key as int64) as pos_transaction_key
@@ -996,7 +998,7 @@ from `marketing-data-442316`.sessionM.transaction_headers h
 where 1=1
 and h.create_date >= start_date - 60 --'2026-08-14' added to include more stuff
 qualify row_number() over(partition by h.pos_transaction_key order by h.last_updated_at desc) = 1
-)
+) 
 
 , sm_discount_rel as (
 select
@@ -1022,13 +1024,13 @@ qualify row_number() over(partition by t.pos_transaction_key order by d.discount
 , offer_detail as (
 select
   uo.user_offers_id
-, uo.root_offer_id
+, uo.root_offer_id 
 , ro.name as offer_name
 from `marketing-data-442316`.sessionM.user_offers uo
   left join `marketing-data-442316`.sessionM.offers o
   on o.offer_id = uo.offer_id
 	  left join `marketing-data-442316`.sessionM.offers ro
-	  on ro.root_offer_id = uo.root_offer_id
+	  on ro.root_offer_id = uo.root_offer_id    
 	  and ro.root_offer_id = ro.offer_id
 where 1=1
 and uo.create_date >= start_date - 60 --'2026-08-14' added to include more stuff
@@ -1036,7 +1038,7 @@ and uo.redeem_date is not null
 )
 
 
-select
+select 
 dl.brink_order_id
 , dl.pulse_order_id
 , dl.business_date
@@ -1049,12 +1051,12 @@ dl.brink_order_id
 , dl.amount * ifnull(pd.discount_dist,1) as discount_amount
 , pd.points
 , dl.item_id
-, case
+, case 
 	when dl.order_source  = 'Outdoor Kiosk' then 'Outdoor Kiosk'
 	when dl.revenue_category = 'Third_Party' then 'Third Party'
 	when dl.item_id = 643536109 then 'Online'
 	else 'In-Store' end as discount_origin
-, case
+, case 
 	when dl.item_id = 643536109 and pd.type = 'points' then 'In-cart Points Redemption'
 	when dl.item_id = 643536109 and pd.type = 'reward' then 'Reward Redemption'
 	when dl.item_id = 643536109 and pd.type = 'offer' then 'Offer'
@@ -1077,7 +1079,7 @@ end as discount_type
          lower(coalesce(odr.offer_name, od.offer_name, '')), r'team member meal|\bemp.*(meal|lunch)'
        )
     , false
-  ) as is_employee_meal_discount
+  ) as is_employee_meal_discount	
 , dl.item_name
 , coalesce(r.discount_name, pd.discount_name, dl.item_name) as discount_name
 , coalesce(odr.root_offer_id, od.root_offer_id, upper(pd.sessionM_root_offer_id)) as root_offer_id
@@ -1087,8 +1089,8 @@ from brink_discount_lines dl
 	on pd.order_id = dl.pulse_order_id
 	and dl.item_id = 643536109
 		left join offer_detail od
-		on od.user_offers_id = pd.sessionM_user_offer_id
-			left join sm_discount_rel r
+		on od.user_offers_id = pd.sessionM_user_offer_id	
+			left join sm_discount_rel r   
 			on r.pos_transaction_key = dl.brink_order_id
 			and dl.item_id = 643571116
 				left join offer_detail odr
@@ -1097,3 +1099,7 @@ from brink_discount_lines dl
 
 
 commit transaction;
+
+
+
+

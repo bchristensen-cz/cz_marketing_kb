@@ -8,7 +8,7 @@
 | # | Decision |
 |---|---|
 | 1 | Tables live in the **`braze`** dataset, prefixed **`cam_agg_`**. No `sales_ops` copy, no `claude` view layer. |
-| 2 | Attribution window = **72 hours**, from the analysis in §5. Stored as one declared constant. |
+| 2 | ~~Attribution window = **72 hours**, from the analysis in §5.~~ **Superseded 2026-09-24 by ledger D-026: the window is 24 hours from the send instant, 48 hours for Saturday sends**, the rule the company dashboard shipped 2026-09-21 (`cz-dashboard/docs/decisions/braze-attribution.md`). Storage keeps 0-24 / 24-48 / 48-72 hour bands so the rule stays one declared constant applied at read time; §5 below is the July measurement kept as history. |
 | 3 | Attribution rule = **last touch** before the order, within the window. |
 | 4 | Content card / banner / in-app: **impressions are the exposure metric**; `send_events` kept as a separate reference column, never used as a rate denominator. |
 | 5 | **`message_variation_id` stays in the L1 grain** — A/B reporting comes out of the mart, not ad-hoc SQL. |
@@ -191,7 +191,7 @@ Accumulation is near-linear at ~0.5–0.7%/day with **no knee**. That is the sha
 | 7 days | 83.7% | 3.76 |
 | never (no exposure in 14d) | 14.3% | — |
 
-Going 3 → 7 days buys **2.9 points** of coverage and **doubles** the number of programs competing for each order. The curve is flat past day 3 and the ambiguity is not. **72 hours** it is.
+Going 3 → 7 days buys **2.9 points** of coverage and **doubles** the number of programs competing for each order. The curve is flat past day 3 and the ambiguity is not. **72 hours** it was, in July. The September dashboard measurement at hour grain (orders per hour of band: 10,660 in 6-12h, 1,022 overnight, 3,088 in 24-48h, the latter being Saturday sends landing Monday) moved the line to **24 hours, 48 for Saturday sends**; see ledger D-026.
 
 ### 5d. Required labelling, and the gap this leaves
 

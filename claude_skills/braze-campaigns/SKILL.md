@@ -200,6 +200,9 @@ We default to **sent** because it's consistent across every channel (in-app/bann
 
 ## Attribution note (precise vs campaign-level)
 
+> **Window rule (ledger D-026, 2026-09-24): an order is credited to the single most recent qualifying send to the same email in the 24 hours before `order_timestamp_utc`, extended to 48 hours for Saturday sends** (stores are closed Sunday). Attribution channels are email, push, SMS and RCS; content card, banner and in-app are session-gated and never take attribution. Identity bridge is email (D-021). Call the result "last-touch attributed" or "influenced", never "incremental". Any answer using a different window must say so and must not be presented as the same number. Full calculation: `cz-dashboard/docs/decisions/braze-attribution.md`; row: `decisions/DECISIONS.md`.
+
+
 These templates attribute an engagement to a campaign by matching `program_id` on both sides — correct at campaign / campaign-day grain. For **stricter** attribution (e.g., this open belongs to this exact send), additionally join engagements to sends on `dispatch_id` (and `external_user_id`), available on most tables. For most reporting, `program_id`-level is the right and simpler choice.
 
 ## Caveats

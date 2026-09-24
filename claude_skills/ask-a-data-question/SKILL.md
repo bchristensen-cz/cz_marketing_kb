@@ -239,8 +239,9 @@ pre-2024 window rule are in [`sales-ops-orders`](../sales-ops-orders/SKILL.md) a
 When an employee asks about app users, app customers, or "how many people use the app",
 resolve to the canonical definition in the sales-ops-orders skill and do **not** open a fork
 about what "app user" means. The definition is a person customer with an **app purchase in
-the trailing 12 months** (`oc.order_source in ('iOS', 'Android')` **or** `oc.in_store_scan =
-1`, because the steward's stated assumption is that an in-store scan is made with the app).
+the trailing 12 months** (`oc.is_catering = false` and `oc.order_source in ('iOS', 'Android')`
+**or** `oc.in_store_scan = 1`, because the steward's stated assumption is that an in-store scan is
+made with the app; catering orders never count, revision 2026-09-23).
 **Opening the app without buying does not count** (revision 2026-09-22; from 09-18 to 09-21 a
 native-app session in 90 days also qualified, so numbers quoted in that window are not
 comparable). State the window in the answer. If the question is about how app users buy, the

@@ -963,7 +963,7 @@ The `bo.id` predicate is live and so is the `LIMIT`. It still reads the entire t
 | Channel | `revenue_category` (In-Store, Digital, Third_Party, Catering, Fundraiser) |
 | Delivery (first-party) | `destination = 'CZ Delivery'` (steward rule 2026-08-04). Marketplace orders (`revenue_category = 'Third_Party'`) are NOT "delivery" unless explicitly requested — see protocol item 6 |
 | Digital source | `order_source` (NULL = in-store POS) |
-| App user | **Canonical customer definition (steward decision 2026-09-17, revised 2026-09-22).** A `person` customer with an **app purchase in the trailing 12 months** (`order_source in ('iOS', 'Android')` **or** `in_store_scan = 1`; an in-store scan counts as an app purchase by steward assumption). **A native-app session alone does not qualify since 2026-09-22** (it did 09-18 to 09-21). Materialised as `is_app_user`; how they buy is `app_purchase_mode` (`app_orders_and_scans` / `app_orders_only` / `scans_only`). Full rules, gotchas and the canonical query: see *"App user" is a canonical customer definition* below |
+| App user | **Canonical customer definition (steward decision 2026-09-17, revised 2026-09-22 and 09-23).** A `person` customer with a **non-catering app purchase in the trailing 12 months** (`is_catering = false` and `order_source in ('iOS', 'Android')` **or** `in_store_scan = 1`; an in-store scan counts as an app purchase by steward assumption; catering orders never count). **A native-app session alone does not qualify since 2026-09-22** (it did 09-18 to 09-21). Materialised as `is_app_user`; how they buy is `app_purchase_mode` (`app_orders_and_scans` / `app_orders_only` / `scans_only`). Full rules, gotchas and the canonical query: see *"App user" is a canonical customer definition* below |
 | Guest customer | **`customer_attribute.guest_status`** (steward decision 2026-09-22): `guest` never authenticated, `converted_guest` guest first then authenticated, `account` authenticated first. Authentication wins; a later forgotten login does not demote an account. Exposed on `claude.order_customer`. `is_guest_order` stays the ORDER flag; never call an order-level share a "guest customer" count. Lifetime status: 2023 had its own guest-checkout era (173k orders), so filter `first_order_date >= '2026-07-01'` for the relaunch cohort |
 | First-time order | `order_sequence.customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 (see gotchas) |
 | Repeat order | `order_sequence.customer_order_count > 1` **with `customer_type = 'person'`** |
@@ -1124,10 +1124,16 @@ State which you did whenever it affects the answer.
 ### "App user" is a canonical customer definition (steward decision 2026-09-17, revised 2026-09-22)
 
 An **app user** is a `person` customer with an **app purchase in the trailing 12 months**: at
-least one `claude.order_customer` row with `order_source in ('iOS', 'Android')` **or**
-`in_store_scan = 1`. The steward's stated assumption is that an in-store loyalty scan is made
-with the app, so **a scan counts as an app purchase** for this definition. State that assumption
-whenever the scan share matters to the answer.
+least one **non-catering** `claude.order_customer` row (`is_catering = false`) with
+`order_source in ('iOS', 'Android')` **or** `in_store_scan = 1`. The steward's stated assumption
+is that an in-store loyalty scan is made with the app, so **a scan counts as an app purchase** for
+this definition. State that assumption whenever the scan share matters to the answer.
+
+> **Revision 2026-09-23 (steward): catering orders never make an app user.** The app supports
+> catering ordering (about 8,000 iOS/Android catering orders a year), so 1,433 catering-only
+> accounts (970 on consumer email domains, $3.0M of catering) were qualifying as app users through
+> `order_source = 'iOS'` and sitting inside `app_orders_only`. The definition is about the in-store
+> customer relationship, so `is_catering` orders are excluded from both halves of the test.
 
 > **Revision 2026-09-22 (steward): opening the app is not using the app.** From 2026-09-18 to
 > 09-21 the definition had a second test, a native-app `braze.app_sessionstart` in the trailing
@@ -1161,7 +1167,8 @@ never placed an app order in their lifetime.
 - **This is not "loyalty member", "digital customer" or "app orders".** Loyalty membership
   lives in `claude.loyalty_user`; "digital" is `revenue_category = 'Digital'`; and a
   channel question about **app orders** is `order_source in ('iOS', 'Android')` on orders,
-  with no scan component. The scan-as-purchase assumption is for the customer definition only.
+  with no scan component and catering included unless the question excludes it. The
+  scan-as-purchase assumption and the catering exclusion are for the customer definition only.
 - **"App openers" / "installed but not buying"** is a real question but a different population:
   `is_app_session_user and not is_app_user` on `customer_attribute` (27,512 on the 2026-09-21
   build) plus session users with no identified order at all (~23k, only reachable through the
@@ -1208,6 +1215,7 @@ where 1=1
 and oc.business_date >= date_sub(current_date('America/Denver'), interval 12 month)
 and oc.mapped_cust_id is not null
 and oc.customer_type = 'person'
+and oc.is_catering = false
 and (oc.order_source in ('iOS', 'Android') or oc.in_store_scan = 1)
 group by oc.mapped_cust_id
 )

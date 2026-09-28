@@ -225,6 +225,10 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
+### Open and refund orders are undocumented (open gap, 2026-09-28, Asana 1218944726616107)
+
+The mart carries no `is_closed` / `is_refund` column, and this dictionary does not yet state whether unclosed or refund orders are included or how a refund signs `net_sales`. An analyst building a FY27 budget base on 2026-09-25 joined `brink.brinkOrder` on `(Id, BusinessDate)` just to read `IsClosed` and `IsRefund`. Until the steward measures and documents this, a refund or open-order question is a data-mart gap: say so, do not join raw Brink.
+
 ### Order email vs canonical email — `email` is not who the customer is (steward 2026-08-24)
 
 **Rule.** `sales_ops.order_customer.email` is the address the guest supplied *on that order* so we

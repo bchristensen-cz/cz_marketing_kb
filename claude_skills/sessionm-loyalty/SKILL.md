@@ -322,6 +322,28 @@ group by 1,2,3
 order by times_redeemed desc
 ```
 
+**Open (unredeemed, still redeemable) offers for one root offer, at face value** (added 2026-09-29; the question has arrived monthly from a direct-console account since 2026-07-27, always written against raw `sessionM.user_offers`):
+
+```sql
+select
+ou.offer_name
+, ou.offer_kind
+, ou.discount_amount
+, count(*) as open_offers
+, round(sum(ou.discount_amount), 2) as face_value
+, max(ou.redemption_end_date) as last_window_close
+from `marketing-data-442316`.claude.loyalty_offer_usage ou
+where 1=1
+and ou.issued_date > date_sub(current_date('America/Denver'), interval 90 day)
+and upper(ou.root_offer_id) = upper(@root_offer_id)
+and ou.redemption_end_date >= current_date('America/Denver')
+and not ou.is_redeemed
+and not ou.is_bulk_provisioned_2023
+group by 1,2,3
+```
+
+⚠️ **Face value is maximum exposure, not expected cost.** Always return the offer's own trailing redemption rate beside it (the redemption-split template above, same `root_offer_id`, prior monthly cohorts). Measured 2026-09-29 on `9F5E2C1C-A6F2-4708-BF77-9B5FA46D46CE` (`Free Birthday Meal - Catering Offer`, promotional, $23.50, issued on the 1st of each month): **4,328 open / $101,708 face value**, but every monthly cohort Mar -> Sep 2026 redeemed **0.6% to 0.9%** (25 to 34 of ~3,800 to 4,400), so the expected cost is well under $1,000. Quoting the face figure alone as "liability" overstates it roughly 100x. Which of the two is the accounting liability is a finance / steward call, not settled here; state which one you report. Also note `redemption_end_date` is a DATE on the view (the raw column is a timestamp), so use `>= current_date('America/Denver')`, and `root_offer_id` case varies by source (see the `order_line_discount_detail` dictionary), hence `upper()`.
+
 **Campaign participation (noise excluded, date-bounded):**
 
 ```sql

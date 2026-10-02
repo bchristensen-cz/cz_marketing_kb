@@ -5,8 +5,8 @@
 (`pulse.order_payments`, `pulse.stripe_order_payments`, `pulse.tenders`,
 `brink.brinkOrderPayment`, `brink.brinkTenders`). Build script:
 [`sql/claude.order_payment_tender.sql`](../sql/claude.order_payment_tender.sql).
-Deployed 2026-08-05; trimmed to five columns later the same day (see version note at
-the bottom).
+Deployed 2026-08-05; trimmed to five columns later the same day; `tender_count` added
+2026-10-02 (see version notes at the bottom).
 
 **This view is the sanctioned wrapper around the raw payment tables. Never query those
 directly** — they contain cancelled, failed, refunded, and soft-deleted payment rows that
@@ -29,6 +29,7 @@ upgrade path is a small scheduled mart table partitioned on `business_date`.
 | `pulse_order_id` | INTEGER | NULL for POS-only orders |
 | `business_date` | DATE | Same value as on `order_customer`. Always filter it |
 | `payment_tender` | STRING | **The answer column.** Lowercase. Multi-tender orders are comma-joined, largest amount first (`'cash, visa'`). See values below |
+| `tender_count` | INTEGER | Number of distinct tender names in `payment_tender`, counted in the same source the names came from (pulse if present, else brink). `1` for a single tender, `2+` for a split, **`0` for `'discount'` / `'no_payment'`**. Never NULL. Added 2026-10-02 |
 | `total_payment_amount` | FLOAT | Amount tendered, from Brink. **Duplicates `order_customer.total_payment_amount`** (verified 128,806 of 128,829 orders match over 7 days) |
 
 The view's real payload is **`payment_tender`**; the amount column exists for convenience
@@ -149,6 +150,16 @@ so inner vs left join gives the same result — left is the house convention.
   2026-08-05: 2,661 of 26,044 orders (10.2%) on the latest loaded date, **zero on all six
   earlier dates** — it self-heals once the stripe table catches up. For tender-mix
   reporting, exclude the latest loaded `business_date` or annotate it.
+- **The view is one row per order, so you cannot find split tenders by counting rows.**
+  `group by brink_order_id having count(*) > 1` returns nothing by construction (the tender
+  CTEs `string_agg` down to one row per order before the join) and reads as "we have no
+  split-tender orders", which is false. Use `tender_count > 1` (or, pre-2026-10-02,
+  `payment_tender like '%,%'`). Measured 2026-09-02 → 10-02: the top splits are
+  `cash, visa` 695 orders, `visa, cash` 365, `visa, givex` 365 ($127K, catering-shaped),
+  `gift card, visa` 257. Two limits of the count: two cards on the **same** network
+  collapse to one name and count once (the CTEs group by tender name, not payment line),
+  and when pulse tenders exist the brink side is not consulted, so a digital order with an
+  extra in-store tender counts only its pulse tenders.
 - **`payment_tender` is not a clean enum.** Split tenders produce comma-joined values
   ordered by amount, so `'cash, visa'` and `'visa, cash'` are different strings. For a
   clean breakdown, either bucket any value containing a comma as `'split'` or accept the
@@ -169,7 +180,12 @@ so inner vs left join gives the same result — left is the house convention.
   unpartitioned, so `business_date` filters prune only the `order_customer` side. About
   1–2¢ per query at on-demand pricing; fine at occasional volume.
 
-## Version note
+## Version notes
+
+**2026-10-02 (steward):** added `tender_count` — an add, so the view was redeployed with
+`create or replace view` (select-list view; adds, renames and drops all need the redeploy).
+Existing queries are unaffected. Live `view_definition` diffed against the repo before the
+change: identical.
 
 **2026-08-05 (same-day trim, steward):** first deploy exposed ten columns; the view was
 slimmed to the five above. `payment_network` was **renamed `payment_tender`**, and

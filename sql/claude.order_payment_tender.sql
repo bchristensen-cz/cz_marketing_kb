@@ -24,7 +24,7 @@ Join pattern:
     and oc.business_date >= ...   -- always bound business_date
 
 Columns: brink_order_id, pulse_order_id, business_date, payment_tender,
-total_payment_amount. (Trimmed 2026-08-05 from the first deploy: the answer
+tender_count, total_payment_amount. (Trimmed 2026-08-05 from the first deploy: the answer
 column was renamed payment_network -> payment_tender, and the debug name
 columns, tips, and change were dropped — tips and change live on
 order_customer as total_tip_amount / total_change.)
@@ -42,7 +42,12 @@ Semantics / assumptions:
 - total_payment_amount is the amount tendered from Brink (tips included) and
   duplicates order_customer.total_payment_amount; brink covers ~97% of paid
   orders, so pulse-only orders (~130/month) show a tender with a NULL amount.
-- Multi-tender orders: names are comma-joined, largest amount first.
+- Multi-tender orders: names are comma-joined, largest amount first. The view is
+  ALWAYS one row per order, so `group by brink_order_id having count(*) > 1`
+  returns nothing by construction. Use tender_count (added 2026-10-02): the
+  number of distinct tender names in payment_tender, from the same source
+  (pulse if present, else brink); 0 for 'discount' / 'no_payment'. Two cards
+  on the same network collapse to one name and count once.
 
 Deploy: run this script once in the BigQuery console. It is a plain view — no
 scheduled query, no refresh. Sources are unpartitioned raw tables, so each
@@ -79,6 +84,7 @@ group by 1, 2
 select
   p.pulse_order_id
 , string_agg(ifnull(p.pulse_tender, 'unknown'), ', ' order by p.pulse_payment_amount desc) as pulse_tender_names
+, count(*) as pulse_tender_count
 , sum(p.pulse_payment_amount) as pulse_payment_amount
 from pulse_payments p
 group by 1
@@ -129,6 +135,7 @@ group by 1, 2
 select
   bp.brink_order_id
 , string_agg(ifnull(bp.brink_tender, 'unknown'), ', ' order by bp.payment_amount desc) as brink_tender_names
+, count(*) as brink_tender_count
 , sum(bp.payment_amount) as total_payment_amount
 , sum(bp.tip_amount) as total_tip_amount
 , sum(bp.change_amount) as total_change
@@ -146,6 +153,11 @@ select
   , case when ifnull(b.total_discount_amount, 0) <> 0 and ifnull(b.net_sales, 0) < 1 then 'discount' end
   , 'no_payment'
   )) as payment_tender
+, case
+    when pt.pulse_order_id is not null then pt.pulse_tender_count
+    when bt.brink_order_id is not null then bt.brink_tender_count
+    else 0
+  end as tender_count
 , bt.total_payment_amount
 from oc_base b
 	left join pulse_tenders pt

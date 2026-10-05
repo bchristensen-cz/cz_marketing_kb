@@ -344,6 +344,66 @@ group by 1,2,3
 
 ⚠️ **Face value is maximum exposure, not expected cost.** Always return the offer's own trailing redemption rate beside it (the redemption-split template above, same `root_offer_id`, prior monthly cohorts). Measured 2026-09-29 on `9F5E2C1C-A6F2-4708-BF77-9B5FA46D46CE` (`Free Birthday Meal - Catering Offer`, promotional, $23.50, issued on the 1st of each month): **4,328 open / $101,708 face value**, but every monthly cohort Mar -> Sep 2026 redeemed **0.6% to 0.9%** (25 to 34 of ~3,800 to 4,400), so the expected cost is well under $1,000. Quoting the face figure alone as "liability" overstates it roughly 100x. Which of the two is the accounting liability is a finance / steward call, not settled here; state which one you report. Also note `redemption_end_date` is a DATE on the view (the raw column is a timestamp), so use `>= current_date('America/Denver')`, and `root_offer_id` case varies by source (see the `order_line_discount_detail` dictionary), hence `upper()`.
 
+**What a point is worth in dollars (cents per point), by redemption path** (added 2026-10-05, mined from the steward's 2026-10-02 points-economics session; pattern only, figures not yet in the KB):
+
+The two earned discount types spend points two different ways, so value them separately and never blend them into one rate without saying so.
+
+- **In-cart points** carry the spend on the POS line itself (`points > 0` on every `In-cart Points Redemption` line), so the rate comes from one table: `abs(sum(discount_amount)) / sum(points) * 100`.
+- **Reward-store offers** (`offer_kind = 'points_purchase'`) carry the points on the SessionM side (`loyalty_offer_usage.points_spent`) and the dollars on the POS side (`Reward Redemption` lines), joined on `upper(root_offer_id)` (the case bug, see the `order_line_discount_detail` dictionary). Restrict the POS dollars to root offers that are `points_purchase`, or the promotional wallet offers (issued free, zero points) put dollars in the numerator with nothing in the denominator.
+
+```sql
+with sm as (
+select
+upper(ou.root_offer_id) as root_offer_id
+, round(sum(ou.points_spent)) as points_spent
+, count(*) as redemptions
+from `marketing-data-442316`.claude.loyalty_offer_usage ou
+where 1=1
+and ou.issued_date between date_sub(@start, interval 6 month) and @end
+and ou.redeem_date between @start and @end
+and ou.is_redeemed
+and ou.offer_kind = 'points_purchase'
+and not ou.is_bulk_provisioned_2023
+group by 1
+)
+, pos as (
+select
+upper(dd.root_offer_id) as root_offer_id
+, round(sum(dd.discount_amount), 2) as discount_amount
+from `marketing-data-442316`.claude.order_line_discount_detail dd
+where 1=1
+and dd.business_date between @start and @end
+and dd.discount_type = 'Reward Redemption'
+group by 1
+)
+, in_cart as (
+select
+round(sum(dd.discount_amount), 2) as discount_amount
+, sum(dd.points) as points
+from `marketing-data-442316`.claude.order_line_discount_detail dd
+where 1=1
+and dd.business_date between @start and @end
+and dd.discount_type = 'In-cart Points Redemption'
+)
+select
+'reward_store' as path
+, sum(sm.points_spent) as points
+, round(sum(pos.discount_amount), 2) as discount_amount
+, round(safe_divide(abs(sum(pos.discount_amount)), sum(sm.points_spent)) * 100, 3) as cents_per_point
+from sm
+	left join pos
+	on pos.root_offer_id = sm.root_offer_id
+union all
+select
+'in_cart'
+, ic.points
+, ic.discount_amount
+, round(safe_divide(abs(ic.discount_amount), ic.points) * 100, 3)
+from in_cart ic
+```
+
+State these with the answer: **(1)** the `issued_date` lookback (6 months before the redeem window, the steward's choice) bounds the scan but drops any reward bought earlier and redeemed inside the window, so say the lookback; **(2)** the redeem window and the POS window must be the same dates, or points and dollars describe different redemptions; **(3)** monthly `loyalty_points_activity.points_redeemed` (`point_account_name = 'Spendable Points'`) is **redeemed or deducted** (support deductions and clawbacks share bitmask 2, see Points activity classification), so it will not equal reward-store plus in-cart points and must not be labelled "redeemed" alone; **(4)** for a fiscal-year figure use the steward's Oct 1 -> Sep 30 window and say so.
+
 **Campaign participation (noise excluded, date-bounded):**
 
 ```sql

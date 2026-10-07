@@ -779,4 +779,4 @@ double-count on the un-prorated amount column (+7.2% in July 2026), an unbounded
 fact-vs-dimension windowing bug in the incremental that made `offer_name` **non-deterministic
 by day of week** (Monday's wider reload resolved offers that Tuesday's narrower one wiped —
 275 rows over an 8-day window). See
-[the windowing gotcha](../claude_skills/sales-ops-orders/SKILL.md) for the general rule.
+[the windowing gotcha](../claude_skills/sales-ops-orders/references/incremental_build.md) for the general rule.

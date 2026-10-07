@@ -11,7 +11,7 @@ Profiled end to end 2026-09-11. Every figure below was measured, not estimated.
 windsor.ai → `staging.edi_*` (full-refresh) → `edi.*` (scheduled query, **daily 04:01–04:02 MT**,
 verified from `create_timestamp` on the TikTok snapshot table). The load deletes by observed key
 set rather than by date window — see the "restate by observed key set" pattern in
-`claude_skills/sales-ops-orders/SKILL.md`.
+`claude_skills/sales-ops-orders/references/query_log_reviews.md`.
 
 There is **no row in `etl_metadata.watermark` for edi** — that table only covers the MySQL
 connections. Freshness is checked on `max(create_timestamp)` in
@@ -79,7 +79,7 @@ The KB previously described a single shared vocabulary. It is not shared. Verifi
 
 `spend` **is** universal — there is no `cost` column anywhere in `edi`.
 
-### ⚠️ Correction to the 2026-09-10 note in `sales-ops-orders/SKILL.md`
+### ⚠️ Correction to the 2026-09-10 note in `sales-ops-orders/references/query_log_reviews.md` (was in `SKILL.md` before the 2026-10-07 split)
 
 That note records "`spend` is stored as a **STRING** (every arm is `cast(spend as float64)`)".
 **Re-verified 2026-09-11 against `INFORMATION_SCHEMA.COLUMNS`: `spend` is `BIGNUMERIC` in all

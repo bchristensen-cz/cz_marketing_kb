@@ -231,7 +231,7 @@ liability, or what points bought** — that wants the `points_purchase` subset o
 wants all of earned.
 
 Full definition, the `upper()` join trap on `root_offer_id`, the employee-meal overlap, and the
-pre-2024 window rule are in [`sales-ops-orders`](../sales-ops-orders/SKILL.md) and
+pre-2024 window rule are in [`sales-ops-orders/references/discounts.md`](../sales-ops-orders/references/discounts.md) and
 [`data_dictionaries/claude.order_line_discount_detail.md`](../../data_dictionaries/claude.order_line_discount_detail.md).
 
 ### "App user" / "app customer" means the canonical App User definition (steward decision 2026-09-17, revised 2026-09-22)
@@ -406,6 +406,29 @@ a real entrée row from a lookalike (steward rule 2026-07-30).
 > was strictly an improvement to the promotion data — and it moved 240K rows out of "NULL,
 > invisible" into "looks like a menu item." When a build script starts populating a column
 > that used to be empty, ask what *else* reads that column before calling the change safe.
+
+## Step 2b — open the domain references the settled scope needs
+
+The domain skills are split into an always-read `SKILL.md` plus `references/*.md` files that
+are read on demand (restructured 2026-10-07). Once the forks are settled you know which ones
+apply — open them **before** writing SQL, not after a wrong number:
+
+| Scope you settled on | Read (in addition to the domain `SKILL.md` and its `gotchas.md` / `caveats.md`) |
+|---|---|
+| Any sales, item, store or channel number | `sales-ops-orders/references/recipes.md` |
+| New / repeat / lapsed customers, retention, any cohort | `sales-ops-orders/references/cohorts.md` |
+| Per-customer values (LTV, frequency, win-back lists) | `sales-ops-orders/references/customer_attribute.md` |
+| Discounts, promotions, offers, employee meals, "what did we give away" | `sales-ops-orders/references/discounts.md` |
+| An item itself (launch date, price, status) | `sales-ops-orders/references/items.md` |
+| How people pay | `sales-ops-orders/references/payment_tender.md` |
+| Guest orders, identity coverage | `sales-ops-orders/references/identity.md` |
+| Hour-of-day, daypart, anything joined to Braze on time, a column-name error | `sales-ops-orders/references/schema_changes.md` |
+| Any customer / guest / `order_source` figure dated 2026-09-15 or later | `sales-ops-orders/references/incidents_and_gaps.md` |
+| Braze campaign questions | `braze-campaigns/references/caveats.md` always; `holdouts.md`, `channel_value.md`, `canvas_message_report.md` per the table in that skill; column docs from `data_dictionaries/braze/<channel>.md` |
+
+The full trigger list is the "Reference files" table at the end of each domain `SKILL.md`; when
+in doubt, read the file — a reference you did not need costs a few thousand tokens, one you
+skipped costs a wrong answer.
 
 ## Step 3 — answer with the scope visible
 

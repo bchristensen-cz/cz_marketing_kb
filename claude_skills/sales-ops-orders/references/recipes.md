@@ -434,3 +434,41 @@ remember `item_type` is the closed 7-value domain (menu categories live in `rev_
 `is_catering = false` keeps catering-only SKUs out. And `select *` on `order_lines` for this is
 expensive — the steward's own `select *` variant billed **27.12 GiB** against **3.43 GiB** for the
 column-projected equivalent over the same window.
+
+### Order platform (App / Mobile Web / Desktop Web) (ledger D-032, mined 2026-10-07)
+
+Platform is a presentation mapping over the canonical `order_source` values, decided once in the
+ledger (`decisions/DECISIONS.md` D-032) for the cz-dashboard Platform trend tab. Use it verbatim for
+any "app vs web" question so chat answers and the dashboard agree.
+
+```sql
+select
+  last_day(oc.business_date, week(monday)) as week_ending
+, case
+	when oc.order_source in ('iOS', 'Android') then 'App'
+	when oc.order_source = 'Mobile Web' then 'Mobile Web'
+	when oc.order_source = 'Web' then 'Desktop Web'
+	else 'Other'
+  end as platform
+, count(*) as orders
+, round(sum(oc.net_sales), 2) as net_sales
+from `marketing-data-442316`.claude.order_customer oc
+where 1=1
+and oc.business_date between @start_date and @end_date
+and oc.revenue_category = 'Digital'
+group by week_ending, platform
+order by week_ending, platform
+```
+
+Rules that come with it (D-032):
+
+1. **Scope is `revenue_category = 'Digital'`, no `customer_type` filter.** It is a channel metric, so
+   online catering on these platforms is counted; App runs about 0.7% above a person-only app count
+   (`customer_type = 'person'`). Say which one you are quoting.
+2. **`order_source` values are `iOS`, `Android`, `Mobile Web`, `Web`.** The old
+   `mobile_web_source` / `web_source` values never existed (see `identity.md`).
+3. Last year is **364 days back** (same weekday); daily platform lines leave Sundays out;
+   week-to-date compares the same weekdays of the prior week. Every YoY quotes total and comp.
+4. `order_source` is blank on digital orders whenever `pulse.orders` stops loading (see
+   `incidents_and_gaps.md`, 2026-09-15). Check `countif(oc.revenue_category = 'Digital' and
+   oc.order_source is null)` for the window before quoting a platform split.

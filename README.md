@@ -25,6 +25,8 @@ The one-time setup each user needs is in `CLIENT_SETUP.md`: join the shared **An
 
 Provisioning a new person (Claude seat, BigQuery access, Asana, verification, question-wording tips) is the steward's runbook in `ADMIN_ONBOARDING.md`.
 
+Braze-focused projects (e.g. **Braze Canvas Creation**) get their own instruction block from `BRAZE_PROJECT_SETUP.md`: the same pointing-first protocol plus the handful of Braze backstops that stop silent wrong numbers when the Braze MCP connector and dashboard sit next to BigQuery.
+
 ## Structure
 
 ```

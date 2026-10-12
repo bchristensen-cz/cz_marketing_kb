@@ -1,9 +1,12 @@
 -- Braze canvas x canvas message report, sends from 2025-12-29
 -- grain: canvas_id x canvas_step_id x channel (treatment rows) + canvas_id x experiment step x split (holdout rows)
--- attribution: D-026 (last touch, 24h from send instant, 48h for Saturday sends), email bridge D-021,
+-- attribution: D-026 (last touch, 24h from send instant, 48h for Saturday sends), window applied BEFORE
+--   last touch (D-033, 2026-10-12), email bridge D-021,
 --   workspace cafe_zupas, non-catering, non-employee, identified orders only
 -- holdout rows: users assigned to a control split in canvas_experimentstep_splitentry; their orders in the
---   same window measured from the split-entry instant (no send exists for them)
+--   same window measured from the split-entry instant (no send exists for them). Candidate legs are
+--   in_control_group OR the D-035 name regex; holdout_users_messaged must be 0 before an unflagged leg is
+--   used (D-035). Sync canvases are excluded (D-034).
 create or replace table `marketing-data-442316`.scratch.braze_canvas_message_report_20260924
 options (expiration_timestamp = timestamp_add(current_timestamp(), interval 21 day))
 as
@@ -114,28 +117,30 @@ and oc.mapped_email is not null
 and oc.order_timestamp_utc is not null
 and ifnull(oc.mapped_email_domain, '') not in ('cafezupas.com', 'tkxel.com')
 )
--- every (order, send) pair inside 72h; the window rule and last-touch flag are applied on top
+-- every (order, send) pair inside the D-026 window. The window is applied BEFORE last touch (D-033,
+-- 2026-10-12): only qualifying sends compete, so a newer non-qualifying send (a Sunday automation 30h
+-- before a Monday order) cannot knock out an older qualifying Saturday send.
 , pairs as (
 select
 s.id as send_id
 , o.order_id
 , o.net_sales
-, timestamp_diff(o.order_ts, s.send_ts, minute) as mins_since
-, format_date('%a', s.event_date) = 'Sat' as is_sat_send
 , row_number() over (partition by o.order_id order by s.send_ts desc) = 1 as is_last_touch
 from orders o
 	join sends s
 	on s.em = o.em
 	and s.send_ts < o.order_ts
 	and s.send_ts >= timestamp_sub(o.order_ts, interval 72 hour)
+	and (timestamp_diff(o.order_ts, s.send_ts, minute) < 1440
+		or (format_date('%a', s.event_date) = 'Sat' and timestamp_diff(o.order_ts, s.send_ts, minute) < 2880))
 )
 , attr as (
 select
 p.send_id
-, countif(p.is_last_touch and (p.mins_since < 1440 or (p.is_sat_send and p.mins_since < 2880))) as attr_orders
-, sum(if(p.is_last_touch and (p.mins_since < 1440 or (p.is_sat_send and p.mins_since < 2880)), p.net_sales, 0)) as attr_net_sales
-, countif(p.mins_since < 1440 or (p.is_sat_send and p.mins_since < 2880)) as window_orders
-, sum(if(p.mins_since < 1440 or (p.is_sat_send and p.mins_since < 2880), p.net_sales, 0)) as window_net_sales
+, countif(p.is_last_touch) as attr_orders
+, sum(if(p.is_last_touch, p.net_sales, 0)) as attr_net_sales
+, count(*) as window_orders
+, sum(p.net_sales) as window_net_sales
 from pairs p
 group by p.send_id
 )
@@ -275,8 +280,23 @@ where 1=1
 and se.event_date between date '2025-12-29' and current_date('America/Denver')
 and se.workspace = 'cafe_zupas'
 and (se.in_control_group
-	or regexp_contains(lower(coalesce(se.experiment_split_name, '')), r'hold|control|ctrl|suppress|baseline'))
+	or regexp_contains(lower(coalesce(se.experiment_split_name, '')), r'holdout|(^|[^a-z])hold([^a-z_]|$)|control|ctrl|suppress|baseline'))
+and not regexp_contains(lower(coalesce(se.canvas_name, '')), r'(^|[^a-z])sync([^a-z]|$)')
 qualify row_number() over (partition by se.id order by se.time) = 1
+)
+-- D-035 messaged check: candidate-leg users who got a send from the same canvas at or after split entry
+, holdout_messaged as (
+select
+h.canvas_id
+, h.canvas_step_id
+, h.experiment_split_name
+, count(distinct h.em) as holdout_users_messaged
+from holdout_entries h
+	join sends s
+	on s.canvas_id = h.canvas_id
+	and s.em = h.em
+	and s.send_ts >= h.entry_ts
+group by h.canvas_id, h.canvas_step_id, h.experiment_split_name
 )
 , holdout_orders as (
 select
@@ -350,6 +370,7 @@ end as deliveries
 , t.window_net_sales
 , t.recipients_with_email as users_with_email
 , cast(null as int64) as holdout_users
+, cast(null as int64) as holdout_users_messaged
 from treatment t
 	left join dl
 	on dl.channel = t.channel
@@ -387,11 +408,16 @@ true as is_holdout
 , ho.window_net_sales
 , h.holdout_users_with_email as users_with_email
 , h.holdout_users
+, coalesce(hm.holdout_users_messaged, 0) as holdout_users_messaged
 from holdout h
 	left join ho
 	on ho.canvas_id = h.canvas_id
 	and ho.canvas_step_id = h.canvas_step_id
 	and coalesce(ho.experiment_split_name, '') = coalesce(h.experiment_split_name, '')
+		left join holdout_messaged hm
+		on hm.canvas_id = h.canvas_id
+		and hm.canvas_step_id = h.canvas_step_id
+		and coalesce(hm.experiment_split_name, '') = coalesce(h.experiment_split_name, '')
 )
 select
 r.is_holdout
@@ -428,6 +454,7 @@ end as is_automated_source
 , r.window_net_sales
 , r.users_with_email
 , r.holdout_users
+, r.holdout_users_messaged
 from rows_out r
 	left join canvas_days cd
 	on cd.canvas_id = r.canvas_id

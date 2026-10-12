@@ -200,7 +200,7 @@ We default to **sent** because it's consistent across every channel (in-app/bann
 
 ## Attribution note (precise vs campaign-level)
 
-> **Window rule (ledger D-026, 2026-09-24): an order is credited to the single most recent qualifying send to the same email in the 24 hours before `order_timestamp_utc`, extended to 48 hours for Saturday sends** (stores are closed Sunday). Attribution channels are email, push, SMS and RCS; content card, banner and in-app are session-gated and never take attribution. Identity bridge is email (D-021). Call the result "last-touch attributed" or "influenced", never "incremental". Any answer using a different window must say so and must not be presented as the same number. Full calculation: `cz-dashboard/docs/decisions/braze-attribution.md`; row: `decisions/DECISIONS.md`.
+> **Window rule (ledger D-026, 2026-09-24): an order is credited to the single most recent qualifying send to the same email in the 24 hours before `order_timestamp_utc`, extended to 48 hours for Saturday sends** (stores are closed Sunday). **The window is applied before last touch (D-033, 2026-10-12): only sends that can still qualify compete for an order**, so a newer non-qualifying send (a Sunday automation 30 hours before a Monday order) never knocks out an older qualifying Saturday send. Put the window test in the join, before the `row_number()`, never after it. Attribution channels are email, push, SMS and RCS; content card, banner and in-app are session-gated and never take attribution. Identity bridge is email (D-021). Call the result "last-touch attributed" or "influenced", never "incremental". Any answer using a different window must say so and must not be presented as the same number. Full calculation: `cz-dashboard/docs/decisions/braze-attribution.md`; row: `decisions/DECISIONS.md`.
 
 These templates attribute an engagement to a campaign by matching `program_id` on both sides — correct at campaign / campaign-day grain. For **stricter** attribution (e.g., this open belongs to this exact send), additionally join engagements to sends on `dispatch_id` (and `external_user_id`), available on most tables. For most reporting, `program_id`-level is the right and simpler choice.
 
@@ -211,7 +211,7 @@ This skill is split so a session reads only what the question needs. **`SKILL.md
 | File | Read it when |
 |---|---|
 | [`references/caveats.md`](references/caveats.md) | before EVERY Braze answer — the per-channel and per-table traps |
-| [`references/holdouts.md`](references/holdouts.md) | the question involves control groups, holdouts, lift, incrementality or experiment steps |
+| [`references/holdouts.md`](references/holdouts.md) | the question involves control groups, holdouts, lift, incrementality, experiment steps, campaign control groups (`campaigns_enrollincontrol`) or sync canvases |
 | [`references/currents_integrity.md`](references/currents_integrity.md) | counts look low or a day looks missing, or you are checking whether the stream is healthy |
 | [`references/writing_out.md`](references/writing_out.md) | the task pushes data to Braze (CDI) or Google Ads offline conversions rather than reading it |
 | [`references/channel_value.md`](references/channel_value.md) | the question compares channels (email vs push vs SMS) or channel combinations on value or lift |

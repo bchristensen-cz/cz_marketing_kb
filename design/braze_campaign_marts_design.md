@@ -9,7 +9,7 @@
 |---|---|
 | 1 | Tables live in the **`braze`** dataset, prefixed **`cam_agg_`**. No `sales_ops` copy, no `claude` view layer. |
 | 2 | ~~Attribution window = **72 hours**, from the analysis in §5.~~ **Superseded 2026-09-24 by ledger D-026: the window is 24 hours from the send instant, 48 hours for Saturday sends**, the rule the company dashboard shipped 2026-09-21 (`cz-dashboard/docs/decisions/braze-attribution.md`). Storage keeps 0-24 / 24-48 / 48-72 hour bands so the rule stays one declared constant applied at read time; §5 below is the July measurement kept as history. |
-| 3 | Attribution rule = **last touch** before the order, within the window. |
+| 3 | Attribution rule = **last touch** before the order, within the window. **The window is applied first (ledger D-033, 2026-10-12):** only qualifying sends compete, so the L4 build filters pairs to the D-026 window in the join and ranks with `row_number()` afterwards. Ranking all 72h pairs and checking the window after lets a newer non-qualifying send knock out an older qualifying Saturday send. |
 | 4 | Content card / banner / in-app: **impressions are the exposure metric**; `send_events` kept as a separate reference column, never used as a rate denominator. |
 | 5 | **`message_variation_id` stays in the L1 grain** — A/B reporting comes out of the mart, not ad-hoc SQL. |
 
@@ -90,7 +90,7 @@ The layer that gives **exact** distinct users, cross-channel reach ("who got the
 
 ### L4 — `braze.cam_agg_order_attribution`
 
-**Grain:** one row per `brink_order_id` with a qualifying prior exposure.
+**Grain:** one row per `brink_order_id` with a qualifying prior exposure. The winner is the most recent exposure **among qualifying ones** (D-033), never the most recent within 72h checked against the window afterwards.
 **Partition:** `business_date` · **Cluster:** `program_id`
 
 `brink_order_id`, `business_date`, `mapped_cust_id`, `net_sales`, winning `program_id` / `program_name` / `channel` / `message_variation_id`, `exposure_utc`, `hours_to_order`, `competing_programs`.

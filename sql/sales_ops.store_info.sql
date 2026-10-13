@@ -5,6 +5,8 @@
 --
 -- Source feed is `brink.gblStore`. It supplies only:
 --   StoreId, Name, Address, City, State, Zipcode, StorePhone
+-- Coordinates come from a second feed, `pulse.locations` (lat / long keyed on
+-- brink_id), in step 4b.
 -- Everything else on this table is DERIVED here. Any derived column missing from
 -- this script is a column that stays NULL forever on every new store, which is how
 -- timezone_name went missing on 6 stores and silently NULLed order_timestamp_utc
@@ -141,9 +143,51 @@ where 1=1
   and t.timezone_name is null
 ;
 
+-- 4b) latitude / longitude from pulse.locations, keyed brink_id -> store_id.
+--    Fill-only: fires when EITHER coordinate is NULL and writes BOTH from the one
+--    pulse row, so a store never ends up with a latitude from one source and a
+--    longitude from another. Existing coordinates are never restated - the hand
+--    geocodes on the estate disagree with pulse by up to 2.35 mi (143 Schaumburg),
+--    and a fill-only rule keeps that from becoming a silent overwrite.
+--    Runs BEFORE step 5 so a new store's weather cluster is keyed on its real point
+--    instead of the ZIP centroid.
+--    Verified 2026-10-13: one pulse row per brink_id; of the stores already geocoded,
+--    every one pulse also carries agrees to within 0.33 mi except 143 (2.35 mi).
+--    Fills 195 Polaris and 199 Tooele. 199's pre-open orders (2 since 2026-10-07)
+--    made it a trading store, and guard 7d failed every run from 2026-10-02 on.
+--    No pulse row for 0 / 901 / 9001, so they stay NULL (not trading).
+--    Pulse raw types have changed under us before (2026-09-23 reload: NUMERIC ids),
+--    so the keys and coordinates are safe_cast rather than trusted. The qualify is a
+--    no-op today; it pins the grain if pulse ever carries a second row per brink_id
+--    (live row first, then the newest). The box rejects 0,0 and swapped lat/long.
+update `marketing-data-442316.sales_ops.store_info` t
+set
+  latitude = p.latitude
+  ,longitude = p.longitude
+from (
+  select
+    safe_cast(l.brink_id as int64) as store_id
+    ,safe_cast(l.lat as float64) as latitude
+    ,safe_cast(l.long as float64) as longitude
+  from `marketing-data-442316.pulse.locations` l
+  where 1=1
+    and l.brink_id > 0
+    and safe_cast(l.lat as float64) between 18 and 72
+    and safe_cast(l.long as float64) between -180 and -60
+  qualify row_number() over(
+            partition by l.brink_id
+            order by l.deleted_at is null desc, l.id desc
+          ) = 1
+) p
+where 1=1
+  and p.store_id = t.store_id
+  and (t.latitude is null or t.longitude is null)
+;
+
 -- 5) weather_cluster_id: nearest metro cluster centroid. Keyed on the store's own
---    lat/long where it has one, else the ZIP centroid from bigquery-public-data, so
---    cluster assignment never waits on the geocoding backlog. Is-null only, so no
+--    lat/long where it has one (step 4b fills it from pulse.locations), else the ZIP
+--    centroid from bigquery-public-data, so cluster assignment never waits on a
+--    store pulse has not geocoded yet. Is-null only, so no
 --    existing assignment is ever restated.
 --
 --    Verified 2026-08-20: reproduces 87 of 87 existing assignments once cluster 12
@@ -288,15 +332,17 @@ assert (
 
 -- 7d) A trading store must have BOTH coordinates. Checking only latitude would let a
 --     half-geocoded store through, and step 5 would then have to fall back to the ZIP
---     centroid for it. This one CANNOT be auto-repaired - the feed carries no coordinate
---     column and the ZIP centroid is up to 70 miles off - so it is a prompt for a human
---     geocode. Method and the confidence check (an exact Google Maps /maps/place/ match
---     versus a /maps/search/ viewport fallback) are in the dictionary.
+--     centroid for it. Step 4b auto-fills from pulse.locations, so a failure here now
+--     means pulse has no usable lat/long for that brink_id either (store not set up in
+--     pulse yet, or coordinates outside the sanity box). The ZIP centroid is up to 70
+--     miles off, so the fallback is a human geocode. Method and the confidence check
+--     (an exact Google Maps /maps/place/ match versus a /maps/search/ viewport
+--     fallback) are in the dictionary.
 assert (
   select count(*) = 0
   from `marketing-data-442316.sales_ops.store_info` s
   where 1=1
     and (s.latitude is null or s.longitude is null)
     and s.store_id in (select store_id from trading_stores)
-) as 'store_info: a trading store has a NULL latitude or longitude. Geocode its address and write it in - BigQuery cannot derive this.'
+) as 'store_info: a trading store has a NULL latitude or longitude, and pulse.locations has no usable lat/long for it either. Check the store is set up in pulse with coordinates, or geocode its address and write it in.'
 ;

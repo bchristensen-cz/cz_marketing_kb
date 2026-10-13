@@ -30,8 +30,8 @@ geography.
 | `store_open_date` | DATE | 2004-10-01 to 2026-08-14. **First business date with more than 150 orders**, not a lease or announcement date. NULL on 9 rows. Do not build store-age cohorts on it without checking coverage |
 | `is_comp_store` | INT64 | 1 = comp (77), 0 = not (24). **INT64, not BOOL**: write `si.is_comp_store = 1`, never `= true`. **Derived from `store_open_date` since 2026-09-15**, no longer read from the feed |
 | `store_comp_date` | DATE | **The date the store enters the comp base.** Always a January 1st. **Derived since 2026-09-15** (step 2), previously hand-maintained. See the comp section, this is the most-forked definition in the KB |
-| `latitude` | FLOAT64 | **Human geocode. BigQuery cannot derive it.** NULL on 4 rows |
-| `longitude` | FLOAT64 | Same. Guard 7d requires **both**, not just latitude |
+| `latitude` | FLOAT64 | **Filled from `pulse.locations.lat` since 2026-10-13** (step 4b, fill-only, keyed `brink_id = store_id`). Older values are hand geocodes. NULL on 3 rows, all non-stores (0 / 901 / 9001) |
+| `longitude` | FLOAT64 | Same, from `pulse.locations.long`. Step 4b writes **both** from one pulse row. Guard 7d requires both |
 | `weather_cluster_id` | INT64 | 12 distinct. Nearest centroid from `marketing_ops.zip_weather_cluster`, is-null only |
 | `timezone_name` | STRING | IANA name (`America/Denver`, `America/Chicago`), 5 distinct. **Use this one.** Derived from `store_state` in step 4 |
 
@@ -56,7 +56,7 @@ status is now computed here. This reverses a note recorded on 2026-09-10 that sa
 | `timezone_name`, `store_tz` | `store_state` to IANA map (step 4) | yes, is-null only |
 | `weather_cluster_id` | nearest cluster centroid (step 5) | yes, is-null only |
 | `store_short_name` | `Zupas ` prefix stripped from `store_name` (step 6) | yes, is-null only |
-| `latitude`, `longitude` | **human geocode, no warehouse source** | no, guard 7d prompts a human |
+| `latitude`, `longitude` | `pulse.locations` lat / long on `brink_id` (step 4b) | yes, fill-only (both written when either is NULL); human geocode only if pulse has none |
 
 `store_phone` is fed but **transformed**: the feed holds it formatted (`801-613-3380`) and the
 column is INT64, so the insert strips non-digits before casting. A bare
@@ -171,7 +171,7 @@ exclusion list lives in one place.
 | **7a** | **no duplicate `store_id`** (new) | no, needs a human de-dup |
 | 7b | a trading store has a `timezone_name` | yes, add its state to the step-4 map |
 | 7c | a trading store has a `weather_cluster_id` | yes, usually a zip that does not resolve |
-| 7d | a trading store has **both** `latitude` and `longitude` | **no**, human geocode |
+| 7d | a trading store has **both** `latitude` and `longitude` | yes since 2026-10-13, step 4b fills from `pulse.locations`; a failure means pulse has no usable coordinates either |
 
 **Why 7a is new and why it matters.** BigQuery has no primary keys, and **step 1 has no `distinct`
 or `group by`**: it anti-joins the feed against the mart on `store_id`, so two feed rows for the
@@ -187,11 +187,11 @@ half-geocoded store through and quietly sent step 5 to the ZIP centroid for it.
 column, and **none of them is trading**: `0` Company (blank state, so no timezone), `199` Zupas
 Tooele (no geocode, pre-opening), `901` Zupas Lab2 and `9001` Zupas automation test.
 
-> **⏭️ The one guard failure to expect: store 199 Zupas Tooele.** It has a timezone and a cluster
-> but no `latitude`/`longitude`, and it is pre-opening with zero orders. **The day Tooele starts
-> trading, guard 7d fails the run every night until someone geocodes it.** It is not geocodable
-> today: its address has no street number (`West 1000th North`) and no location resolves on Google
-> Maps. Get a real address from ops before opening, not after.
+> **Resolved 2026-10-13: store 199 Zupas Tooele.** It took 2 pre-open orders from 2026-10-07,
+> became a trading store, and guard 7d failed **every run from 2026-10-02 through 2026-10-13**
+> (12 runs; the whole script still completed because guards run last). Fixed by step 4b, which
+> filled 199 and 195 Polaris from `pulse.locations`. Both keep their existing weather clusters
+> (1 and 7); re-deriving from the pulse point gives the same clusters.
 
 ## ⚠️ The feed's zips are wrong on 5 stores, and insert-once is what protects you
 
@@ -286,8 +286,14 @@ cluster**, and sanity-check that `store_zip` resolves to the same state as `stor
 > affected dates or expect the gap to persist for up to a week. Re-check
 > `countif(order_timestamp_utc is null)` rather than assuming the dimension fix propagated.
 
-> **⚠️ `latitude` / `longitude` are hand-maintained and there is no source for them in the
-> warehouse** (2026-08-20). The feed has no coordinate column, and the `zip_weather_cluster`
+> **Superseded 2026-10-13: `pulse.locations` is the warehouse source** (`lat` / `long` keyed on
+> `brink_id`), and step 4b fills NULL coordinates from it. Measured 2026-10-13: one pulse row per
+> `brink_id`, and every already-geocoded store agrees with pulse to within **0.33 mi**, except
+> **143 Schaumburg at 2.35 mi**, which is why 4b is fill-only and never restates. The guidance below
+> is now the fallback for a store pulse has not set up yet.
+>
+> **⚠️ (2026-08-20, before pulse was found) `latitude` / `longitude` were hand-maintained.**
+> `brink.gblStore` has no coordinate column, and the `zip_weather_cluster`
 > centroid is up to **1.043 degrees (~70 miles)** from the real store, so it is not a substitute.
 > Ten stores were geocoded on 2026-08-20 from Google Maps exact address matches, each verified to
 > land **0.3 to 2.7 miles** from its own ZIP centroid in the correct state.

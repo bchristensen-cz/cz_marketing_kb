@@ -31,7 +31,7 @@ as configured by SessionM. Render it in PowerShell (key never leaves the machine
 $kv=@{}; (Get-Content C:\dev\cz_marketing_kb\.env.local.gitignore) | % { if ($_ -match '^\s*([A-Z0-9_]+)\s*=\s*(.*)$') { $kv[$matches[1]]=$matches[2].Trim().Trim('"') } }
 $set = 'REPLACE_WITH_FILE_SET_NAME'
 $ts  = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
-Copy-Item .\artifacts\phone_sync\smsync_test\t1_add_user_update.csv ("new_{0}_{1}_{2}_user_update.csv" -f $kv['SESSIONM_API_KEY_V1'], $ts, $set)
+Copy-Item C:\dev\cz_outputs\scratch\phone_sync\smsync_test\t1_add_user_update.csv ("new_{0}_{1}_{2}_user_update.csv" -f $kv['SESSIONM_API_KEY_V1'], $ts, $set)
 ```
 Open question for SessionM: is the `api_key` in the filename the same v1 app key we use for the REST API, and
 where is the S3 drop / how are per-row rejections reported.

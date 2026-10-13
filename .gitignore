@@ -17,3 +17,6 @@ artifacts/phone_sync/batches/*_result.txt
 *.xlsx
 *.xlsm
 !data_dictionaries/*.xlsx
+
+# --- Claude Code: per-machine settings stay local ---
+.claude/settings.local.json

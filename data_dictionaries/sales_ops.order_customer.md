@@ -1,24 +1,6 @@
 # Data Dictionary: `marketing-data-442316.sales_ops.order_customer`
 
-> # ⚠️ 2026-09-23 — the `pulse` dataset changed column TYPES; the build broke 08:02–12:02 MT and is fixed
->
-> The Pulse feed was reloaded on 2026-09-23 and several raw columns arrived with new BigQuery types (the change landed between the 07:02 and 08:02 MT runs). Nothing in this table's schema changed, but the build script had to cast:
->
-> | raw column | was | now | build change (`sql/sales_ops.order_marts.sql`) |
-> |---|---|---|---|
-> | `pulse.orders.id` | INT64 | **NUMERIC** | `cast(po.id as int64)` in `pulse_orders` and in `order_lines_detail` — `pulse_order_id` stays INT64 |
-> | `pulse.orders.brink_order_id` | INT64 | **NUMERIC** | none needed (INT64 = NUMERIC comparison coerces) |
-> | `pulse.orders.is_catering` | BOOL | **INT64** (0/1) | `case when po.is_catering = 1 then true else false end` — `is_catering` stays BOOLEAN |
-> | `pulse.order_customers.is_loyalty_user` | BOOL | **INT64** (0/1) | `ocs.is_loyalty_user = 0` in the `is_guest_order` predicate (was `= false`) |
-> | `pulse.order_customers.phone` | STRING | **INT64** | already `cast(ocs.phone as string)` — `phone` stays STRING |
-> | `pulse.customers.id` | INT64 | **NUMERIC** | none needed (joins coerce); `pulse_customer_id` is still `pulse.orders.customer_id` (INT64) |
-> | `pulse.customers.is_catering` | BOOL | **INT64** | not read by this build; **does break `sales_ops.cust_map`** — see that dictionary |
-> | `pulse.customers.phone` | INT64 | **STRING** | `cast(c.phone as string)` is now a no-op — `acct_phone` stays STRING |
-> | `pulse.order_payments.is_processed` etc. | BOOL | **INT64** | not read here; broke `claude.order_payment_tender` — redeployed 2026-09-23 |
->
-> Run history (from `INFORMATION_SCHEMA.JOBS_BY_PROJECT`): 05:02 full-history and 07:02 succeeded on the old types; 08:02, 09:02, 10:02, 11:02 failed on `COALESCE(INT64, BOOL)` (the `is_catering` coalesce); the 11:50 / 11:58 / 12:02 attempts failed on `NUMERIC cannot be inserted into pulse_order_id`; a manual run at **12:17** and the scheduled 13:02 succeeded with the full fix. Because the intraday path reloads **today only**, the 12:17 run recovered every hour that had failed — **no business date was lost**. The `delete` at the top of each failed transaction was rolled back, so the table was never left empty for the day. **All three marts share one transaction chain, so `order_lines` and `order_line_discount_detail` were stale for the same four hours.**
->
-> Lesson for the steward: the raw `pulse.*` types are not stable across feed reloads. Any build that compares a raw Pulse flag to `true`/`false`, or inserts a raw Pulse id into an INT64 column, will fail the next time the feed changes shape. Prefer `= 1` / `cast(... as int64)` at the point of ingestion.
+> **Companion files (split 2026-10-14 so this one loads in a single read).** The dated change-log banners (2026-07-24 → 2026-09-23) and the resolved / retracted gotchas are in [`sales_ops.order_customer.history.md`](sales_ops.order_customer.history.md). The SessionM ingestion schedule and the build-script notes are in [`sales_ops.order_customer.build.md`](sales_ops.order_customer.build.md). Text moved word for word; nothing here was rewritten.
 
 **One row per order.** Order-level financials, channel attribution, and customer identity. This is the canonical table for sales, order counts, channel mix, and customer/loyalty questions.
 
@@ -32,59 +14,6 @@
 > - **`in_store_scan` keys on `sm_email is not null`** (was `sm_external_user_id is not null`) — same population in practice, both come from `cust_trans`.
 > - **Refresh:** hourly at :02, **5am = full history from 2018-08-07**, 8am–11pm today only, hours 0–4 / 6–7 skip. The intraday window is **today only** again (was yesterday + today from 2026-08-2x). `order_lines` and `order_line_discount_detail` now reload on exactly the same window in the same job — the timing collision of 2026-08-16→25 cannot recur.
 > - **Six downstream scheduled builds still read the dropped columns** off this table (customer_attribute, bz_cid_bgnbd_palive_churn, cs_comp_points, bz_cid_weather_flag, google_offline_conversions, Braze CDI) — patch list in the steward's CLAUDE.md backlog. The `claude.order_customer` view itself was broken 16:16 → ~16:55 MT and is fixed.
->
-> **Rebuilt 2026-07-24** (full history). Breaking changes — update any saved query:
-> - `businessdate` → **`business_date`** (partition column)
-> - `net_sales` is now the **calculated** net; the Brink-given value moved to **`brink_net_sales`** (steward's cross-check, not an accuracy reference). As built 2026-08-21 the expression is `gross_sales + discount_amount + promotions_amount` — **plus**, because both discount columns are stored negative. There is no `total_promotions_amount` column; an earlier revision of this line named one.
-> - **dropped**: `item_net_sales`, `item_netsales_with_mods`, `mods_net_sales`
-> - **`is_catering` redefined** — destination-based catering is now flagged (was silently false)
-> - **new `customer_type`** — required filter for customer metrics
-> - `order_count` / `days_since_prev_order` **moved out** to `sales_ops.order_sequence` (and `order_count` renamed `customer_order_count`)
->
-> **Further changes 2026-07-27:**
-> - `is_guest_order` is now **BOOLEAN**, not INTEGER — `is_guest_order = 1` fails, use `= true`
-> - **new `mapped_email_domain`**; `mapped_email` gained a SessionM loyalty-email fallback
-> - `customer_type` aggregator matching widened to ezcater / doordash / itsacheckmate, and is explicitly **order-level** — see the note below the values table
->
-> **Further changes synced 2026-08-13** (found deployed in the console script; full history rebuilt — `has_order_items` is populated back to 2018):
-> - **new `destination_id`** (INT64) — raw Brink destination id, alongside `destination`
-> - **new `has_order_items`** (BOOL, added 2026-08-04) — audit flag; FALSE = order kept by the build but carrying no qualifying item rows (~2.4% of recent rows)
-> - `phone` is now **STRING** (cast at build)
-> - `email` and `mapped_email` are **lowercased at build**, and the SessionM fallback email is trimmed and stripped of its leading `cater_` prefix — the email-casing gotchas below are ✅ resolved
->
-> **Further changes 2026-08-17** (deployed + full history rebuilt; verified by steward query the same day):
-> - **`is_employee_discount` DROPPED** — the column no longer exists on the table. Its replacement is `order_line_discount_detail.is_employee_meal_discount`, which is line-level, never NULL, and covers all four eras of the benefit. Any query naming `oc.is_employee_discount` now errors
-> - **`is_catering` widened**: store 50 (Middleton Mobile) is now unconditionally catering, per finance's definition
-> - **`revenue_category` aligned to `is_catering`**: pulse-flagged catering and store 50 both resolve to `'Catering'` in the base table. The two are now **equivalent sets** in `sales_ops` — they were not before
-> - **`destination` / `destination_id` overridden for store 50 only**: `'Middleton Mobile Catering'` / `999999999`. Every other store keeps its raw Brink id and name
->
-> **Steward clarification 2026-08-24 — `email` is the ORDER email, not the customer's email.**
-> A guest may give us any address at checkout so we can send updates about *that order*, so
-> `email` is a per-order contact field and is **never** an identity key. The canonical customer
-> email is **`pulse.customers.email`**, which reaches this mart only as the *first* fallback of
-> `mapped_email`. Measurements and consequences: "Order email vs canonical email" under Gotchas.
-
-> **⚠️ PENDING change 2026-08-26 — the 4am reload becomes a FULL-HISTORY refresh.** Steward change, prompted by learning that Pulse rewrites `pulse.order_customers` history when accounts are merged. The three windowed 4am branches (8 day / 5 week / ~13 month) are commented out and replaced by a single `when run_hour = 4 then '2018-08-07'`. Intraday (8am-11pm, today only) and the 0-3 / 5-7 skip are unchanged.
->
-> **It was NOT live as of 2026-08-26 13:49 MT.** Every scheduled run through 13:02 that day carried the 8-day text (18,479 chars; the `'2018-08-07' --` marker absent), verified against `JOBS_BY_PROJECT` query text rather than the console. A DTS save does not appear in job history until the next fire — **read the job text before asserting what the build does.**
->
-> **Cost is a non-issue: +7 GiB on one run per day.** Measured 2026-08-26 — the full-history select dry-runs at **22.18 GiB** against **14.92 GiB actually billed** by that morning's real 8-day 4am run (36 s wall, 3,133 slot-seconds). ~+49%, ~$0.05/day on demand. The reason it is so cheap is worth knowing: **the build was never mostly window-bounded.** `brinkOrderItem`, `brinkOrderItemModifier`, `brinkOrderDiscount`, `brinkOrderPromotion`, `brinkOrderGiftCard`, `brinkItems`, `brinkDestinations`, `pulse.customers` and `pulse.order_customers` carry **no date predicate at all** — they are filtered only by join to `brink_order`, so they are scanned in full every hour already. Only `brinkOrder`, `brinkOrderPayment`, `pulse.orders` and the four `sessionM.*` tables widen with `start_date`. Same fact explains why an 8-day run (14.92 GiB) and a today-only run (14.73 GiB) bill almost identically.
->
-> **⚠️ But the drift it is meant to repair measures ~17 orders in 51M.** The mart's old partitions were last fully rebuilt 2026-08-20/21, so this is ~6 days of accumulation. Compared against `pulse.orders` / `pulse.order_customers` as they stood 2026-08-26, across all **50,985,194** mart rows: `pulse_customer_id` disagrees on **6**, `mapped_cust_id` **6**, `mapped_email` **16**, `email` **2**, `phone` **2**; **0** vanished pulse rows, **0** changed dedupe winners, **1** late-appearing pulse row. Retroactive rewriting of the per-order pulse tables is not happening at material scale. Rate implies ~3 orders/day, ~1,000/year.
->
-> **🚨 And the merge case the change was made for is NOT fixed by widening the window, because the build never reads the merge signal.** `pulse.orders`, `pulse.order_customers` and `pulse.customers` all carry a `deleted_at` column (`pulse.orders` also has `modified_time` and `delete_queue`), and the build filters **none of them**. Measured 2026-08-26: **6,061 mart orders / 1,884 distinct customers / $163,845.84 net sales**, `business_date` 2023-03-22 -> 2026-08-25, are attributed to `pulse.customers` rows with `deleted_at` set — and on **all 6,061** the `mapped_email` was taken from that deleted row. Re-running the identical SELECT over eight years re-reads the same deleted rows and writes the same values. A full refresh converges the mart on *whatever pulse says today*; it cannot repoint a merged customer, because nothing in the build knows who the survivor is. **Widening a window only repairs drift in the columns the build actually reads.**
->
-> Only **57 of those 1,884** deleted customers have a live `pulse.customers` row sharing their email, so the population is mostly **plain deletions, not merges** (`deleted_at` first seen 2023-06-26, most recent 2026-08-25). That makes the filter a steward call rather than a bug fix: `deleted_at is null` would NULL out identity on 6,061 historical orders instead of moving them to a survivor. Separately worth deciding whether retaining those 1,884 addresses back to 2023 is intended.
->
-> **Targeted restatement is the cheap equivalent of the full refresh.** `pulse.orders` and `pulse.order_customers` both carry `updated_at`. Measured over the 7 days to 2026-08-26, **outside** the current 8-day window: **1,179** `pulse.orders` rows and **11** `pulse.order_customers` rows were updated, spanning **50 distinct `business_date` partitions**. Restating those 50 partitions captures everything a full refresh would, at roughly 1/1,000th of the rewrite — and leaves the mart as the durable copy of history (see consequence 1).
->
-> **Three consequences of the wider window, in priority order.**
->
-> 1. **The mart stops being the durable copy of history.** Under an 8-day window `sales_ops.order_customer` retained eight years even if raw Brink lost or regressed an old partition. Under a daily full refresh, all 50,985,194 rows are deleted and rebuilt from raw at 04:02 every morning, so the mart is only as complete as `brink.brinkOrder` is at that moment, and the recovery path for a bad morning shrinks to BigQuery's 7-day time travel. Verified 2026-08-26 that Brink is currently complete and duplicate-free (234,314 rows from 2018-08-07; 4.5M-8.3M/yr; `count(distinct id)` = `count(*)` in every year), so this is a **dependency change, not a present defect** — but it makes an `assert` on post-insert row count / `max(business_date)` before `commit` load-bearing rather than tidy (Asana 1216955196273978 escalates accordingly).
-> 2. **Reload widths across the four order marts are no longer symmetric.** Measured live 2026-08-26: `order_customer` all history, `order_line_discount_detail` 120 days at 4am, `order_lines` **8 days**. Previously all of them moved on the same window shape, so a restatement propagated. Now any change `order_customer` makes to a partition older than 8 days is invisible to `order_lines` until its monthly 380-day branch, and invisible to pre-2025 history permanently. Same class as catering disagreement #3, and it turns the chaining item (Asana 1217564375242412) from an improvement into the fix.
-> 3. **The `:02 / :07 / :12` stagger was sized for a 36-second build.** If order_customer is still inside its transaction at :07, `order_lines` reads the pre-commit snapshot — consistent (thanks to the transaction) but built from the *pre-refresh* order_customer, which silently defeats that morning's restatement. Watch wall time against the 5-minute gap.
-
-> **✅ Correction 2026-08-26 — the untransacted `delete`+`insert` is ALREADY FIXED in production, and this repo did not know.** Commit e94ada5 (2026-08-25 12:24 MT) documented `order_customer`'s rebuild as untransacted and named it the root cause of the `order_lines` deletions. The deployed script gained `begin transaction` / `commit transaction` **38 minutes later**: first scheduled run carrying it is **2026-08-25 13:02 MT** (text 18,428 -> 18,479 chars), and `order_lines` gained its own at **2026-08-25 13:07** (13,263 -> 13,302 chars). `order_line_discount_detail` already had one. Verified across 25 / 25 / 48 consecutive runs through 2026-08-26 13:02. `sql/sales_ops.order_customer.sql` in this repo still has **no transaction** and still shows the three windowed 4am branches — it is two changes behind deployed. *(Resolved 2026-09-08: the repo now carries the deployed chained script as `sql/sales_ops.order_marts.sql`; the standalone file is a retired pointer.)*
 
 ## Table facts
 
@@ -225,6 +154,8 @@ Moved out of this table 2026-07-24 → **`sales_ops.order_sequence`** (join on `
 
 ## Gotchas
 
+> Resolved and retracted gotchas (the `order_timestamp_utc` NULL fix, the lowercasing and case-insensitivity fixes, the 2026-07-29 `is_guest_order` fix, the `mapped_cust_id` ↔ `loyalty_user` join-key verification, and the pulse fan-out grain defect) moved to [`sales_ops.order_customer.history.md`](sales_ops.order_customer.history.md).
+
 ### Open and refund orders are undocumented (open gap, 2026-09-28, Asana 1218944726616107)
 
 The mart carries no `is_closed` / `is_refund` column, and this dictionary does not yet state whether unclosed or refund orders are included or how a refund signs `net_sales`. An analyst building a FY27 budget base on 2026-09-25 joined `brink.brinkOrder` on `(Id, BusinessDate)` just to read `IsClosed` and `IsRefund`. Until the steward measures and documents this, a refund or open-order question is a data-mart gap: say so, do not join raw Brink.
@@ -298,30 +229,6 @@ nothing about which address is "right".
    build's `pulse_customer` CTE does not filter. Not yet measured for order impact — noted, not
    claimed.
 
-- **✅ RESOLVED 2026-08-20 — `order_timestamp_utc` was NULL for stores missing a `timezone_name`**
-  (Asana 1217684772713570). Built as `timestamp(order_datetime, s.timezone_name)`; BigQuery's
-  `timestamp()` returns NULL on a NULL timezone instead of erroring, so newly-opened stores
-  dropped silently out of every UTC-based analysis. The dimension is fixed and guarded, and the
-  **10,771 already-materialized orders ($211,336.89) were repaired in place** with
-  `set order_timestamp_utc = timestamp(order_datetime, timezone_name)` — the build formula
-  verbatim — rather than by a 17-day mart reload, which would have exposed this table's
-  untransacted delete+insert to concurrent readers and dragged
-  `order_line_discount_detail` along with it.
-  **Lesson: fixing the dimension did not fix this column.** It is materialized, and the daily
-  reload restates only 8 days. Any fact column derived from a dimension attribute needs its own
-  backfill decision.
-- **🔻 RETRACTED same day — the "permanent NULL floor" on unclosed orders is gone, and it was
-  never permanent.** Earlier on 2026-08-20 this entry said `order_timestamp_utc` and
-  `order_datetime` are NULL together whenever `ClosedTime` is NULL (1,374 such orders over
-  2026-08-01 → 08-20) and called that an irreducible floor. It wasn't a floor, it was a missing
-  `coalesce`. The same-day rebuild changed the expression to
-  `coalesce(bo.ClosedTime, bo.OpenedTime)` with a final `datetime(bo.businessdate)` fallback, and
-  the full refresh brought both columns to **0 NULLs across 439,473 orders** (2026-08-01 → 08-19,
-  stores 1111/999 excluded). **So `countif(order_timestamp_utc is null) = 0` IS now a valid health
-  check** — no carve-out needed.
-  Lesson worth keeping: I described a defect as a property of the data one hour and it was fixed
-  the next. Date every measured claim, and prefer "as of <timestamp>, N rows" to "this can never
-  be zero."
 - **⚠️ Never rebuild a UTC timestamp from `order_datetime` yourself.** `order_datetime` is
   **store-local**, so `timestamp(oc.order_datetime)` — the bare cast, which assumes UTC — is
   wrong by the store's offset, and the chain spans **four** live offsets (Ohio 4 h;
@@ -409,20 +316,7 @@ nothing about which address is "right".
   Healthy is **~28–33% `pct_sm_linked`**, **excluding the current business date** — see below.
   Anything under 15% on a *completed* day means that day is corrupted.
 
-- **🔑 The Pulse orders feed can stop on its own while every other `pulse.*` table keeps loading**
-  (observed 2026-09-15 05:51 MT → stalled through 09-21; **backfill merged 2026-09-22 07:57 MT**, 75,213 rows inserted into `pulse.orders` by a manual SA run of the old loader; marts heal on the 09-23 05:02 full-history run, `customer_attribute` healed the same morning (it fires at 05:20, after the 05:02 run finished at 05:07:35; job-log verified 2026-09-23); re-run the identified-% check before quoting identity figures for 09-15 onward). Settled-day identification fell from
-  ~55% to ~14% because only the SessionM arm was left: 09-15 / 16 / 17 carried 4,072 / 4,063 / 4,051
-  `sm_external_user_id` orders and 167 / 0 / 0 `pulse_order_id` orders; `order_source` was NULL on all
-  but 167 of 87,606 orders, `is_guest_order` NULL everywhere, `is_catering` fine (Brink-side).
-  Distinguish from the SessionM failure above by the columns: SessionM outage → `sm_external_user_id`
-  ≈ 0, Pulse outage → `pulse_order_id` = 0. Root cause sat upstream of BigQuery: the compute SA
-  loader (`286373888726-compute@developer.gserviceaccount.com`, nightly ~01:35 MT) ran the
-  `orders_stg` LOAD + `orders` MERGE on 09-13/14/15 and then did not submit either job at all on
-  09-16/17/18 (no `error_result`; 85 destination tables per night instead of 87), while
-  `order_customers`, `order_items`, `customers` merged normally. (A separate, older failure in the
-  same run — `customer_rewards_stg` parquet `discount_amount` INT32 type mismatch — fails every night
-  and is unrelated.) Recovery is automatic: once `pulse.orders` is backfilled the 5am full-history
-  reload re-identifies the gap days; verify with the daily `identified_pct` query and re-quote.
+- **The Pulse orders feed can stop on its own** (2026-09-15 → 09-22 outage: `pulse_order_id` = 0 while `sm_external_user_id` keeps loading). Signature, root cause and recovery moved to [`sales_ops.order_customer.build.md`](sales_ops.order_customer.build.md).
 
 - **🔑 SessionM loads ONCE PER DAY — merged into `sessionM.*` at 04:07 MT — so today's orders have
   no loyalty identity; yesterday is complete from the 05:02 full rebuild** (chain re-sequenced
@@ -435,46 +329,7 @@ nothing about which address is "right".
   | 2026-09-08 (yesterday, read 10:15 MT 09-09) | 26,618 | **31.1%** ✅ | 29,062 |
   | **2026-09-09 (today, 10:15 MT)** | 404 | **0.0%** — expected | 6,275 (yesterday's dump tail) |
 
-  **SessionM ingestion is THREE separately scheduled steps, not one job.** Moving one without the
-  others silently makes `sessionM.*` a day stale (it happened 2026-09-05 → 09-08, below). Verified
-  2026-09-09 on `JOBS_BY_PROJECT`, Cloud Scheduler and the Storage Transfer / DTS APIs:
-
-  | Step | Mechanism | Schedule | Observed 2026-09-09 |
-  |---|---|---|---|
-  | 1. S3 → `gs://sessionm/prod_datadumps/<yyyy_mm_dd>/` | Storage Transfer job `9198078639943003749` from `amperity-sessionm/SessionM/prod_datadumps/` (47 files ≈ 8 GB) | **09:45 UTC** daily (UTC — does not drift at DST) | lands 03:45–03:50 MDT |
-  | 2. GCS → `staging.sm_*` | Cloud Run job `sessionm-bq-loader`, Cloud Scheduler `sessionm-bq-loader-scheduler-trigger`, 47 `LOAD` jobs, WRITE_TRUNCATE | **`55 3 * * *` America/Denver** | 03:56–04:01 |
-  | 3. `staging.sm_*` → `sessionM.*` | BigQuery scheduled query "sessionM Daily Refresh" (DTS config `68b830ae-0000-26c9-896c-14c14eea4130`, runs as `bigquery-loader-sa`): full-load `create or replace` for the small tables, 15 `MERGE`s, then 40 `TRUNCATE`s of staging | **04:07 MT** (`every 24 hours`) | 04:07–04:14, 0 failures |
-
-  The vendor finishes writing S3 between **09:03 and 09:30 UTC** (S3 mtimes preserved as GCS
-  `customTime`, 40+ days checked), so step 1 must never start before ~09:40 UTC. Steps 2 and 3
-  are on Denver time and shift an hour against step 1 at each DST change — still safe (in MST the
-  transfer lands 02:45–02:50), but the gap between 1 and 2 grows to ~65 min rather than 5.
-
-  **Downstream chain (all verified firing in this order on 2026-09-09):** SessionM merge 04:07 →
-  `claude.loyalty_user` **04:30** → `order_customer` + `order_sequence` **full-history rebuild
-  05:02–05:08** (`when run_hour = 5 then '2018-08-07'`, deployed 2026-09-08 in the combined
-  `sql/sales_ops.order_marts.sql` config `6b28c7a5…`) → `customer_attribute` **05:20**
-  (`attribute_asof_date = run_date - 1`, moved from 05:00 on 2026-09-08). The intraday branch is
-  **today only** again (`when run_hour between 8 and 23 then run_date`, hours 0–4 and 6–7 exit
-  via the `start_date is null` guard) — yesterday no longer depends on it, because the 05:02
-  rebuild runs after the merge. The 2026-09-04 `run_date - 1` workaround is retired.
-
-  **Regression signature, and how it happened (2026-09-05 → 09-08).** The transfer (step 1) and
-  the merge (step 3) were moved to 03:45 / 03:50 but the loader (step 2) stayed at 05:20. Each
-  morning the merge consumed the *previous* day's staging load, truncated it, and the 05:22 load
-  then sat unmerged for 24 h: `sessionM.*` ran one file behind, on 09-05 every `MERGE` touched 0
-  rows and the full-load tables (`privacy_requests` included) were rebuilt **empty**, and
-  yesterday's `pct_sm_linked` read **0.0%** on 09-07 and 09-08 instead of ~31%. If yesterday reads
-  under 15% after ~05:15 MT: (a) check the three steps' ORDER on `JOBS_BY_PROJECT`
-  (`user_email like 'bigquery-loader-sa@%'`, group by `job_type, statement_type` — `LOAD` must
-  precede `MERGE`; 0 inserted rows across all 15 merges = merge ran on empty staging), then (b)
-  read the deployed `order_customer` job text. Staging ahead of `sessionM.*` on
-  `date(transaction_date)` row counts is the one-query proof of a lag.
-
-  **DTS scheduling trap:** with `every 24 hours`, editing only the start *time* of a scheduled
-  query does not move the next run — the saved form showed 04:07 for four days while
-  `nextRunTime` stayed 09:50Z. Re-saving with the start **date** moved to a future day re-anchors
-  it. Always confirm with `nextRunTime` (console list column, or `GET transferConfigs/<id>`).
+  The three-step SessionM ingestion schedule, the downstream chain timings, the 2026-09-05 → 09-08 regression signature and the DTS scheduling trap moved to [`sales_ops.order_customer.build.md`](sales_ops.order_customer.build.md).
 
   Consequences:
 
@@ -498,145 +353,6 @@ nothing about which address is "right".
   per-customer figures shift between builds. Fix proposed (deterministic tiebreak) in
   `design/sessionm_identity_pipeline_audit.md`.
 
-- **✅ RESOLVED — `mapped_email` and `email` are now lowercased at build** (fix deployed
-  2026-07-29 with the full-history rebuild; verified 2026-08-13: **0 non-lowercase values in
-  365 days** on both columns). `lower(mapped_email)` in queries is now a harmless no-op — fine
-  to keep writing defensively, no longer load-bearing.
-
-  <details><summary>What it looked like before the fix (audited 2026-07-29)</summary>
-
-  | Column (365d) | Non-null | NOT lowercase | Distinct raw | Distinct lowered | Casing dupes |
-  |---|---|---|---|---|---|
-  | `mapped_email` | 4,462,505 | 180,079 (4.04%) | 1,047,296 | 1,029,353 | **17,943** |
-  | `email` | 3,392,624 | 183,466 (5.41%) | 884,293 | 883,175 | 1,118 |
-  | `mapped_email_domain` | 4,462,505 | **0** | 22,342 | 22,342 | 0 ✅ |
-
-  `count(distinct mapped_email)` overstated by ~17,900; 5,604 emails had one person split
-  across multiple `mapped_cust_id`s by letter case alone. Root cause was Pulse (8.7%
-  non-lowercase) — Braze and SessionM emails were already 100% clean. See
-  `design/crm_identity_hygiene_plan.md` §3.
-
-  </details>
-
-  Related normalization: the SessionM fallback email also strips the leading **`cater_`**
-  prefix (and trims), so catering logins resolve to the individual account's address in
-  `mapped_email`. Compare against `claude.loyalty_user.email`, which since the 2026-09-01 rename is
-  also stripped (the prefixed original is now `full_email`).
-
-- **✅ RESOLVED 2026-07-29 — `customer_type` matching is now case-insensitive on all five
-  branches** (all compare against `lower(...)`; verified no reclassification — case-sensitive
-  and case-insensitive counts matched exactly, so the fix was purely defensive). The risk was
-  a partner sending `EZCater@…` silently classifying as `person`.
-
-- **✅ RESOLVED 2026-07-29 — SessionM `user_id` is now lowercased on all three
-  `all_trans_users` branches** (`user_point_transactions`, `transaction_discounts`,
-  `transaction_payments`) and in `sm_external_user_map`. Before the fix only the discounts
-  branch was normalised, costing ~155 loyalty links/month.
-
-- **✅ `is_guest_order` FIXED 2026-07-29 — it previously meant "POS order", not "guest".**
-
-  The build read `case when ocs.is_loyalty_user is null then true else false end`. But
-  `pulse.order_customers.is_loyalty_user` is a **non-nullable boolean** — 4,224,215 true /
-  3,669,122 false / **0 null** — so `is null` could only fire when the pulse row was *absent*.
-  The column was an exact alias for `pulse_order_id is null`.
-
-  | June 2026 (store 1111 excluded) | Orders |
-  |---|---|
-  | All orders | 713,139 |
-  | POS-only (`pulse_order_id is null`) | 425,630 |
-  | Flagged `is_guest_order = true` | **425,630** — identical set |
-  | Digital orders flagged guest | **0** |
-  | Loyalty-scanned POS orders flagged guest | 94,754 ($2.21M net) |
-
-  Every real digital guest was labelled a member; 94,754 loyalty scanners were labelled guests.
-  **Any pre-2026-07-29 analysis that split on `is_guest_order` split on channel, not loyalty.**
-
-  **New definition (steward):** a guest order is **first-party digital** *and* non-loyalty.
-  Both halves matter — third-party and kiosk orders are non-loyalty by construction, not by
-  guest choice.
-
-  ```sql
-  ocs.is_loyalty_user = 0   -- raw column is INT64 0/1 since 2026-09-23; was `= false`
-  and lower(po.source) in ('mobile_web_source','web_source','ios','android','mobile_source')
-  ```
-
-  **The match is case-insensitive on purpose.** Full history holds exactly 10 distinct
-  `po.source` values and one of them is `IOS` — a single order on 2023-06-14 that a
-  case-sensitive in-list drops. That is the same failure class as the case-**sensitive**
-  aggregator branches in `customer_type` (documented below): one oddly-cased value from
-  upstream silently changes an order's classification.
-
-  | Guest-eligible | Orders | Excluded | Orders |
-  |---|---|---|---|
-  | `iOS` | 2,094,394 | `checkmate` | 2,519,649 |
-  | `mobile_web_source` | 950,282 | `Outdoor Kiosk` | 900,124 |
-  | `web_source` | 898,673 | `operator` | 73,832 |
-  | `Android` | 467,369 | `ezcater` | 19,149 |
-  | `mobile_source` | 1,518 | | |
-  | `IOS` | 1 | | |
-
-  July 2026 (07-01 → 07-28), non-loyalty share by raw `po.source`:
-
-  | `po.source` | Orders | Non-loyalty | % | Guest-eligible |
-  |---|---|---|---|---|
-  | `checkmate` | 90,834 | 90,834 | 100% | no — third party |
-  | `ezcater` | 1,118 | 1,118 | 100% | no — third party |
-  | `Outdoor Kiosk` | 34,024 | 30,165 | 88.7% | no — in-store terminal |
-  | `operator` | 1,869 | 0 | 0% | no — call center |
-  | `mobile_web_source` | 28,878 | **14,040** | **48.6%** | **yes** |
-  | `web_source` | 15,983 | **3,186** | **19.9%** | **yes** |
-  | `iOS` | 62,692 | 62 | 0.1% | yes |
-  | `Android` | 12,668 | 32 | 0.3% | yes |
-
-  **Guest checkout is a web / mobile-web feature.** The native apps sit at 0.1–0.3%
-  non-loyalty — they still require login. July guest orders: **17,320**. Including
-  `Outdoor Kiosk` would have added 30,165 in-store terminal orders and made the metric
-  meaningless; that exclusion is the judgment call most likely to be questioned, and this is
-  the reason.
-
-  `iOS` and `Android` are genuine **raw** `po.source` values, not only the cleaned
-  `order_source` labels. `mobile_source` is the legacy iOS value (1,518 orders, 2023 only) and
-  is included so a full-history rebuild doesn't drop it.
-
-  **FALSE is a catch-all, not "was a member."** It covers POS orders, third-party, kiosk,
-  operator, *and* digital loyalty orders. Never read `is_guest_order = false` as "loyalty
-  member" — for that, test loyalty directly (`sm_external_user_id is not null`,
-  `mapped_cust_id`, or `claude.loyalty_user`). A guest *rate* must be computed against a
-  first-party-digital denominator, not all orders.
-
-  ⚠️ **The near-miss:** an interim fix added `ocs.order_id is not null` to the old predicate.
-  That removes the only case that ever satisfied `is null`, so the column would have been
-  `false` on **every order** — verified 0 matching rows across all 7,893,337
-  `pulse.order_customers` rows. When a boolean column looks wrong, check the source column's
-  null rate before patching the null test.
-
-  Independent validation of the launch date: overall non-loyalty share of pulse orders holds
-  flat at 49–51% Jan–Jun 2026, then steps to **56.2% in July** — driven entirely by
-  `mobile_web_source` going to 48.6%. Guest checkout went live 2026-07-01.
-
-- **✅ `mapped_cust_id` IS the right join key to `claude.loyalty_user`** (verified 2026-07-29
-  against the live deduped view). `pulse_customer_id` and `sm_external_user_id` are the **same
-  id space**, not two — of 142,386 June orders carrying both, **142,127 (99.8%) hold an
-  identical value**. Only 259 differ, and just 26 of those resolve to a loyalty account.
-
-  `mapped_cust_id` also covers materially more than `sm_external_user_id`: **27,953** June
-  orders are pulse-identified with no SessionM id, and the order email agrees with the matched
-  loyalty account on **26,632 (95.3%)** of them. Joining on `sm_external_user_id` silently
-  drops all of those.
-
-  ⚠️ **Do not "correct" this on the basis of an email-mismatch count.** Of the 7,568 June
-  orders where `lower(mapped_email) <> loyalty_user.email`, **7,088 (93.7%) are the `cater_`
-  prefix and nothing else**: the build's `sm_external_user_map` strips it
-  (`regexp_replace(..., r'^cater_', '')`) while `loyalty_user.email` retains it, so
-  `mapped_email` equals the stripped address exactly. **Compare against the stripped column** —
-  since 2026-09-01 that is `loyalty_user.email` (the prefixed original is `full_email`).** Only 480 are genuinely different addresses — and the `sm_external_user_id` join
-  carries 6,275 mismatches of its own, so the key is not the cause.
-
-  *(An earlier revision of this file asserted the opposite. It reached that conclusion by
-  attributing the whole email-mismatch count to the join key without testing whether the two
-  ids were actually distinct, or whether the documented `cater_` normalization explained the
-  gap. Both checks reverse the finding.)*
-
 - **Order-level `is_catering` ≠ catering *account*.** A catering account can place an ordinary
   individual order and it will correctly show `is_catering = false`. Worked example: Brink order
   `56569385453631` (2026-04-23, store 171, **To Stay**, $55.16) on account
@@ -649,8 +365,6 @@ nothing about which address is "right".
 - **Always filter `business_date`** — table is partitioned on it; unfiltered queries scan 50M rows. The column was `businessdate` before 2026-07-24.
 - **`order_lines` uses `business_date` too** since the 2026-07-30 full-history rebuild — the old `BusinessDate` spelling is gone. Cross-table joins still must partition-prune **both** tables (`oc.business_date` and `ol.business_date`), but the names now match.
 - **Customer metrics require `customer_type = 'person'`.** 38% of identified orders belong to kiosk terminals, internal accounts, or the orphan third-party aggregator id. Sales metrics should keep them.
-- **✅ Grain defect RESOLVED 2026-07-29 by the full-history rebuild.** `brink_order_id` 2279778269187 (2024-09-17, store 154) previously had **two** rows: two pulse orders (4545135, 4608051) pointing at the same Brink order, double-counting $263.99 across two customers. The `pulse_orders` CTE dedupes on `brink_order_id`; the earlier `partition by po.id` was a no-op because `po.id` was already unique. **Verified 2026-07-29 across the whole table: 50,315,908 rows, 50,315,908 distinct `brink_order_id`, 0 duplicates.** The grain is now exactly one row per Brink order and `count(*)` is safe.
-  - **Tiebreak direction is HIGHEST pulse id** — `qualify row_number() over(partition by po.brink_order_id order by po.id desc) = 1`. **Steward-confirmed 2026-07-29:** an earlier statement that "lowest pulse id wins" was incorrect and is retracted; highest is the rule. A brink↔pulse order map table to replace the arbitrary tiebreak is still open (Asana 1216938720407007).
 - **Orders with no qualifying item rows are NOT excluded** — the item aggregation is a LEFT
   join, so an order whose items were all voided/cleared/zero still gets a row with NULL
   `item_gross_sales` / `mods_gross_sales` / tip-item / fee columns. `has_order_items = false`
@@ -716,47 +430,4 @@ nothing about which address is "right".
 
 ## Build-script notes
 
-**2026-09-08:** the deployable text is now `sql/sales_ops.order_marts.sql` (section 1 of the chained query); `sql/sales_ops.order_customer.sql` is a retired pointer. The notes below describe CTEs that are unchanged in the chained script except where dated otherwise.
-
-Migrated here 2026-08-17 when `sql/sales_ops.order_customer.sql` was cut down to the **deployable
-console text, verbatim** (the convention set for `order_line_discount_detail` the same day). The
-repo script now carries no prose, so a diff against the console shows real drift and nothing else.
-That convention immediately earned itself: the repo copy of `sql/claude.order_customer.sql` had
-silently drifted from the deployed view in two places (missing `store_id not in (1111, 999)`,
-missing the `business_date` predicate on the `order_sequence` join), both in the safe direction,
-both invisible until a redeploy was attempted from the repo copy.
-
-- **`brink_order` dedupes the raw table.** `brink.brinkOrder` holds more than one row per order id;
-  the build keeps one per `id` ordered by `insertionjob`. Never read `brinkOrder` without it.
-- **`cust_trans` resolves identity before deduping** (rewritten 2026-07-29). The earlier two-stage
-  shape picked one user per `transaction_id` by recency and only *then* checked whether that user
-  resolved to a mapping, so resolvability was incidental to the ordering. Now the inner joins run
-  first and the dedupe happens once, at `pos_transaction_key` — the grain the final SELECT joins on.
-  Only resolvable users can win, structurally. Verified output-equivalent over 30 days (203,855 rows
-  both ways, 0 links changed): a robustness change, not a recovery. Safe because
-  `pos_transaction_key` ↔ `transaction_id` is 1:1 after `header_trans` (731,353 rows, 731,353
-  distinct of each, 0 reuse).
-- **`sm_external_user_map` partitions on the RAW `u.user_id` while selecting `lower(u.user_id)`.**
-  Harmless today — the source is 100% lowercase — and `cust_trans`'s dedupe caps any fan-out.
-  Partitioning on `lower(u.user_id)` would close it properly (Asana 1216995170178886). Its inner
-  join to `sessionM.users` drops nothing: 0 of 1,782,178 `cafezupas` mapping rows lack a users row
-  (verified 2026-07-27, re-verified 2026-07-29 with 0 null emails).
-- **`pulse_orders` scoping is safe.** `po.business_date >= start_date` cannot orphan an in-window
-  Brink order: verified across June 2026, of the 55 orders where pulse and Brink business dates
-  disagree, pulse is always the **later** date (lag −1 to −42 days), never earlier.
-- **Dead branches in the store-50 destination CASE (2026-08-17, cosmetic).** Both the
-  `destination_id` and `destination` CASE expressions open with `when bo.FKStoreId = 50`, then
-  repeat the same predicate in two further branches (`642414069` / `'Catering Online Delivery'`,
-  `642414070` / `'Catering Online Takeout'`). The first branch always wins, so the other two are
-  unreachable — confirmed in the data: all 808 store-50 orders in the trailing 30 days carry
-  `999999999` / `'Middleton Mobile Catering'` and none carry the catering-online ids. **Store 50 has
-  no delivery/takeout split.** Left in the repo because the repo mirrors the console; flagged to the
-  steward 2026-08-17.
-- **The fee proxy would not have worked anyway.** An earlier revision of this build split catering
-  destinations into Delivery vs Takeout on `total_fees_amount > 0`. `total_fees_amount` counts any
-  item whose name matches `\bfee\b`, and the live set is `CZ Fee`, `Service Fee`, `Delivery Fee`,
-  `Catering Delivery Fee`. Measured 2026-08-17 over the trailing 30 days: **zero** catering orders
-  carried a `Delivery Fee` or `Catering Delivery Fee` item — every "Delivery" classification came
-  from a `Service Fee` or `CZ Fee`. It agreed with the real Brink destination ~99% of the time by
-  correlation, not by construction, and would have flipped silently the first time fee configuration
-  changed. Don't rebuild it on this proxy.
+Moved to [`sales_ops.order_customer.build.md`](sales_ops.order_customer.build.md).

@@ -262,7 +262,7 @@ Two things still need resolving, and the data cannot answer them:
 Never substitute a share-of-orders cut ("more than half their orders in the app") for the
 definition; if it is requested, label it "app-primary" and present it as a separate, non-canonical
 number. Full rules, the platform gotcha and the canonical query live in
-[`claude_skills/sales-ops-orders/SKILL.md`](../sales-ops-orders/SKILL.md) under *"App user" is a
+[`claude_skills/sales-ops-orders/references/definitions.md`](../sales-ops-orders/references/definitions.md) under *"App user" is a
 canonical customer definition*.
 
 ## Step 2 — ask once, with clickable options

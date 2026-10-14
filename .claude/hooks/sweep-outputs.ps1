@@ -27,9 +27,19 @@ foreach ($t in (& git -C $root ls-files 2>$null)) {
     $reason = Test-CzOutputPath $t
     if ($reason) { $hits += "  $t ($reason, TRACKED: git rm --cached)" }
 }
+$big = @()
+# KB size budget (2026-10-14): user sessions read these whole, and Read truncates at ~25K tokens (~65 KB of this prose).
+foreach ($f in (Get-ChildItem -Path (Join-Path $root 'claude_skills'), (Join-Path $root 'README.md') -Recurse -Filter *.md -File)) {
+    $cap = if ($f.Name -eq 'SKILL.md') { 40KB } else { 60KB }
+    if ($f.Length -gt $cap) { $big += "  $($f.FullName.Substring($root.Length + 1)) ($([int]($f.Length / 1KB)) KB, over the $($cap / 1KB) KB budget: split it into references/)" }
+}
+if ($big.Count -gt 0) {
+    [Console]::Error.WriteLine("KB size budget (2026-10-14): these files are too big for a user session to read in one pass. Split them into references/ before finishing:")
+    $big | ForEach-Object { [Console]::Error.WriteLine($_) }
+}
 if ($hits.Count -gt 0) {
     [Console]::Error.WriteLine("Outputs rule (2026-10-07): these output/data files are in the repo folder. Move them to $CzOutputsHome (analysis\, reports\ or scratch\) before finishing; if one is tracked, git rm --cached it too:")
     $hits | ForEach-Object { [Console]::Error.WriteLine($_) }
-    exit 2
 }
+if ($hits.Count -gt 0 -or $big.Count -gt 0) { exit 2 }
 exit 0

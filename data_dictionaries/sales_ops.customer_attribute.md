@@ -33,7 +33,7 @@
 > App User definition (app order **or** in-store scan in the trailing 12 months, **or** a native-app
 > session in the trailing 90 days), materialised once a day. Full column list under
 > [App usage](#app-usage-new-2026-09-18); tie-out under Validation; the definition itself lives in
-> `claude_skills/sales-ops-orders/SKILL.md`. **`is_app_user` and `app_user_type` are exposed on
+> `claude_skills/sales-ops-orders/references/definitions.md`. **`is_app_user` and `app_user_type` are exposed on
 > `claude.order_customer` since 2026-09-17 23:20 MT**, and `gender` / `birthday` / `age` since 23:40 MT
 > the same evening (the other ten app-usage columns remain `sales_ops`-only) and `attribute_hash` now
 > moves with the flag.

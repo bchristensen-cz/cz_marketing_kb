@@ -58,7 +58,7 @@ Total outstanding points liability: **~597.2M points**.
 - **A member should never hold both accounts — 264 do.** `is_account_rule_violation` flags them; only 11 have a nonzero balance in both. Exclude or call out rather than silently double-counting a member.
 - **`current_balance` is authoritative; don't recompute it from the ledger.** `sum(point_modification)` on `loyalty_points_activity` matches for 99.8% of accounts but not all. If a number has to tie to what a guest sees in the app, use `current_balance`.
 - **`current_balance` includes points that are past due but not yet swept.** SessionM sweeps monthly on the 1st, so between `expires_on` and the sweep the points still count. Cross-reference `loyalty_points_expiring.is_past_due_not_yet_swept`.
-- **`lifetime_points` is credits only**, so `lifetime_points - current_balance` mixes redemptions, manual deductions, fraud clawbacks and expirations together. Split them with `loyalty_points_activity.activity_type`.
+- **`lifetime_points` is credits only**, so `lifetime_points - current_balance` mixes redemptions, manual deductions, fraud clawbacks and expirations together. Split them with `loyalty_points_activity.activity_type`, and within debits with `debit_class` (added 2026-10-20).
 - Members with a *zero* balance still appear. Filter `current_balance > 0` for "members with points."
 
 ## Validation (2026-07-28)

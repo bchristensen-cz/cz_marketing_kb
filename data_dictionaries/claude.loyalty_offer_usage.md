@@ -82,7 +82,7 @@ Top offers by redemption (same window):
 - `offer_name` comes from the `offers` join and is NULL where an offer definition is missing. Left join is intentional — don't drop rows.
 - **NULL identity columns mean the user is missing upstream, not that the offer is bad.** `sm_external_user_id`, `email`, `member_program` and `catering_tier_name` all come from the `loyalty_user` left join. **688 `user_id`s / 5,011 offer rows** have no row in `sessionM.users` at all (measured 2026-08-27, `create_date < current_date() -1`), so those columns are NULL and **an inner join or an email/program filter silently drops the rows**. Verified against the GCS source dumps: the users are absent from the `users` extract itself, not lost in load (0 drops across 30,155 ids in the 2026-08-17→08-27 dumps). They are real members — 523 hold tier history, 500 hold point accounts — but none has an `external_user_mappings` row, so none will ever acquire an `sm_external_user_id`. Count them, don't filter them: `countif(sm_external_user_id is null)`.
 - Group on `root_offer_id` to combine offer versions; `offer_id` alone splits the same promotion across reissues.
-- `points_spent` here is the trustworthy reward-redemption measure; `loyalty_points_activity.points_redeemed` (bitmask 2) also includes support deductions and clawbacks.
+- `points_spent` here is the reward-level redemption measure (which offer). `loyalty_points_activity.points_reward_redeemed` (added 2026-10-20) is the ledger-level one and includes in-cart pay-with-points, which never creates a `user_offers` row; `loyalty_points_activity.points_redeemed` is all bitmask-2 debits including support deductions and clawbacks.
 
 ## Open items
 

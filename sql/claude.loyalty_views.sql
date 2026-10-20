@@ -208,8 +208,24 @@ group by 1,2,3,4,5,6,7,8,13,14
 --    activity_type is derived from audit_type_bitmask, which is the ONLY reliable
 --    classifier. reference_type is free text (agent names, ticket reasons, campaign
 --    names) and must never be used as an enum.
+--
+--    debit_class (added 2026-10-20) splits bitmask-2 debits. Rules in precedence order,
+--    measured on all history; see data_dictionaries/claude.loyalty_points_activity.md:
+--      reward_store_redemption   reference_type = 'REWARD_STORE'
+--      earn_reversal_pos_refund  transaction_id set (INCENT.Outcomes / Behavior (Refund))
+--      fraud_clawback            'Account flagged for fraudulent activity'
+--      migration_correction      'Operator Migration Deduct'
+--      batch_correction          catering reset / end-of-year adjustment batches
+--      earn_reversal_void        'Order was voided in Brink ...' / duplicate-order voids
+--      in_cart_redemption        reference_id is a 7-8 digit Pulse order id (the note is
+--                                the member's own name, which is why name matching fails)
+--      test_entry                internal test notes (test / testing / iiii / aa ...)
+--      manual_support_deduction  everything else: ticket reasons, agent names, refunds
+--    point_offer_mapper is NOT used: 489,074 of its 489,075 point_transaction_ids do not
+--    exist in user_point_transactions (checked 2026-10-20).
 -- =====================================================================================
 create or replace view `marketing-data-442316`.claude.loyalty_points_activity as
+with base as (
 select
   upt.point_transaction_id
 , upt.user_id
@@ -233,6 +249,22 @@ select
 , if(upt.point_modification < 0, abs(upt.point_modification), 0) as points_removed
 , if(upt.audit_type_bitmask = 2, abs(upt.point_modification), 0) as points_redeemed
 , if(upt.audit_type_bitmask = 4, abs(upt.point_modification), 0) as points_expired
+, case
+    when upt.audit_type_bitmask <> 2 then null
+    when upt.reference_type = 'REWARD_STORE' then 'reward_store_redemption'
+    when upt.transaction_id is not null then 'earn_reversal_pos_refund'
+    when upt.reference_type = 'Account flagged for fraudulent activity' then 'fraud_clawback'
+    when upt.reference_type = 'Operator Migration Deduct' then 'migration_correction'
+    when upt.reference_type = 'Catering Users Without Points Reset'
+      or upt.reference_type like 'End of Year Points Adjustments%'
+      or upt.reference_type = 'Year End Adjustment' then 'batch_correction'
+    when lower(upt.reference_type) like 'order was voided%'
+      or lower(upt.reference_type) like '%duplicate order%' then 'earn_reversal_void'
+    when regexp_contains(upt.reference_id, r'^[0-9]{7,8}$') then 'in_cart_redemption'
+    when regexp_contains(lower(upt.reference_type), r'(^|[^a-z])(test|testing|tester|tst|teest)([^a-z]|$)')
+      or lower(upt.reference_type) in ('iiii', 'aa', 'as', 'asa', 'asas') then 'test_entry'
+    else 'manual_support_deduction'
+  end as debit_class
 , upt.reference_type as reference_note
 , upt.reference_id
 , upt.transaction_id as pos_transaction_id
@@ -248,6 +280,12 @@ left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = upt.user_id
 where 1=1
   and pa.active = 'true'
+)
+select
+  b.*
+, coalesce(b.debit_class in ('reward_store_redemption', 'in_cart_redemption'), false) as is_reward_redemption
+, if(b.debit_class in ('reward_store_redemption', 'in_cart_redemption'), b.points_removed, 0) as points_reward_redeemed
+from base b
 ;
 
 

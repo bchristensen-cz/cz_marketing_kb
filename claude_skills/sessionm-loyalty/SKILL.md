@@ -40,7 +40,7 @@ Column docs in `data_dictionaries/`: one file per view. Read them before writing
 | Outstanding points liability | `sum(current_balance)` from `loyalty_points_balance`, no filter. ~597M points as of 2026-07-28 |
 | Lifetime points earned | `sum(lifetime_points)` from `loyalty_points_balance` |
 | Points issued | `sum(points_issued)` from `loyalty_points_activity` |
-| Points redeemed | `sum(points_redeemed)` from `loyalty_points_activity` (`activity_type = 'redeemed_or_deducted'`) |
+| Points redeemed | `sum(points_reward_redeemed)` from `loyalty_points_activity` (`is_reward_redemption`, i.e. `debit_class in ('reward_store_redemption', 'in_cart_redemption')`). `sum(points_redeemed)` is the older all-debits total and must be labelled "redeemed or deducted" (rule 2026-10-20) |
 | Points expired | `sum(points_expired)` from `loyalty_points_activity` (`activity_type = 'expired'`) |
 | Points expiring in a window | `sum(points_expiring)` from `loyalty_points_expiring` where `expires_on between @start and @end` |
 | Active loyalty member | a row in `loyalty_user` with `member_program is not null` |
@@ -158,7 +158,16 @@ Also note:
 
 > **`reference_type` is free text, not an enum.** It is exposed as `reference_note` and contains campaign names (`July Protein Stacking Challenge`), support-agent personal names, and ticket reasons (`MISSING ITEMS`, `MADE WRONG`, `Due to a duplicate order incident at the POS…`). Never `group by` it expecting a stable category list, and never filter on it to classify a transaction — use `activity_type`.
 
-Note that bitmask 2 mixes genuine reward redemptions with manual support deductions and fraud clawbacks, which is why the column is named `redeemed_or_deducted`. For redemptions specifically tied to a reward, join to `loyalty_offer_usage` on the member and date, or use `points_spent` on that view.
+Bitmask 2 mixes member redemptions with system reversals and manual corrections, which is why the column is named `redeemed_or_deducted`. **Since 2026-10-20 the view splits it**: `debit_class` (nine closed values, precedence-ordered rules in the view), `is_reward_redemption` and `points_reward_redeemed`. Measured FY2026 (2025-10-01 → 2026-09-30): real redemptions are 99.3% of debited points (reward store 62.0%, in-cart 37.3%); earn reversals after POS refunds and voids 0.25%; fraud clawbacks 0.13%; migration 0.10%; manual support deductions 0.09%; batch corrections 0.08%; test entries 0.04%. Full table, rules and validation: `data_dictionaries/claude.loyalty_points_activity.md`, "Debit classification".
+
+Use it like this:
+
+- "Points redeemed" = `sum(pa.points_reward_redeemed)`. Split reward store vs in-cart when the question is how members use points; they are different behaviours and tie to different POS discount types.
+- Manual support deductions, fraud clawbacks and migration/batch corrections: `group by pa.debit_class` on `pa.activity_type = 'redeemed_or_deducted'`. They are small in points but lumpy in time (the Oct–Nov 2025 end-of-year batch, migration deducts still trickling), so footnote any month they land in rather than smoothing.
+- `earn_reversal_pos_refund` / `earn_reversal_void` net against `points_issued`, not against redemptions.
+- Exclude `debit_class = 'test_entry'` from any member-facing series and say so (9 members, ~200K points in FY2026).
+- The note on an in-cart debit is the **member's own name**, so never try to detect support agents by name; a few hundred members carry the placeholder last name `Update Profile`, which is why those notes read like a correction. They are redemptions.
+- `point_offer_mapper` does not link debits to offers (489,074 of 489,075 ids are absent from the ledger); use `loyalty_offer_usage.points_spent` for "which reward".
 
 ## SQL style (steward rule 2026-07-23, extended 2026-07-29, 2026-08-20 and 2026-08-21 — MANDATORY)
 
@@ -402,7 +411,7 @@ select
 from in_cart ic
 ```
 
-State these with the answer: **(1)** the `issued_date` lookback (6 months before the redeem window, the steward's choice) bounds the scan but drops any reward bought earlier and redeemed inside the window, so say the lookback; **(2)** the redeem window and the POS window must be the same dates, or points and dollars describe different redemptions; **(3)** monthly `loyalty_points_activity.points_redeemed` (`point_account_name = 'Spendable Points'`) is **redeemed or deducted** (support deductions and clawbacks share bitmask 2, see Points activity classification), so it will not equal reward-store plus in-cart points and must not be labelled "redeemed" alone; **(4)** for a fiscal-year figure use the steward's Oct 1 -> Sep 30 window and say so.
+State these with the answer: **(1)** the `issued_date` lookback (6 months before the redeem window, the steward's choice) bounds the scan but drops any reward bought earlier and redeemed inside the window, so say the lookback; **(2)** the redeem window and the POS window must be the same dates, or points and dollars describe different redemptions; **(3)** monthly `loyalty_points_activity.points_redeemed` (`point_account_name = 'Spendable Points'`) is **redeemed or deducted**; use `points_reward_redeemed` (or `debit_class in ('reward_store_redemption', 'in_cart_redemption')`) for the figure that should equal reward-store plus in-cart points (June 2026: 38.35M of 38.55M), and label the remainder by `debit_class`; **(4)** for a fiscal-year figure use the steward's Oct 1 -> Sep 30 window and say so.
 
 **Campaign participation (noise excluded, date-bounded):**
 
@@ -454,7 +463,7 @@ Documented so nobody re-derives them the hard way:
 ## Known gaps / not yet answerable
 
 - **Store-level loyalty attribution.** `user_offers.store_id` is a SessionM retailer store id, not a Brink store number, and the mapping through `sessionM.retailer_stores` (92 rows) is undocumented. Don't answer store-level loyalty questions yet.
-- **Which reward a bitmask-2 debit paid for.** `loyalty_points_activity` can tell you points were redeemed but not always for what. `point_offer_mapper` links `user_offers_id` → `point_transaction_id` and would close this, but its coverage is unverified.
+- **Which reward a `reward_store_redemption` debit paid for.** `loyalty_points_activity.debit_class` now says *that* and *how* points were redeemed (2026-10-20), but the `REWARD_STORE` debit's `reference_id` GUID matches no offer key and `point_offer_mapper` is unusable (its ids are not in the ledger), so "which reward" still comes from `loyalty_offer_usage.points_spent` joined on member and date.
 - **Tier progression history.** `loyalty_user` now exposes catering *lifecycle* (`was_ever_catering_member`, `catering_first_joined_date`, `catering_last_exited_date`, added 2026-07-29), so joins, exits and lapses are answerable. The Silver → Gold → Diamond *movement path* still is not — that needs `sessionM.tier_member_history` unfiltered at tier-level grain.
 - **Transaction-level loyalty spend.** `sessionM.transaction_headers` / `transaction_items` / `transaction_discounts` / `transaction_payments` are undocumented. Brink remains the sole financial source of truth — don't compute sales from SessionM.
 - **Referral and incentive rule detail.** `incentive_outcomes` has an entirely generic schema (`entity_decimal_1`, `entity_id_1`, `discriminator`) with no dictionary. Out of scope.

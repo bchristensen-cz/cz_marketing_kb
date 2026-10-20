@@ -38,6 +38,7 @@ claude_skills/        Skills — how to query each domain (canonical definitions
   sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
   date-dimensions/    Fiscal calendar (4-4-5 periods), week endings, holidays (claude.date_dim)
   paid-media/         Ad spend & reach across Meta, Google Ads, TikTok, Snapchat, Spotify (claude.ad_spend_daily, claude.ad_reach_weekly)
+  guest-feedback/     Guest feedback & public reviews from Tattle (claude.guest_feedback*, claude.online_reviews); built for customer service
   cowork-artifact-deploy/  How to change & redeploy an artifact (two-file lineage, drift diff, connector re-grant)
   menu-drift-check/   Steward routine: weekly detector for item renames, new ids, category/item_type moves, price and line-type shifts (sql/checks/menu_drift_weekly.sql)
 data_dictionaries/    Column-level documentation per table (braze_data_dictionary.md is an index; per-channel column files live in data_dictionaries/braze/)
@@ -77,6 +78,11 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | `marketing-data-442316.claude.loyalty_campaign_participation` | 1 row per campaign event | Loyalty campaign participation, achievements — **always filter `create_date`** |
 | `marketing-data-442316.claude.ad_spend_daily` | 1 row per platform / campaign / ad group / ad / day | **Paid media.** Spend, impressions, clicks, conversions, CPM/CTR/CPA/ROAS across Meta, Google Ads, TikTok, Snapchat, Spotify. Partition column is `business_date`. Use the `paid-media` skill — 2024 has large coverage gaps and TikTok conversions restate for a week |
 | `marketing-data-442316.claude.ad_reach_weekly` | 1 row per platform / campaign / reach level / week | Weekly reach (facebook, snapchat, tiktok only). Partition column is `reach_week`. **Reach is never summed** — see the dictionary |
+| `marketing-data-442316.claude.guest_feedback` | 1 row per Tattle survey | **Guest feedback.** Contact-form requests and post-order experience surveys: store, form, `request_type`, rating, comment, incident / reply status, `brink_order_id`, hashed email and phone for guest lookup. Use the `guest-feedback` skill; `avg_rating` is complaint intake, not satisfaction |
+| `marketing-data-442316.claude.guest_feedback_snapshots` | 1 row per survey x category | Food Quality / Accuracy / Speed / Hospitality / Online Ordering ratings, comments and reasons (experience surveys, from 2025-11-12) |
+| `marketing-data-442316.claude.guest_feedback_answers` | 1 row per survey x question | Every non-PII answer on a survey |
+| `marketing-data-442316.claude.guest_feedback_daily` | 1 row per store x day | Survey volume, experience rating, incident and reply funnel by store and week |
+| `marketing-data-442316.claude.online_reviews` | 1 row per public review | Google / Yelp / Grubhub / Bing / Apple reviews with the store's public reply |
 
 Loyalty questions use the `sessionm-loyalty` skill; paid-media questions use the `paid-media`
 skill. Partition columns by domain: `business_date` (order_customer, order_sequence, order_lines,

@@ -21,6 +21,8 @@ Every session pulls a fresh copy of the knowledge base. In Cowork mode that happ
 
 **What failure looks like:** Claude tells you the knowledge base is unavailable and that it can't answer data questions. That is Claude working *correctly* — it's refusing to guess rather than answer from memory. It usually means GitHub couldn't be reached, or you're on mobile. It is never a reason to ask Claude to answer anyway.
 
+**A subtler failure (seen 2026-10-22):** Claude says the commit lookup failed, or that the KB "doesn't document" a table you know is there. In regular chat the fetch tool caches bare raw-file URLs for months and refuses `api.github.com`; the protocol below works around both (a `?v=` stamp on every raw URL, the `.patch` URL for the version). If you see either symptom, tell the steward which project you asked in — the project's instruction snippet is probably an old copy.
+
 You can still use Claude anywhere for ordinary work — writing, brainstorming, summarizing. The rules here apply only to Cafe Zupas data questions.
 
 ---
@@ -67,7 +69,8 @@ https://github.com/bchristensen-cz/cz_marketing_kb
 Get a fresh copy each session: git clone --depth 1 if you have a shell,
 otherwise fetch the raw files from
 https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/
-(README.md first). Follow its README and the relevant skill in
+(README.md first), adding ?v=<current date and time> to every raw URL so
+you get a fresh copy rather than a cached one. Follow its README and the relevant skill in
 claude_skills/ verbatim. State the KB version in your first data answer.
 
 Never answer these questions from general knowledge, from memory of a past
@@ -138,6 +141,8 @@ Don't edit the repo — only the data steward (Brent) commits to it. Ask Claude 
 
 ## For the steward — the canonical project-instructions snippet
 
+**Changed 2026-10-22** (cache-buster on raw URLs, `.patch` URL for the version). Re-paste into the Analysis project and any Braze project.
+
 Users never paste this. It lives in the shared **Analysis** project's instruction box, deployed by the steward; the canonical copy is kept here so git stays the source of truth. **A repo commit does not update the project's instruction box** — if this block ever changes, re-paste it into the project the same day. It is deliberately tiny and pointing-only (all real logic lives in the repo and arrives via the fresh pull), so it should almost never change.
 
 ```
@@ -153,7 +158,9 @@ menu, items, stores, campaigns, Braze, BigQuery):
      into your temporary working area, never into my personal folders.
    - If you have no shell (regular chat): fetch the raw files from
      https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/
-     starting with README.md.
+     starting with README.md. Add ?v=<current date and time> to every raw
+     URL (e.g. README.md?v=20261022-1530); bare URLs come back from a
+     months-old cache.
 2. Read README.md from that fresh copy and follow its session protocol,
    then read the relevant skill in claude_skills/ and the data dictionaries
    it references. Follow the skills verbatim (canonical definitions, the
@@ -162,8 +169,9 @@ menu, items, stores, campaigns, Braze, BigQuery):
    previous session. The fresh copy is the single source of truth.
 4. State the KB version in the first data answer of the session:
    git log -1 --format='%h %ad' with a shell, or fetch
-   https://api.github.com/repos/bchristensen-cz/cz_marketing_kb/commits/main
-   and report the short sha and commit date.
+   https://github.com/bchristensen-cz/cz_marketing_kb/commit/main.patch?v=<same stamp>
+   and report the first 7 characters of the sha on the "From <sha>" line
+   plus the Date line. (api.github.com is refused by the fetch tool.)
 5. Never commit, push, or edit the knowledge base. New findings are logged
    per the README's ground rules (Asana task on the Claude Data board).
 6. If you can neither clone nor fetch the knowledge base, STOP. Tell me the

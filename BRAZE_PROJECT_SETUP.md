@@ -36,7 +36,9 @@ Before answering ANY question in the second group:
      into the temporary working area, never into my personal folders.
    - Without a shell (regular chat): fetch the raw files from
      https://raw.githubusercontent.com/bchristensen-cz/cz_marketing_kb/main/
-     starting with README.md.
+     starting with README.md. Add ?v=<current date and time> to every raw
+     URL (e.g. README.md?v=20261022-1530); bare URLs come back from a
+     months-old cache.
 2. Read, in this order, from the fresh copy only: README.md,
    decisions/DECISIONS.md, claude_skills/ask-a-data-question/SKILL.md,
    claude_skills/braze-campaigns/SKILL.md, then

@@ -20,3 +20,4 @@ artifacts/phone_sync/batches/*_result.txt
 
 # --- Claude Code: per-machine settings stay local ---
 .claude/settings.local.json
+__pycache__/

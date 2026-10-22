@@ -14,6 +14,17 @@
 --           a weekly count(distinct mapped_cust_id), which double counts every
 --           returning guest.
 --
+-- weeks   : CHANGED 2026-10-22. weeks are now anchored to the MON-SUN FISCAL
+--           CALENDAR, not to each store's open-date anniversary. under the old
+--           anchor a store's week ran from its opening weekday, so a period end
+--           (always a sunday) fell mid store-week and the store's final bucket
+--           was partial while the benchmark bucket it was compared against was
+--           whole. that understated the youngest stores by 6-8% -- ocotillo
+--           read -36% on the old anchor and -30% on this one. every store and
+--           every benchmark store now closes each week on the same sunday and
+--           carries the same partial opening-week stub, so the comparison is
+--           like for like. week numbers happened not to move at the p9 cut.
+--
 -- cohort  : benchmark = 172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182,
 --           183. excluded on purpose: 169 syracuse (opened 2023-03-03, before
 --           the 2023-03-06 order_sequence floor, so its first-order flag is
@@ -21,26 +32,29 @@
 --           and 184 surprise (dec-2024 openings, both open into the holiday
 --           trough). steward call 2026-09-16.
 --
--- as_of   : set to the period end being reported. p8 fy2026 = 2026-08-23.
+-- focus   : current-year openings. add each new store here as it opens. a store
+--           that opened after as_of is simply excluded by its own week count.
 --
--- caution : mapped_cust_id was redefined 2026-09-08 (see the order_customer
---           dictionary). counts run after that date sit ~2% below the same
---           figures published in the p7 deck. that is the identity rework,
---           not store performance -- restate the whole series, never one store.
+-- as_of   : set to the period end being reported. p9 fy2026 = 2026-09-27.
+--
+-- caution : day 60 is a DAY count, not a week count, so it is unaffected by the
+--           anchor change. a store under 60 days old at as_of has no day-60
+--           read and must show blank on the slide, never a partial one.
 -- =============================================================================
 
-declare as_of date default '2026-08-23';
+declare as_of date default '2026-09-27';
 
 with stores as (
 	select
 	  s.store_id
 	, s.store_name
 	, s.store_open_date
-	, case when s.store_id in (190, 189, 193, 194, 197, 191) then 'focus' else 'benchmark' end as cohort
-	, div(date_diff(as_of, s.store_open_date, day), 7) + 1 as week_at_as_of
+	, case when s.store_id in (190, 189, 193, 194, 197, 191, 192) then 'focus' else 'benchmark' end as cohort
+	, date_diff(date_trunc(as_of, week(monday)), date_trunc(s.store_open_date, week(monday)), week) + 1 as week_at_as_of
+	, date_diff(as_of, s.store_open_date, day) as days_open_at_as_of
 	from `marketing-data-442316`.claude.store_info s
 	where 1=1
-	and s.store_id in (172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182, 183, 190, 189, 193, 194, 197, 191)
+	and s.store_id in (172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182, 183, 190, 189, 193, 194, 197, 191, 192)
 )
 , acq as (
 	select
@@ -66,8 +80,9 @@ with stores as (
 	, s.store_name
 	, s.cohort
 	, s.week_at_as_of
+	, s.days_open_at_as_of
 	, date_diff(a.acq_date, s.store_open_date, day) as days_since_open
-	, div(date_diff(a.acq_date, s.store_open_date, day), 7) + 1 as weeks_since_open
+	, date_diff(date_trunc(a.acq_date, week(monday)), date_trunc(s.store_open_date, week(monday)), week) + 1 as weeks_since_open
 	from acq a
 		join stores s
 		on s.store_id = a.store_id
@@ -79,7 +94,7 @@ with stores as (
 	, s.cohort
 	, wk as weeks_since_open
 	from stores s
-	, unnest(generate_array(1, least(s.week_at_as_of, 40))) as wk
+	, unnest(generate_array(1, least(s.week_at_as_of, 60))) as wk
 )
 , weekly as (
 	select

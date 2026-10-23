@@ -94,7 +94,7 @@
 --
 -- ⚠️ 2026-10-23 DRIFT: the live definition has NO guest_status (everything else identical). Someone
 -- redeployed an older text after 2026-09-22. Steward ruling 2026-10-23: THIS file is right,
--- guest_status should be live; the next redeploy restores it.
+-- guest_status should be live. Restored by the 2026-10-23 redeploy (80 columns).
 --
 -- 2026-10-23: mapped_cust_id / mapped_email provenance exposed from order_sequence (steward request
 -- 2026-10-22): *_source_system names the source table the value came from, *_source_updated_at that

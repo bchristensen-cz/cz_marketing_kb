@@ -5,3 +5,4 @@ One row per full run of `evals/run.py`. Pass rate only; answers, SQL and figures
 | Date | Eval | KB commit | Model | Pass | Failed ids |
 |---|---|---|---|---|---|
 | 2026-10-22 | v1 | 1ae9dc0 | default | 49/49 (100.0%) | none |
+| 2026-10-22 | v1 | ab397a1 | default | 49/49 (100.0%) | none |

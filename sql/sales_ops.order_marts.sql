@@ -453,7 +453,6 @@ select oc.brink_order_id
 	when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 and oc.pulse_customer_id is not null then 'pulse.orders'
 	end as mapped_cust_id_source_system
 , oc.pulse_order_id
-, oc.pulse_customer_id
 , oc.order_timestamp_utc
 , oc.order_datetime_local
 from `marketing-data-442316`.sales_ops.order_customer oc

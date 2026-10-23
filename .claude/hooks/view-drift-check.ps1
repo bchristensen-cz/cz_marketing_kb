@@ -93,6 +93,19 @@ foreach ($pd in $want.Keys) {
         $row = $rows | Where-Object { $_.table_name -eq $w.vw } | Select-Object -First 1
         if (-not $row) { continue }   # brand-new view
         $a = Get-Norm $row.view_definition; $b = Get-Norm $w.body
+        # 2026-10-23 (Brent): a committed-but-undeployed change is not drift. Allow when the DDL being
+        # run IS the HEAD copy and live matches some earlier committed revision of the same file.
+        if ($a -ne $b) {
+            $run = Get-Body $text $ds $w.vw
+            if ($run -and (Get-Norm $run) -eq $b) {
+                $known = $false
+                foreach ($h in (& git -C $root log --format=%H -n 50 $ref -- $w.file 2>$null)) {
+                    $old = Get-Body ((& git -C $root show "${h}:$($w.file)" 2>$null) -join "`n") $ds $w.vw
+                    if ($old -and (Get-Norm $old) -eq $a) { $known = $true; break }
+                }
+                if ($known) { continue }
+            }
+        }
         if ($a -ne $b) {
             $i = 0; $n = [Math]::Min($a.Length, $b.Length)
             while ($i -lt $n -and $a[$i] -eq $b[$i]) { $i++ }

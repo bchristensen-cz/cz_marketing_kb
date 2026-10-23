@@ -65,6 +65,33 @@ aggregator's or kiosk's order count, aggregate `order_customer` directly.
 
 The `customer_attribute` figure is the more correct one. That's the point of the change.
 
+## Survivorship: which source wins (precedence rules, 2026-10-23)
+
+Per order, the first row whose condition holds wins. The build is `sql/sales_ops.order_marts.sql`, order_sequence section: the `mapped_cust_id` coalesce and the `mapped_cust_id_source_system` case must list these in the same order. Counts are orders over full history, measured 2026-10-23 (11,672,465 rows, all customer types).
+
+**`mapped_cust_id`**
+| # | Condition | Value taken | `_source_system` | `_source_updated_at` | Orders |
+|---|---|---|---|---|---|
+| 1 | catering order with a Pulse account | `pulse_customer_id` | `pulse.orders` | order time | in row 5 total |
+| 2 | catering order, SessionM id only | `sm_external_user_id` | `sessionM` | order time | in row 4 total |
+| 3 | usable order email (not a system email) found in `cust_map` | `cust_map.acct_id` for the order email | `pulse.order_customers` | `pulse.order_customers.updated_at` | 4,605,572 |
+| 4 | else the signed-in account's own email found in `cust_map` | `cust_map.acct_id` for the account email | `pulse.customers` | `pulse.customers.updated_at` | 6 |
+| 5 | else a SessionM email | `cust_map.acct_id` for it, else `sm_external_user_id` | `sessionM` | order time | 3,162,561 (rows 2 + 5) |
+| 6 | else order and account email are both system emails (kiosk, checkmate) | `pulse_customer_id` | `pulse.orders` | order time | 3,904,326 (rows 1 + 6) |
+
+Why this order: catering accounts are their own identity population, so they never merge into a person by email. The email on the order is the steward's "person" rule (D-016). The account's own email covers kiosk and operator loyalty scans whose order email is a system address. SessionM is the last real identity, and system ids are a placeholder, not a person.
+
+**`mapped_email`**
+| # | Condition | Value taken | `_source_system` | Orders |
+|---|---|---|---|---|
+| 1 | the mapped id has a `pulse.customers` email | that account email | `pulse.customers` | 11,563,250 |
+| 2 | else | the email typed on the order | `pulse.order_customers` | 107,385 |
+| - | neither | NULL | NULL | 1,830 |
+
+**Customer level (`customer_attribute`)**: `mapped_cust_id` provenance comes from the customer's latest order, and `mapped_email` and its provenance come from the latest order that has an email. A customer's history can mix sources; the row shows the current one.
+
+**Guard**: the last statement of `order_marts` asserts that no mapped order lacks provenance, so a new coalesce branch without a matching label fails the run. It runs after every mart has committed, so a failure blocks nothing.
+
 ## Scope
 
 **Every order with a `mapped_cust_id`.** The only build filter is `mapped_cust_id is not null` — there is no `customer_type` restriction. `customer_type` is carried as a column so the caller filters.

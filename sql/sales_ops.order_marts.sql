@@ -1134,5 +1134,16 @@ from brink_discount_lines dl
 commit transaction;
 
 
+-- '2026-10-23' provenance guard, LAST so a failure never leaves order_lines / order_line_discount_detail
+-- unrefreshed. Fails the run when a mapped order has no source: the usual cause is a new branch in the
+-- mapped_cust_id coalesce without a matching when in mapped_cust_id_source_system.
+assert (
+select countif(os.mapped_cust_id_source_system is null or os.mapped_cust_id_source_updated_at is null
+	or (os.mapped_email is not null and (os.mapped_email_source_system is null or os.mapped_email_source_updated_at is null)))
+from `marketing-data-442316`.sales_ops.order_sequence os
+where os.business_date >= '2018-08-07'
+) = 0 as 'order_sequence: mapped order with no provenance (see mapped_cust_id_source_system)';
+
+
 
 

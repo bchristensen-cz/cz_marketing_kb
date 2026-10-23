@@ -31,6 +31,10 @@ select
 , oc.is_guest_order
 , oc.mapped_email
 , oc.mapped_email_domain
+, oc.mapped_cust_id_source_system
+, oc.mapped_cust_id_source_updated_at
+, oc.mapped_email_source_system
+, oc.mapped_email_source_updated_at
 , oc.in_store_scan
 -- 2026-09-08: reads the claude.order_customer VIEW, not the sales_ops table. The identity rework
 -- moved mapped_cust_id / customer_type off sales_ops.order_customer onto sales_ops.order_sequence;
@@ -142,6 +146,8 @@ select
     , po.store_name as store_name
     , po.order_source as order_source
     , ifnull(po.is_guest_order, false) as is_guest_order
+    , po.mapped_cust_id_source_system as mapped_cust_id_source_system
+    , po.mapped_cust_id_source_updated_at as mapped_cust_id_source_updated_at
     )
     order by po.order_datetime_local desc, po.brink_order_id desc
     limit 1
@@ -149,7 +155,8 @@ select
 
 -- most recent non-null email wins
 , array_agg(
-    struct(po.mapped_email as mapped_email, po.mapped_email_domain as mapped_email_domain)
+    struct(po.mapped_email as mapped_email, po.mapped_email_domain as mapped_email_domain
+      , po.mapped_email_source_system as source_system, po.mapped_email_source_updated_at as source_updated_at)
     order by case when po.mapped_email is null then 1 else 0 end, po.order_datetime_local desc
     limit 1
   )[offset(0)] as email_rec
@@ -199,6 +206,12 @@ select
 , cast(ca.mapped_cust_id as string) as braze_external_id
 , ca.email_rec.mapped_email as mapped_email
 , ca.email_rec.mapped_email_domain as mapped_email_domain
+-- provenance (2026-10-23): taken from the same order the value came from (id: latest order,
+-- email: latest order with an email). Not in attribute_hash, so it never triggers a Braze push.
+, ca.last_order.mapped_cust_id_source_system as mapped_cust_id_source_system
+, ca.last_order.mapped_cust_id_source_updated_at as mapped_cust_id_source_updated_at
+, ca.email_rec.source_system as mapped_email_source_system
+, ca.email_rec.source_updated_at as mapped_email_source_updated_at
 
 -- ---------- demographics (deployed 2026-09-15, synced to the repo 2026-09-18) ----------
 , c.gender as gender

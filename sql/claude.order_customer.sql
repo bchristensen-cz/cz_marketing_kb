@@ -91,6 +91,16 @@
 -- against this file first: identical. NULL on unidentified / non-person orders, never coalesced.
 -- The supporting columns (first_order_was_guest, last_order_was_guest, guest_orders_l365) stay
 -- sales_ops-only. View is now 76 columns.
+--
+-- ⚠️ 2026-10-23 DRIFT: the live definition has NO guest_status (everything else identical). Someone
+-- redeployed an older text after 2026-09-22. Steward ruling 2026-10-23: THIS file is right,
+-- guest_status should be live; the next redeploy restores it.
+--
+-- 2026-10-23: mapped_cust_id / mapped_email provenance exposed from order_sequence (steward request
+-- 2026-10-22): *_source_system names the source table the value came from, *_source_updated_at that
+-- row's updated_at (UTC), or the order timestamp for pulse.orders / sessionM. Requires the
+-- order_marts deploy that adds the columns to order_sequence FIRST, or this view fails to create.
+-- customer_attribute reads them through this view.
 -- =====================================================================================
 
 create or replace view `marketing-data-442316`.claude.order_customer as
@@ -99,6 +109,10 @@ oc.* except(brink_net_sales)
 , os.mapped_cust_id
 , os.mapped_email
 , os.mapped_email_domain
+, os.mapped_cust_id_source_system
+, os.mapped_cust_id_source_updated_at
+, os.mapped_email_source_system
+, os.mapped_email_source_updated_at
 , os.customer_type
 , coalesce(os.customer_order_count, 0) as customer_order_count
 , coalesce(os.days_since_prev_order, 0) as days_since_prev_order

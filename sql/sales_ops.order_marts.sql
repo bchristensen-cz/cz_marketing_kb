@@ -443,6 +443,18 @@ select oc.brink_order_id
 	, case when oc.sm_email is not null then coalesce(ms.acct_id, oc.sm_external_user_id) end                   -- no usable Pulse email anywhere: SessionM identity
 	, case when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 then oc.pulse_customer_id end            -- pure system identities: kiosk terminal, checkmate
 ) as mapped_cust_id
+-- '2026-10-22' provenance: which source the coalesce above took. Keep the when order IDENTICAL to the coalesce.
+, case
+	when oc.is_catering = true and oc.pulse_customer_id is not null then 'pulse.orders'
+	when oc.is_catering = true and oc.sm_external_user_id is not null then 'sessionM'
+	when oc.is_sys_order_email = 0 and oc.email is not null and m.acct_id is not null then 'pulse.order_customers'
+	when oc.is_sys_acct_email = 0 and oc.acct_email is not null and ma.acct_id is not null then 'pulse.customers'
+	when oc.sm_email is not null and coalesce(ms.acct_id, oc.sm_external_user_id) is not null then 'sessionM'
+	when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 and oc.pulse_customer_id is not null then 'pulse.orders'
+	end as mapped_cust_id_source_system
+, oc.pulse_order_id
+, oc.pulse_customer_id
+, oc.order_timestamp_utc
 , oc.order_datetime_local
 from `marketing-data-442316`.sales_ops.order_customer oc
 	left join `marketing-data-442316`.sales_ops.cust_map m
@@ -453,6 +465,14 @@ from `marketing-data-442316`.sales_ops.order_customer oc
 			on ms.email = oc.sm_email           -- the SessionM email
 where 1=1
 and oc.store_id not in (1111,999)
+)
+
+, pulse_order_customer as (  -- '2026-10-22' deduped: order_id is not unique in the source
+select
+  ocs.order_id
+, ocs.updated_at
+from `marketing-data-442316`.pulse.order_customers ocs
+qualify row_number() over(partition by ocs.order_id order by ocs.updated_at desc) = 1
 )
 
 
@@ -469,6 +489,15 @@ select
     when regexp_contains(coalesce(c.email, oc.email), r'(?i)@(cafezupas\.com|tkxel\.(com|io))$') then 'internal'
 		else 'person'
 		end as customer_type
+-- '2026-10-22' provenance. pulse updated_at is UTC (created_at sits a median 15 min before order close)
+, oc.mapped_cust_id_source_system
+, case oc.mapped_cust_id_source_system
+	when 'pulse.order_customers' then timestamp(ocs.updated_at)
+	when 'pulse.customers' then timestamp(ca.updated_at)
+	else oc.order_timestamp_utc
+	end as mapped_cust_id_source_updated_at
+, case when c.email is not null then 'pulse.customers' when oc.email is not null then 'pulse.order_customers' end as mapped_email_source_system
+, case when c.email is not null then timestamp(c.updated_at) when oc.email is not null then timestamp(ocs.updated_at) end as mapped_email_source_updated_at
 , row_number() over w                                      as customer_order_count
 , date_diff(oc.business_date, lag(oc.business_date) over w, day)  as days_since_prev_order
 --, count(*) over(partition by oc.mapped_cust_id) as lifetime_customer_order_count  -- '2026-07-29' excluded because we have this column in customer_attributes
@@ -477,6 +506,10 @@ select
 from order_customer oc
 	left join `marketing-data-442316.pulse.customers` c
 	on c.id = oc.mapped_cust_id
+		left join `marketing-data-442316.pulse.customers` ca
+		on ca.id = oc.pulse_customer_id
+			left join pulse_order_customer ocs
+			on ocs.order_id = oc.pulse_order_id
 where 1=1
 and oc.mapped_cust_id is not null
 window w as (partition by oc.mapped_cust_id order by oc.order_datetime_local, oc.brink_order_id)

@@ -110,6 +110,10 @@ begins in March 2023, which is itself worth knowing when presenting `first_order
 | `braze_external_id` | STRING | `cast(mapped_cust_id as string)` — the Braze `external_id`. 87% (1,194,620 of 1,374,213) match an existing `braze.users` row. |
 | `mapped_email` | STRING | Most recent non-null email across the customer's orders. **100% populated** in the 2026-07-29 build. Was 844 NULLs on 2026-07-28, so this is not guaranteed to stay at zero — don't assume non-null without checking. |
 | `mapped_email_domain` | STRING | Domain of the same order's email. |
+| `mapped_cust_id_source_system` | STRING | **New 2026-10-23.** Provenance of `mapped_cust_id`, from the customer's **latest order** (`order_sequence.mapped_cust_id_source_system`): `pulse.order_customers` / `pulse.customers` / `sessionM` / `pulse.orders`. Can differ across the customer's history; this is the current one. |
+| `mapped_cust_id_source_updated_at` | TIMESTAMP | **New 2026-10-23.** UTC `updated_at` of that source row on the latest order (order timestamp for `pulse.orders` / `sessionM`). |
+| `mapped_email_source_system` | STRING | **New 2026-10-23.** Provenance of `mapped_email`, from the **same order that supplied it** (latest order with an email): `pulse.customers` (account email) or `pulse.order_customers` (typed at checkout, often a guest). |
+| `mapped_email_source_updated_at` | TIMESTAMP | **New 2026-10-23.** UTC `updated_at` of that source row. None of the four provenance columns are in `attribute_hash`, so a provenance change never triggers a Braze push. |
 
 ### Demographics — new 2026-09-15, **exposed on `claude.order_customer` since 2026-09-17**
 | Column | Type | Description |

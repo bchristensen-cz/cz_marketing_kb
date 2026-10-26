@@ -26,7 +26,7 @@ The user picks. Then you query.
 
 **Do the cheap discovery queries FIRST, then ask ONE question with clickable options.**
 
-Not: ask → query. Not: query → apologise. The order is **resolve → ask once → answer**.
+Not: ask → query. Not: query → apologise. The order is **resolve → ask once → query → validate → answer** (validation is Step 4, added 2026-10-26).
 
 Discovery is cheap **if you bound it**. `store_info` is 99 rows and free. `item_name` is a
 cluster field on `order_lines`, which is *not* the same as free. Asking blind is still
@@ -440,7 +440,35 @@ Every answer states, in one line near the top:
 - the choices the user made (catering, combos, item list)
 - the locked rules applied (store 1111 excluded, gross not net)
 
-Then the number, then the SQL.
+Then the validation line (Step 4), then the number, then the SQL.
+
+## Step 4 — validate before delivering (steward rule 2026-10-26)
+
+A number is not an answer until it has been bounded against something, and the thing it was
+bounded against is stated next to it. Read
+[`references/validation.md`](references/validation.md) **every time a query has returned the
+number you are about to deliver**. It holds three checks, in order:
+
+1. **Containment** (hard stop, never a question): can the number exist? Item units against the
+   orders that contained them, parts against the whole, new customers against all customers,
+   rates inside 0 to 1, no extra or NULL group in a breakdown.
+2. **Benchmark against the p90 of the peer group**, measured from the same table, window and
+   filters as the answer. Items: 3x the category p90 or 5x the item's own trailing 28 days;
+   totals: plus or minus 40% prior period or 60% year over year; shares: 20 points. The
+   benchmark template reads `claude.item_daily` + `claude.items` (deployed 2026-10-26), a few
+   MB per check.
+3. **Scope echo**: the result's own date range, group count and measure match what the user
+   chose.
+
+When a check trips, run the diagnostic ladder in the reference (name matched several ids,
+discount or promotion lines, combo slots, join fan-out, wrong window, units versus dollars,
+catering) **before** asking. If a rung explains it, correct and deliver with the correction
+noted. Only a number that survives the ladder becomes a qualification question, asked once,
+with the measured ratio in each option label.
+
+Vague nouns such as "the new item" or "the LTO" are resolved the same way as every other
+noun: list every candidate from `claude.items` launched in the last 28 days (with
+`first_sold_date` beside `launch_date`, units and price) and let the user pick.
 
 ## Worked example
 
@@ -530,6 +558,8 @@ clickable-choices flow. Don't paste raw HTML into the conversation as a substitu
 
 ## What not to do
 
+- **Don't deliver a number you haven't bounded** (Step 4). A clean, canonical query is not
+  evidence the number is right; the validation line is.
 - **Don't guess and caveat.** "Assuming market means state…" buried under a number the
   user will screenshot is not a clarification. Ask.
 - **Don't ask more than once** unless the user's answer opens a genuinely new fork.
@@ -552,6 +582,12 @@ clickable-choices flow. Don't paste raw HTML into the conversation as a substitu
   (cohorts via `customer_order_count`, offers via `claude.loyalty_offer_usage`, promotions
   via `line_item_type = 'promotion'`). Observed 2026-08-04: 75 raw-dataset queries ran
   MCP-labeled through two analyst sessions this way.
+
+## Reference files (read on demand)
+
+| File | Read it when |
+|---|---|
+| [`references/validation.md`](references/validation.md) | a query has returned the number you are about to deliver: containment, p90 bands, the new-item candidate list, the diagnostic ladder, the validation line |
 
 ## When done
 

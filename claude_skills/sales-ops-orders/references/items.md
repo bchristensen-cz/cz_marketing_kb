@@ -52,5 +52,8 @@ sold and 962 of those are still Active in Brink, most of them POS config artifac
 Full column list: [`data_dictionaries/sales_ops.items.md`](../../../data_dictionaries/sales_ops.items.md)
 and [`data_dictionaries/sales_ops.item_daily.md`](../../../data_dictionaries/sales_ops.item_daily.md).
 
-⚠️ There is **no `claude` view over either table yet** — standard users cannot reach them.
-Name it as a mart gap if a user needs it.
+Both tables have `claude` views since 2026-10-26: `claude.items` (straight pass-through) and
+`claude.item_daily` (rolling 3-year window, same rule as the order views). Standard users read
+those; the `ask-a-data-question` validation step (Step 4) benchmarks every item number against
+them. Dictionaries: [`claude.items.md`](../../../data_dictionaries/claude.items.md),
+[`claude.item_daily.md`](../../../data_dictionaries/claude.item_daily.md).

@@ -32,7 +32,7 @@ Braze-focused projects (e.g. **Braze Canvas Creation**) get their own instructio
 ```
 decisions/            Decision ledger (DECISIONS.md) — one row per ruling that more than one project, tab, mart or skill depends on; read after this README
 claude_skills/        Skills — how to query each domain (canonical definitions, joins, gotchas)
-  ask-a-data-question/  START HERE — scope any question via clickable choices before querying
+  ask-a-data-question/  START HERE — scope any question via clickable choices before querying; references/validation.md bounds every number before it is delivered
   sales-ops-orders/   Order & sales data (order_customer, order_lines, order_sequence); references/ holds cohorts, discounts, recipes, gotchas, … read per the table in SKILL.md
   braze-campaigns/    Marketing campaign activity & engagement (braze dataset); references/ holds caveats, holdouts, channel value, …
   sessionm-loyalty/   Loyalty — points, offers, campaign participation (claude.loyalty_*)
@@ -64,6 +64,8 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | `marketing-data-442316.claude.order_customer` | 1 row per order | **Standard users' order table.** Everything below plus sequencing, lifetime metrics, `account_type` |
 | `marketing-data-442316.claude.order_lines` | 1 row per line element | **Standard users' line table.** Carries `business_date` and `store_state` |
 | `marketing-data-442316.claude.store_info` | 1 row per store | Store dimension for standard users — city, zip, open date, comp status, lat/long. Carries `market` as an alias of `store_state` |
+| `marketing-data-442316.claude.items` | 1 row per Brink `item_id` | **Item dimension for standard users** (view over `sales_ops.items`, 3,249 rows, rebuilt 07:30 MT). Resolve a name to its real ids with `avg_unit_price_90d` beside each; `launch_date` (derived: 25% of stores) vs `first_sold_date`; `item_status`; `is_catering_item`; digital menu mapping. The "new item" candidate list and the validation benchmark read it. No partition column |
+| `marketing-data-442316.claude.item_daily` | 1 row per `item_id` x `business_date` | **Item trend and benchmark table** (view over `sales_ops.item_daily`, rolling 3 years). Units, orders, gross, catering slice, combo and modifier line counts per item per day. Partition column is `business_date`. Stores 1111/999 and discount/promotion/surcharge lines already excluded; a week reads in a few MB |
 | `marketing-data-442316.claude.date_dim` | 1 row per calendar date | Date dimension — fiscal calendar (4-4-5 periods), week beginning/ending, holidays, continuous period/week counters. Use the `date-dimensions` skill; its `week_ending` is the **Sunday**, not the CZ Saturday label |
 | `marketing-data-442316.sales_ops.order_customer` | 1 row per order | Sales, orders, channels, customers, loyalty |
 | `marketing-data-442316.sales_ops.order_lines` | 1 row per line element | Menu mix, items, modifiers, combos |
@@ -86,7 +88,7 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 
 Loyalty questions use the `sessionm-loyalty` skill; paid-media questions use the `paid-media`
 skill. Partition columns by domain: `business_date` (order_customer, order_sequence, order_lines,
-ad_spend_daily), `create_date` (loyalty_campaign_participation), `reach_week` (ad_reach_weekly),
+item_daily, ad_spend_daily), `create_date` (loyalty_campaign_participation), `reach_week` (ad_reach_weekly),
 and `activity_date` for filtering loyalty_points_activity.
 
 More marts are being added in the `claude` dataset — documented here as they land.

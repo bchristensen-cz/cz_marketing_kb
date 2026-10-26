@@ -84,6 +84,13 @@ both invisible until a redeploy was attempted from the repo copy.
   both ways, 0 links changed): a robustness change, not a recovery. Safe because
   `pos_transaction_key` ↔ `transaction_id` is 1:1 after `header_trans` (731,353 rows, 731,353
   distinct of each, 0 reuse).
+- **`pos_transaction_key` is in two id spaces, so the join is `coalesce(po.id, bo.id)`.** SessionM
+  writes the Pulse order id (`pulse.orders.id`) for digital orders and the Brink order id
+  (`brink.brinkOrder.Id`) for in-store scans. The header `channel` says which: `'STORE'` or
+  `'<n> - Manual Check-In'` carries a Brink id, a bare numeric channel carries a Pulse id (reported
+  from bhenson@'s staging model 2026-10-25, consistent with this join; not separately re-measured).
+  Anyone joining `sessionM.transaction_headers` to orders on one id space alone loses the other
+  channel silently.
 - **`sm_external_user_map` partitions on the RAW `u.user_id` while selecting `lower(u.user_id)`.**
   Harmless today — the source is 100% lowercase — and `cust_trans`'s dedupe caps any fan-out.
   Partitioning on `lower(u.user_id)` would close it properly (Asana 1216995170178886). Its inner

@@ -4,15 +4,17 @@
 
 | | |
 |---|---|
-| Type | **View** (not materialized) |
+| Type | **View** (not materialized). **Since 2026-10-27 a projection of `claude_pii.order_customer`**, which holds the one view body; this view is `select * except(email, phone, acct_email, acct_phone, sm_email, mapped_email)` over it |
 | Grain | 1 row per order (`brink_order_id`) |
 | Partition column | **`business_date`** — always filter it |
 | Upstream | `sales_ops.order_customer` (base) + `sales_ops.order_sequence` (**since 2026-09-08 also the source of `mapped_cust_id`, `mapped_email`, `mapped_email_domain`, `customer_type`, and the join key for the next two**) + `sales_ops.customer_attribute` + `claude.loyalty_user` (a table since 2026-09-01, refreshed daily 04:30 MT — so `account_type` lags SessionM by up to a day, like the `lifetime_*` columns) |
-| Build script | `sql/claude.order_customer.sql` |
+| Build script | `sql/claude_pii.order_customer.sql` (the body) and `sql/claude.order_customer.sql` (the projection) |
 | History | **2023-01-01 forward** (rolling 3 years — see below) |
 | Created | 2026-07-29 |
 
 > **🚨 Outage 2026-09-08 16:16 → ~16:55 MT.** The base table was dropped and rebuilt without `mapped_cust_id`; this view joined on `oc.mapped_cust_id`, so every query failed with `Name mapped_cust_id not found inside oc` for ~40 minutes. Redeployed keying the `customer_attribute` and `loyalty_user` joins on `os.mapped_cust_id` and re-exposing the four identity columns from `order_sequence`. **Column list unchanged for you** — but `mapped_cust_id` changed *definition* that day (see `sales_ops.order_sequence.md`), so customer counts and cohorts computed before and after 2026-09-08 are not strictly comparable. `lifetime_*` and `account_type` re-key at the 05:00 `customer_attribute` run on 2026-09-09 — until then a few percent of person orders show `lifetime_order_count = 0` (21 of 4,836 on 2026-09-07 at 16:55).
+>
+> **PII boundary (steward rule 2026-10-27, D-046).** This view carries **no raw identifier**: `email`, `phone`, `acct_email`, `acct_phone`, `sm_email` and `mapped_email` were removed and **`mapped_email_hash`** took their place (`to_hex(sha256(lower(trim(mapped_email))))`, the same recipe as `claude.guest_feedback.email_hash` and `claude.loyalty_user.email_hash`, so the three join on the hash). `mapped_email_domain`, `mapped_cust_id`, `pulse_customer_id`, `sm_external_user_id`, the `*_source_*` provenance columns and the `is_sys_*` flags stay; so do `gender`, `birthday` and `age`. A question that needs the address itself ("what is this customer's email", a CAPI or CDI upload) is answered from **`claude_pii.order_customer`**, the same body with the six columns kept, which only five principals can read (see `claude_pii.md`). If you get `Access Denied` on `claude_pii`, you are not one of them: answer with the hash or the key, and route the lookup to customer service. Never paste an address into SQL; hash it in the query (`where mapped_email_hash = to_hex(sha256(lower(trim('guest@example.com'))))`), because query text sits in the job log for 180 days.
 >
 > **This is the table most people should be querying.** Standard access is `dataViewer` on the `claude` dataset only; `sales_ops.order_customer` returns `Access Denied` for everyone except the steward. If you have `sales_ops` access, read `sales_ops.order_customer.md` instead — the two are **not** interchangeable, for the three reasons below.
 
@@ -91,11 +93,11 @@ The deployed view filters both test stores out entirely — a standard user **ca
 > skills. Same rename applied to `claude.order_lines`, which has **no** UTC column at all — join to
 > `order_customer` if you need UTC at line grain.
 
-### Passthrough columns (43)
+### Passthrough columns (37 since 2026-10-27; was 43)
 
 Identical to `sales_ops.order_customer` — **see [`sales_ops.order_customer.md`](sales_ops.order_customer.md) for full descriptions**, deliberately not duplicated here so the two can't drift:
 
-`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime_local`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `discount_amount`, `promotions_amount`, `total_discount_amount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `email`, `phone`, `mapped_email`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date`
+`brink_order_id`, `pulse_order_id`, `is_catering`, `is_guest_order`, `pulse_customer_id`, `sm_external_user_id`, `business_date`, `order_datetime_local`, `order_timestamp_utc`, `store_id`, `store_name`, `store_state`, `destination_id`, `destination`, `source`, `order_source`, `in_store_scan`, `opened_time`, `gross_sales`, `item_gross_sales`, `mods_gross_sales`, `subtotal`, `total_gift_card_amount`, `discount_amount`, `promotions_amount`, `total_discount_amount`, `total_tip_amount`, `total_delivery_tip_amount`, `total_other_tip_amount`, `net_sales`, `rounding`, `tax`, `total_fees_amount`, `total_payment_amount`, `total_change`, `has_order_items`, `mapped_email_domain`, `mapped_cust_id`, `customer_type`, `loyalty_signup_date` (`email`, `phone`, `acct_email`, `acct_phone`, `sm_email` and `mapped_email` are **not** here since 2026-10-27; `sales_ops.order_customer.md` still documents them because they exist on the base table and on `claude_pii.order_customer`)
 
 ⚠️ **Corrected 2026-08-21 against the deployed 57-column view.** Three names in the list above were wrong, all in the direction that makes a query look valid until it runs:
 
@@ -124,10 +126,11 @@ customer email is `pulse.customers.email`, reaching this view only as the first 
 `mapped_email` (steward 2026-08-24). Neither is an identity key; `mapped_cust_id` is. See
 `sales_ops.order_customer.md` → "Order email vs canonical email".
 
-### Added columns (20)
+### Added columns (21 since 2026-10-27)
 
 | Column | Type | Source | Description |
 |---|---|---|---|
+| `mapped_email_hash` | STRING | computed in `claude_pii.order_customer` | **New 2026-10-27.** `to_hex(sha256(lower(trim(mapped_email))))`, 64 hex chars, NULL when `mapped_email` is NULL. The only email-shaped column on this view. Joins to `claude.guest_feedback.email_hash` and `claude.loyalty_user.email_hash` (all three use the cater_-stripped, lower-cased, trimmed address). Count distinct of it is a count of distinct addresses, which is **not** a count of people: `mapped_cust_id` is the person key |
 | `customer_order_count` | INT64 | `order_sequence` | This order's sequence number for the customer. `1` = first order. **`coalesce(…, 0)`** — see the zero trap |
 | `days_since_prev_order` | INT64 | `order_sequence` | Days since that customer's previous order. **`coalesce(…, 0)`** — `0` on a first order *and* on an unidentified order |
 | `lifetime_order_count` | INT64 | `customer_attribute` | Customer's lifetime order count. **`coalesce(…, 0)`** |

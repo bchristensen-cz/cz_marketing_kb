@@ -31,7 +31,7 @@ writing a non-trivial query.
 
 ## Customer service recipes
 
-**Everything one guest has told us** (hash the address in the query; the view holds only the hash):
+**Everything one guest has told us** (hash the address in the query; the view holds only the hash). Since 2026-10-27 the same hash joins to `claude.order_customer.mapped_email_hash` and `claude.loyalty_user.email_hash`, so a feedback-to-orders or feedback-to-loyalty lookup never needs the address on either side. The address and the member's name themselves are in `claude_pii.order_customer` / `claude_pii.loyalty_user`, which only the customer-service grantee and the pipelines can read (`data_dictionaries/claude_pii.md`):
 
 ```sql
 declare email string default 'guest@example.com';

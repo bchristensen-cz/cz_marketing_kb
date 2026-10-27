@@ -103,60 +103,35 @@
 -- customer_attribute reads them through this view.
 -- =====================================================================================
 
+-- =====================================================================================
+-- 2026-10-27 PII REVIEW (steward decision): raw identifiers leave this view.
+-- The full body moved to sql/claude_pii.order_customer.sql and is deployed as
+-- claude_pii.order_customer; THIS view is now a projection of that one. It drops
+--   email, phone, acct_email, acct_phone, sm_email   (cust_map inputs, no analyst use)
+--   mapped_email                                      (the ruled person email)
+-- and carries mapped_email_hash = to_hex(sha256(lower(trim(mapped_email)))) in its place,
+-- the D-042 recipe, so it joins to claude.guest_feedback.email_hash. mapped_email_domain,
+-- mapped_cust_id, pulse_customer_id, sm_external_user_id, the *_source_* provenance columns
+-- and the is_sys_* flags stay. gender / birthday / age stay (steward call 2026-10-27).
+-- Live definition diffed against this file before the change: identical.
+--
+-- Rule from here on: claude.* carries keys, hashes and domains, never a raw identifier.
+-- Anyone who needs the address reads claude_pii.order_customer (dataset grant, four
+-- principals + the dashboard scheduler) and joins on brink_order_id + business_date or
+-- mapped_cust_id. The only column this file may ever change is the except list.
+-- View is 75 columns (80 - 6 + mapped_email_hash).
+-- =====================================================================================
+
 create or replace view `marketing-data-442316`.claude.order_customer as
 select
-oc.* except(brink_net_sales)
-, os.mapped_cust_id
-, os.mapped_email
-, os.mapped_email_domain
-, os.mapped_cust_id_source_system
-, os.mapped_cust_id_source_updated_at
-, os.mapped_email_source_system
-, os.mapped_email_source_updated_at
-, os.customer_type
-, coalesce(os.customer_order_count, 0) as customer_order_count
-, coalesce(os.days_since_prev_order, 0) as days_since_prev_order
-, coalesce(ca.lifetime_order_count, 0) as lifetime_order_count
-, coalesce(ca.lifetime_catering_order_count, 0) as lifetime_catering_order_count
-, coalesce(ca.lifetime_guest_order_count, 0) as lifetime_guest_order_count
-, ca.lifetime_net_sales
-, ca.lifetime_gross_sales
-, ca.lifetime_avg_check
-, ca.first_order_date
-, ca.first_order_datetime
-, ca.last_order_date
-, ca.last_order_datetime
-, ca.days_since_last_order
-, ca.customer_tenure_days
-, ca.orders_l365
-, ca.net_sales_l365
-, ca.catering_orders_l365
-, ca.catering_net_sales_l365
-, ca.is_app_user
-, ca.app_user_type
-, ca.app_purchase_mode
-, ca.guest_status
-, ca.gender
-, ca.birthday
-, ca.age
-, lu.member_program as account_type
-from `marketing-data-442316`.sales_ops.order_customer oc
-	left join `marketing-data-442316`.sales_ops.order_sequence os
-	on os.brink_order_id = oc.brink_order_id
-	and os.business_date = oc.business_date
-		left join `marketing-data-442316`.sales_ops.customer_attribute ca
-		on ca.mapped_cust_id = os.mapped_cust_id
-			left join `marketing-data-442316`.claude.loyalty_user lu
-			on lu.sm_external_user_id = os.mapped_cust_id
-where 1=1
-and oc.business_date >= date_trunc(date_sub(current_date, interval 3 year), year)
-and oc.store_id not in (1111, 999)
+* except(email, phone, acct_email, acct_phone, sm_email, mapped_email)
+from `marketing-data-442316`.claude_pii.order_customer
 ;
 
 
 -- =====================================================================================
--- Post-deploy validation — grain must be preserved.
--- Expect zero rows. Any row means a join fanned out.
+-- Post-deploy validation.
+-- 1. Grain: expect zero rows.
 -- =====================================================================================
 -- select
 --   oc.brink_order_id
@@ -166,4 +141,13 @@ and oc.store_id not in (1111, 999)
 -- group by 1
 -- having count(*) > 1
 -- order by count(*) desc
+-- ;
+-- 2. Identifier sweep: expect zero rows. Run after ANY redeploy of this view or of
+--    claude_pii.order_customer (a column added there flows through `select *`).
+-- select
+--   c.table_name
+-- , c.column_name
+-- from `marketing-data-442316`.claude.INFORMATION_SCHEMA.COLUMNS c
+-- where 1=1
+-- and regexp_contains(c.column_name, r'^(email|phone|acct_email|acct_phone|sm_email|mapped_email|full_email|first_name|last_name)$')
 -- ;

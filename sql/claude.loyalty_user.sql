@@ -20,7 +20,24 @@
 -- real address for comms and for comparing to order_customer.mapped_email (which is also stripped).
 -- =====================================================================================
 
-create or replace table `marketing-data-442316.claude.loyalty_user` 
+-- =====================================================================================
+-- 2026-10-27 PII REVIEW (steward decision): this ONE scheduled query now writes TWO tables.
+--   claude_pii.loyalty_user  the full spine, exactly the table claude.loyalty_user used to be,
+--                            plus email_hash. Readable only by the claude_pii grantees.
+--   claude.loyalty_user      a projection of it: no full_email, email, first_name, last_name.
+--                            Keeps email_hash, email_domain, is_cater_email, birthdate, zip,
+--                            country and every program / tier column, so every existing join
+--                            (sm_external_user_id, user_id) and the five loyalty_* views are
+--                            unchanged.
+-- email_hash = to_hex(sha256(email)) on the cater_-stripped, lower/trimmed address, i.e. the same
+-- recipe as claude_pii.order_customer.mapped_email_hash and claude.guest_feedback.email_hash, so
+-- the three join on the hash. Identity matching against SessionM still needs full_email: read
+-- claude_pii.loyalty_user for that.
+-- Deployed as scheduled query 'claude loyalty_user update' (transfer config 6ada7734-0000-2687-
+-- 83ee-94eb2c1f2060), daily 04:30 America/Denver. The deployed text is this whole file.
+-- =====================================================================================
+
+create or replace table `marketing-data-442316.claude_pii.loyalty_user`
 cluster by sm_external_user_id, email, member_program
 as 
 
@@ -112,6 +129,7 @@ select
 -- an identity key: 39,500 stripped catering addresses collide with a real individual
 -- account, which is the exact collision the prefix exists to prevent.
 , regexp_replace(lower(trim(u.email)), r'^cater_', '') as email
+, to_hex(sha256(regexp_replace(lower(trim(u.email)), r'^cater_', ''))) as email_hash
 , starts_with(lower(trim(u.email)), 'cater_') as is_cater_email
 , u.first_name
 , u.last_name
@@ -171,4 +189,15 @@ qualify row_number() over(
   order by u.updated_at desc, u.registered_timestamp desc, u.user_id
 ) = 1
    or cz.external_user_id is null
+;
+
+-- =====================================================================================
+-- claude.loyalty_user: the redacted projection standard users read. Same grain, same keys.
+-- =====================================================================================
+create or replace table `marketing-data-442316.claude.loyalty_user`
+cluster by sm_external_user_id, email_hash, member_program
+as
+select
+  * except(full_email, email, first_name, last_name)
+from `marketing-data-442316.claude_pii.loyalty_user`
 ;

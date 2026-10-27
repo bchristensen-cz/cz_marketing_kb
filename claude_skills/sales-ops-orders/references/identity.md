@@ -9,9 +9,10 @@ Guest checkout (web/mobile-web ordering without signing in) went live around **2
 
 ```sql
 and oc.order_source in ('Web', 'Mobile Web')   -- `source` on the legacy table
-and oc.email is null
-and oc.mapped_email is null
+and oc.mapped_cust_id is null                    -- was `oc.email is null and oc.mapped_email is null`
 ```
+
+> **2026-10-27 (D-046):** `claude.order_customer` no longer carries `email` or `mapped_email`; use `mapped_cust_id is null` (equivalent: a mapped email always comes with a mapped id) or `mapped_email_hash is null`. The original two-line test still works on `sales_ops.order_customer` + `order_sequence` and on `claude_pii.order_customer`.
 
 > **Corrected 2026-07-28.** This block previously said `order_source in ('mobile_web_source', 'web_source')`. **Those values do not exist** — the filter silently returned **zero rows**, so any answer built on it reported "no guest-checkout orders" rather than failing. The real values are `'Web'` and `'Mobile Web'` (verified against `business_date = 2026-07-27`, and they always matched `data_dictionaries/sales_ops.order_customer.md`). If you produced a guest-checkout number before this date, recheck it.
 >

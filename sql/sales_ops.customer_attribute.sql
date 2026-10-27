@@ -40,7 +40,10 @@ select
 -- moved mapped_cust_id / customer_type off sales_ops.order_customer onto sales_ops.order_sequence;
 -- the view joins them back (and excludes stores 1111/999, which the filter below repeats).
 -- Scheduled 05:20 MT, after the 05:02 order_customer + order_sequence full rebuild.
-from `marketing-data-442316`.claude.order_customer oc
+-- 2026-10-27: reads claude_pii.order_customer, the full view. claude.order_customer no longer
+-- carries mapped_email (PII review); claude_pii.order_customer is the same body with the raw
+-- identifier columns kept. Runs as the steward, who reads claude_pii as project owner.
+from `marketing-data-442316`.claude_pii.order_customer oc
 where 1=1
 and oc.business_date between history_start and asof_date
 and oc.store_id not in (1111, 999)

@@ -110,6 +110,7 @@ Cost is not a tiebreaker either — 45 MB for the prefix scan vs 136 MB for the 
 
 Two related traps:
 
+- **Since 2026-10-27 (D-046) `claude.loyalty_user` has no `full_email`, `email`, `first_name` or `last_name`, and the five `loyalty_*` views have no `email` column.** `email_hash` (sha256 of the stripped address, hex) and `email_domain` remain; the address and the name live in `claude_pii.loyalty_user`, readable only by the customer-service and pipeline principals listed in `data_dictionaries/claude_pii.md`. A standard session answers "who is this member" with `sm_external_user_id` / `user_id` and routes the name lookup to customer service.
 - **`email` is never an identity key (renamed 2026-09-01 — it is the old `email_normalized`, `cater_` stripped).** 39,500 of the 90,161 stripped catering addresses collide with a real individual account — the exact collision the prefix exists to prevent; 45,544 `email` values are shared by 2+ members. Match SessionM identity on `sm_external_user_id` or `full_email` (the old `email`, prefix intact); use `email` for display, outbound comms, and comparing to `order_customer.mapped_email`. `email_normalized` no longer exists — selecting it errors.
 - **`catering_last_exited_date` being non-null does not mean lapsed.** 2,869 members have an exit date but only 181 are currently out; the rest exited and rejoined. Lapsed = `was_ever_catering_member and not is_catering_member`.
 

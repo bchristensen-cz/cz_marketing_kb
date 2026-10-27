@@ -8,10 +8,12 @@
 | Refresh | Scheduled query, daily **04:30 America/Denver**, after the SessionM load. Rows are as-of that morning's SessionM extract |
 | Grain | **1 row per `sm_external_user_id`** (changed 2026-07-29 — was 1 row per `user_id`; see the duplicate-external-id gotcha) |
 | Upstream | `sessionM.users`, `sessionM.external_user_mappings`, `sessionM.tier_member_history`, `sessionM.tier_levels` |
-| Build script | `sql/claude.loyalty_user.sql` (moved out of `claude.loyalty_views.sql` 2026-09-01) |
+| Build script | `sql/claude.loyalty_user.sql` (moved out of `claude.loyalty_views.sql` 2026-09-01). **Since 2026-10-27 the same script writes two tables: `claude_pii.loyalty_user` (full) first, then this table as `select * except(full_email, email, first_name, last_name)` of it** |
 | Created | 2026-07-28 (view); materialized 2026-09-01 |
 
 > **Why it became a table (2026-09-01).** As a view it re-ran three window-function CTEs over ~6.7M raw SessionM rows on every evaluation — ~2.6M slot-ms — and `claude.order_customer` left-joins it for `account_type`, so every order query paid that price whether or not it selected the column (483k slot-ms for a 30-day aggregate; 2.4k after materializing — a 200× reduction, 6.8 s → 0.65 s). SessionM loads once daily, so the view bought no freshness. Post-build grain verified 2026-09-01: 1,800,422 rows = 1,800,047 distinct `sm_external_user_id` + 375 NULL, 0 duplicates.
+
+> **PII boundary (steward rule 2026-10-27, D-046).** `full_email`, `email`, `first_name` and `last_name` are **gone from this table**. `email_hash` replaces the address: `to_hex(sha256(email))` on the cater_-stripped, lower-cased, trimmed address, the same recipe as `claude.order_customer.mapped_email_hash` and `claude.guest_feedback.email_hash`, so all three join on it. `email_domain`, `is_cater_email`, `birthdate`, `zip` and `country` stay. The address and the name live in **`claude_pii.loyalty_user`** (identical grain and keys, all 28 columns) for the five principals granted that dataset; SessionM identity matching, which needs `full_email`, happens there. The five `loyalty_*` views dropped their `email` column the same day; join this table on `user_id` for `email_hash`.
 
 ## Columns
 
@@ -20,12 +22,13 @@
 | `user_id` | STRING | SessionM user id (GUID). Primary key. Join key for all other `loyalty_*` views |
 | `sm_external_user_id` | INTEGER | Cafe Zupas external id. **Joins to `sales_ops.order_customer.sm_external_user_id`** — verified 100% match. Sourced from `external_user_mappings` where `external_user_id_type = 'cafezupas'`; the most recently updated mapping wins when a member has more than one |
 | `player_id` | INTEGER | SessionM internal player id. **Not** the order-mart join key — only ~23% of order-mart ids match it. Present for upstream debugging only |
-| `full_email` | STRING | **Renamed from `email` 2026-09-01.** The raw SessionM login address, lowercased and trimmed, `cater_` prefix intact. Unique per member (1,794,792 distinct of 1,800,422). **This is the SessionM identity key** |
-| `email_domain` | STRING | Part after the `@` of `full_email` |
-| `email` | STRING | **Renamed from `email_normalized` 2026-09-01.** `full_email` with a leading `cater_` stripped — the person's real address. Use for comms and for comparing to `order_customer.mapped_email` (also stripped). **Not unique**: 91,829 rows are stripped and 45,544 addresses are shared by 2+ members (a catering login and the same person's individual account). **Never a join key.** See the catering-alias gotcha |
-| `is_cater_email` | BOOLEAN | `full_email` starts with `cater_`. A *provisioning* artifact, **not** a membership flag — use `is_catering_member` for that |
-| `first_name` | STRING | |
-| `last_name` | STRING | |
+| `full_email` | STRING | **`claude_pii.loyalty_user` only since 2026-10-27.** The raw SessionM login address, lowercased and trimmed, `cater_` prefix intact. Unique per member. **This is the SessionM identity key** |
+| `email_domain` | STRING | Part after the `@` of the address |
+| `email` | STRING | **`claude_pii.loyalty_user` only since 2026-10-27.** The address with a leading `cater_` stripped, i.e. the person's real address. **Not unique**: 91,829 rows are stripped and 45,544 addresses are shared by 2+ members (a catering login and the same person's individual account). **Never a join key.** See the catering-alias gotcha |
+| `email_hash` | STRING | **New 2026-10-27.** `to_hex(sha256(email))` of the stripped address above; 64 hex chars, never NULL. Joins to `claude.order_customer.mapped_email_hash` and `claude.guest_feedback.email_hash`. Inherits the non-uniqueness of `email`: 1,793,519 distinct hashes on 1,841,046 rows (2026-10-27 build) |
+| `is_cater_email` | BOOLEAN | The address starts with `cater_`. A *provisioning* artifact, **not** a membership flag — use `is_catering_member` for that |
+| `first_name` | STRING | **`claude_pii.loyalty_user` only since 2026-10-27** |
+| `last_name` | STRING | **`claude_pii.loyalty_user` only since 2026-10-27** |
 | `birthdate` | DATE | Self-reported. Drives the Birthday Free Dessert offer |
 | `zip` | STRING | |
 | `country` | STRING | |

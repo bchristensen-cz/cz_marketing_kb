@@ -62,6 +62,7 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | Table | Grain | Use for |
 |---|---|---|
 | `marketing-data-442316.claude.order_customer` | 1 row per order | **Standard users' order table.** Everything below plus sequencing, lifetime metrics, `account_type` |
+| `marketing-data-442316.claude_pii.*` | same grain as the `claude` twin | **Grant-only (D-046, 2026-10-27).** `claude_pii.order_customer` and `claude_pii.loyalty_user` are the full objects WITH raw email, phone and name; the `claude` twins are their redactions and carry `mapped_email_hash` / `email_hash` instead. Readable by five principals (CS, CAPI, CDI, tkxel, dashboard scheduler) and the steward; `Access Denied` is the expected answer for everyone else. See `data_dictionaries/claude_pii.md` |
 | `marketing-data-442316.claude.order_lines` | 1 row per line element | **Standard users' line table.** Carries `business_date` and `store_state` |
 | `marketing-data-442316.claude.store_info` | 1 row per store | Store dimension for standard users — city, zip, open date, comp status, lat/long. Carries `market` as an alias of `store_state` |
 | `marketing-data-442316.claude.items` | 1 row per Brink `item_id` | **Item dimension for standard users** (view over `sales_ops.items`, 3,249 rows, rebuilt 07:30 MT). Resolve a name to its real ids with `avg_unit_price_90d` beside each; `launch_date` (derived: 25% of stores) vs `first_sold_date`; `item_status`; `is_catering_item`; digital menu mapping. The "new item" candidate list and the validation benchmark read it. No partition column |
@@ -72,7 +73,7 @@ artifacts/            Click-to-answer HTML report builders (Cowork artifacts)
 | `marketing-data-442316.sales_ops.order_sequence` | 1 row per identified-person order | Order sequencing, first-time vs repeat, recency, lifetime counts |
 | `marketing-data-442316.sales_ops.store_info` | 1 row per store | Store attributes (name, state, timezone). **"Market" = `store_state`** — there is no market/region/DMA column |
 | `marketing-data-442316.braze.*` (69 tables) | 1 row per message event | Campaign activity & engagement — use the `braze-campaigns` skill's templates, don't hand-roll unions |
-| `marketing-data-442316.claude.loyalty_user` | 1 row per loyalty member | Loyalty identity, program (catering vs individual), tiers |
+| `marketing-data-442316.claude.loyalty_user` | 1 row per loyalty member | Loyalty identity (`user_id`, `sm_external_user_id`, `email_hash`, `email_domain`; no address or name since 2026-10-27), program (catering vs individual), tiers |
 | `marketing-data-442316.claude.loyalty_points_balance` | 1 row per member per point account | Current points balance, outstanding liability |
 | `marketing-data-442316.claude.loyalty_points_expiring` | 1 row per member per expiry date | Points about to expire, expiration forecasting |
 | `marketing-data-442316.claude.loyalty_points_activity` | 1 row per point transaction | Points issued / redeemed / expired over time |

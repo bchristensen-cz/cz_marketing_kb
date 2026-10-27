@@ -14,8 +14,10 @@
 --     The whole point ledger is 11.6M rows / ~1.5 GB, so even the FIFO
 --     lot allocation in loyalty_points_expiring runs cheaply on the fly. Views cannot go
 --     stale, which avoids the repo-committed-but-not-deployed gap.
---   * Identity is exposed three ways on every view: sessionM user_id, sm_external_user_id
---     (joins to sales_ops.order_customer.sm_external_user_id), and email.
+--   * Identity is exposed two ways on every view: sessionM user_id and sm_external_user_id
+--     (joins to claude.order_customer.sm_external_user_id / mapped_cust_id). The email column
+--     was REMOVED from all five views on 2026-10-27 (PII review): join claude.loyalty_user for
+--     email_hash / email_domain, or claude_pii.loyalty_user (grantees only) for the address.
 --   * external_user_mappings holds 'cafezupas' and 'amperity' id types. Cafe Zupas uses
 --     ONLY 'cafezupas' (steward, 2026-07-28) — the amperity ids are not used and are not
 --     exposed. Always filter external_user_id_type = 'cafezupas'.
@@ -72,7 +74,6 @@ with account_rows as (
 select
   ar.user_id
 , lu.sm_external_user_id
-, lu.email
 , pa.name as point_account_name
 , ar.point_account_id
 , ar.current_balance
@@ -182,7 +183,6 @@ with ledger as (
 select
   we.user_id
 , lu.sm_external_user_id
-, lu.email
 , we.point_account_name
 , we.expires_on
 , date_add(we.expires_on, interval 1 day) as sessionm_sweep_date
@@ -199,7 +199,7 @@ left join `marketing-data-442316`.claude.loyalty_user lu
   on lu.user_id = we.user_id
 where 1=1
   and we.points_remaining > 0
-group by 1,2,3,4,5,6,7,8,13,14
+group by 1,2,3,4,5,6,7,12,13
 ;
 
 
@@ -230,7 +230,6 @@ select
   upt.point_transaction_id
 , upt.user_id
 , lu.sm_external_user_id
-, lu.email
 , pa.name as point_account_name
 , upt.point_account_id
 , date(upt.time_of_occurrence) as activity_date
@@ -311,7 +310,6 @@ select
   uo.user_offers_id
 , uo.user_id
 , lu.sm_external_user_id
-, lu.email
 , uo.offer_id
 , uo.root_offer_id
 , o.name as offer_name
@@ -382,7 +380,6 @@ select
   ca.create_date
 , ca.user_id
 , lu.sm_external_user_id
-, lu.email
 , ca.campaign_id
 , cat.name as campaign_name
 , cat.external_name as campaign_external_name

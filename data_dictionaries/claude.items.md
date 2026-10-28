@@ -38,5 +38,7 @@ No partition column; full scans are fine. Filter the partition on the table you 
    SurchargeId on `discount` / `promotion` / `surcharge` lines, not an item id. Join on
    `line_item_type in ('item', 'modifier', 'fee', 'tip', 'gift_card')`.
 
-`rev_center_name` carries case drift across stores (`COMBOS` and `Combos` are both real); group
-on `upper(rev_center_name)` when you need one row per category.
+`rev_center_name` has two spellings per category (`COMBOS` and `Combos` are both real), and the
+split is by era, not by store (measured 2026-10-28): ALL-CAPS ids last sold 2023-02-16 (`COMBOS`
+2023-05-24), mixed-case ids first sold 2023-01-06 and are the only ones live. Filter and group on
+`upper(rev_center_name)` whenever the window reaches back before 2023-02-17.

@@ -31,7 +31,7 @@ intent (steward call 2026-09-14).
 | `item_size` | STRING | Same 10-value domain as `order_lines.item_size`, no NULLs. Per-item distribution 2026-09-14: `Not Sized` 2,324 / `Large` 428 / `Regular` 201 / `Kids` 144 / `Half` 70 / `Tray` 41 / `Quart` 16 / `Party` 13 / `Mini` 4 / `Medium` 1. ⚠️ `Quart` (16) and `Medium` (1) exist **here** but have never appeared on an order line — configured, never sold |
 | `item_name_raw` | STRING | The winning Brink name before parsing, size prefix and any `.` / `--` lead intact. Use it when you need the name a store actually sees |
 | `rev_center_id` | INTEGER | From the winning store's row |
-| `rev_center_name` | STRING | 37 distinct, 0 NULLs. Note case drift across stores: `COMBOS` and `Combos` are both real |
+| `rev_center_name` | STRING | 37 distinct, 0 NULLs. Two spellings per category (`COMBOS` / `Combos`), split by era not store (measured 2026-10-28): ALL-CAPS ids last sold 2023-02-16 (`COMBOS` 2023-05-24), mixed-case ids first sold 2023-01-06. Use `upper(rev_center_name)` for any window before 2023-02-17 |
 | `item_type` | STRING | Same taxonomy as `order_lines.item_type`: `Other` 2,903 / `Entree` 186 / `Beverage` 151 / `Kids Meals` 2 |
 | `first_sold_date` | DATE | First business date the item ever sold. NULL when `has_ever_sold` is false |
 | `launch_date` | DATE | **Derived, not given** — see the launch-date section |

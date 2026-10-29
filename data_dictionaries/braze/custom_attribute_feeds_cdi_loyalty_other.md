@@ -27,6 +27,18 @@ _Active - 34,443 rows, 0.00 GB, 3 columns, table._ Custom attribute feed of cust
 | `l90_avg_ticket` | Average ticket (order value) over the last 90 days. |
 | `l90_netsales` | Net sales over the last 90 days. |
 
+### `cdi_ldip_items` / `cdi_ldip_items_v`
+
+_Active since 2026-10-29. One row per (person, item): 5,320,531 rows, 944,929 people, 59 attributes on the first load._ `ldip_<item>` = the last datetime (UTC) the person bought that entree, plus `ldip_kids_combo`. Build: [`sql/braze.cdi_ldip_items.sql`](../../sql/braze.cdi_ldip_items.sql), scheduled query `braze cdi_ldip_items (ldip_ last item purchase)` (config `6aeff49a-0000-2b24-8d57-7474463c9685`, every day 13:00 UTC = 07:00 MDT / 06:00 MST). **Braze CDI reads the view `cdi_ldip_items_v`**; the table carries the state.
+
+| Column | Type | Description |
+|---|---|---|
+| `UPDATED_AT` | TIMESTAMP | When the build saw the value change (run time), **not** the purchase time. That is what lets late orders, people new to Braze and items newly over the buyer floor sync without landing behind the CDI watermark. |
+| `external_id` | STRING | `mapped_cust_id`; only ids already in `braze.users`, so CDI never creates profiles. |
+| `PAYLOAD` | JSON | One key per row, e.g. `{"ldip_lobster_bisque":"2026-10-22T00:47:07.932Z"}`. |
+
+Rules: `item_type = 'Entree'` in Bowls / Salads / Sandwiches / Soups, Try 2 combo slots included (digital `modifier` lines), kids entrees excluded, `Kids Combo` header once per order; `customer_type = 'person'`, not catering, `% Box` items excluded, stores 1111/999 out; 730-day window; an attribute ships only with >= 500 buyers in the window (drops retired / test stragglers with no list). The attribute name is `ldip_` + the lowercased, underscored `item_name`, after a small cosmetic `name_map` that fixes POS abbreviations and size-split names (`BBQ Ck Salad` -> `bbq_chicken_salad`, `Strwbry` -> `strawberry`). New items need no edit; renaming one later leaves the old attribute in Braze at its last value. Pulse menu names were tested as the name source and rejected (Kids Combo -> `SPECIAL ITEM`, suffixes dropped).
+
 ### `cdi_cup_sales_data`
 
 _Active - 671 rows, 0.00 GB, 3 columns, table._ Nested custom attribute feed of per-cup-product order counts and latest order dates (seasonal dessert cups).

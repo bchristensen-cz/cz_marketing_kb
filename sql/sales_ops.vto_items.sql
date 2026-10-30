@@ -1,5 +1,5 @@
 -- sales_ops.vto_items
--- Items launched in the last 91 days. Scheduled query 'create or replace vto items' (every mon 13:00 UTC).
+-- Items launched in the last 91 days. Scheduled query 'create or replace vto items' (every mon 15:00 UTC, after the 07:30 MT item_daily rebuild).
 -- Downstream: braze_ca_unique_vto_items_purchased -> braze.is_vto_cust (keys on item_grp_name, so sizes collapse).
 --
 -- Rewritten 2026-10-30 off sales_ops.item_daily / sales_ops.items instead of two order_lines scans

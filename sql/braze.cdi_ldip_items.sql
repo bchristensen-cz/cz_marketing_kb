@@ -1,4 +1,4 @@
--- braze cdi: ldip_<item> = last datetime the person bought each entree (plus ldip_kids_combo)
+-- braze cdi: ldip_<item> = last datetime the person bought each entree and dessert (plus ldip_kids_combo)
 -- ldip_cc_<item> = same for a short product list, also crediting unidentified orders by card match
 -- scheduled daily after the 5am order reload. braze cdi reads braze.cdi_ldip_items_v
 -- updated_at = when this job saw the value change, so late orders, new braze users and items that
@@ -141,8 +141,10 @@ and oc.order_timestamp_utc is not null
 and (
 	(ol.item_type = 'Entree' and ol.rev_center_name in ('Bowls','Salads','Sandwiches','Soups'))
 	or ol.item_name = 'Kids Combo'
+	or ol.rev_center_name = 'Desserts'
 	)
 and ol.item_name not like '% Box'
+and coalesce(ol.parent_rev_center_name, '') not in ('Box Lunches', 'Party Trays & Food')
 and cast(oc.mapped_cust_id as string) in (select bu.external_id from `marketing-data-442316`.braze.users bu)
 group by 1, 2
 -- buyer floor drops retired / test stragglers without a list; a new entree clears it on day one

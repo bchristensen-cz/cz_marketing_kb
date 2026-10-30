@@ -42,7 +42,8 @@ from `marketing-data-442316`.claude.order_lines ol
 	on nm.item_name = trim(ol.item_name)
 where ol.business_date >= current_date('America/Denver') - 730
 and oc.business_date >= current_date('America/Denver') - 730
-and oc.customer_type = 'person'
+-- internal = @cafezupas.com / tkxel staff, kept for braze testing; kiosk (%outdoor%@cafezupas.com) stays out
+and oc.customer_type in ('person', 'internal')
 and not oc.is_catering
 and oc.store_id not in (1111, 999)
 and oc.mapped_cust_id is not null

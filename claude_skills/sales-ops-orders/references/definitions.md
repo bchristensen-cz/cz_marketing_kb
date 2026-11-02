@@ -19,6 +19,23 @@ Do not guess these, and do not rebuild the channel rollup yourself. Live values 
 
 **Anti-pattern — do not reconstruct `revenue_category` from `destination`.** `revenue_category` is the canonical rollup and is already on `order_customer`. Hand-rolled `case when destination like '%Cater%' … end` classifiers were observed in analyst SQL 2026-07-27; they drift from the mart and are only needed on the legacy `OrderCustomer` table, which you should not be using. If a destination isn't landing in the category you expect, raise it as a `KB finding:` task instead of writing your own CASE.
 
+### "Drive-thru" = four `destination` values (steward definition 2026-10-30, cz-dashboard Platform panel)
+
+`revenue_category` has no drive-thru bucket, so a drive-thru question is the one case where `destination` is the right column. Use exactly this list, on `order_customer` (or joined to it), with catering excluded as usual:
+
+```sql
+and oc.destination in ('Drive Thru', 'Good Life Lane', 'DT Order', 'Kiosk Drive Thru')
+```
+
+| `destination` | What it is |
+|---|---|
+| `Drive Thru` | kiosk-from-the-car orders and register-keyed window orders |
+| `Good Life Lane` | mobile-thru: ordered on app / web, picked up in the lane |
+| `DT Order` | register drive-thru, last seen 2026-08-15 |
+| `Kiosk Drive Thru` | the kiosk's name until 2023-02-14 |
+
+Not drive-thru: Curbside and `Fundraiser Drive-Thru`. The path (mobile-thru / kiosk / register) is `order_source`, read alongside, not a different destination list. Source of record: `cz-dashboard/sql/26_platform_day.sql` (`dashboard.platform_day.dt_orders`), so a chat answer and the wall board agree. Do not substitute Brink `DestinationId` lists or a `like '%drive%'` match (both seen in user SQL 2026-10-30); the like-match drags in `Fundraiser Drive-Thru`.
+
 ### The `customer_type` rule (steward rule 2026-07-24)
 
 `order_customer.customer_type` classifies the customer **on each order** as `person`, `kiosk`, `internal`, or `aggregator` (NULL when unidentified). **38% of identified orders belong to non-person ids** — shared outdoor-kiosk terminal accounts, employee/developer accounts, and the third-party ordering funnel (ezcater / doordash / itsacheckmate), dominated by pulse id `19192` at ~108K orders a month across 89 stores.

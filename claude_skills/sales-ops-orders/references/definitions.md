@@ -36,6 +36,18 @@ and oc.destination in ('Drive Thru', 'Good Life Lane', 'DT Order', 'Kiosk Drive 
 
 Not drive-thru: Curbside and `Fundraiser Drive-Thru`. The path (mobile-thru / kiosk / register) is `order_source`, read alongside, not a different destination list. Source of record: `cz-dashboard/sql/26_platform_day.sql` (`dashboard.platform_day.dt_orders`), so a chat answer and the wall board agree. Do not substitute Brink `DestinationId` lists or a `like '%drive%'` match (both seen in user SQL 2026-10-30); the like-match drags in `Fundraiser Drive-Thru`.
 
+### Tips: three columns on `order_customer`, never raw `brinkOrderPayment` (added 2026-11-03, query-log review)
+
+Tips are already in the marts. A tip question reads `order_customer` (or `claude.order_customer`), filtered on `business_date` as usual:
+
+| Column | Mechanism |
+|---|---|
+| `total_tip_amount` | tips entered on the payment (`brinkOrderPayment.TipAmount`, deleted payments excluded by the build) |
+| `total_delivery_tip_amount` | tips rung as the delivery-tip item (item id 640943560) |
+| `total_other_tip_amount` | tips rung as any other tip item |
+
+These are separate mechanisms (see the `sales_ops.order_customer` dictionary): report them side by side and do not add them blindly. At line level the tip items are `order_lines` rows with `line_item_type = 'tip'` (names seen in user SQL: `CZ Tip`, `Touch Ordering Tip`); read `amount` and keep them out of any sales sum. Seen 2026-11-02: an analyst rebuilt payment tips from raw `brinkOrderPayment` + `brinkOrder` because no skill pointed here. Tip **distribution to employees** (`brink.TipDivisionForEmployeeReport`) and labor hours are not in the marts: that is an open scope call (Asana 1220138577786046), so say so rather than querying raw.
+
 ### The `customer_type` rule (steward rule 2026-07-24)
 
 `order_customer.customer_type` classifies the customer **on each order** as `person`, `kiosk`, `internal`, or `aggregator` (NULL when unidentified). **38% of identified orders belong to non-person ids** — shared outdoor-kiosk terminal accounts, employee/developer accounts, and the third-party ordering funnel (ezcater / doordash / itsacheckmate), dominated by pulse id `19192` at ~108K orders a month across 89 stores.

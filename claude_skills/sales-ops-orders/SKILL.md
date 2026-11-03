@@ -117,7 +117,7 @@ Each file below is read when its trigger applies. Nothing below is optional once
 | [`references/clarifications.md`](references/clarifications.md) | every question: store exclusion by layer, date, catering, delivery scope |
 | [`references/sql_style.md`](references/sql_style.md) | before the first SQL of the session; join patterns |
 | [`references/claude_views.md`](references/claude_views.md) | what the `claude` views add or change; `claude` vs `sales_ops` disagreements; the folded lifetime / sequence columns and their zeros |
-| [`references/definitions.md`](references/definitions.md) | `order_source` / `revenue_category` values (incl. Fundraiser), the drive-thru destination list, `customer_type`, "loyalty orders", app users |
+| [`references/definitions.md`](references/definitions.md) | `order_source` / `revenue_category` values (incl. Fundraiser), the drive-thru destination list, where tips live, `customer_type`, "loyalty orders", app users |
 | [`references/net_sales.md`](references/net_sales.md) | decomposing, validating or reconciling net sales |
 | [`references/item_questions.md`](references/item_questions.md) | any item question: named products, sizes, combos, discount/promotion lines, promotion or discount-program totals |
 | [`references/recipes.md`](references/recipes.md) | you are about to write SQL for sales, menu mix, combos, modifiers, VTO/limited-time items, store or channel breakdowns, fundraisers |

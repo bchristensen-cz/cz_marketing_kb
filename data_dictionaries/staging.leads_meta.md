@@ -18,7 +18,17 @@
 - Campaigns: `FF - Lead Generation - New Stores` 1,285, `Lead Generation - New Stores 2026` 716, `FF - Lead Generation - College Stores Pre-Launch` 278, `FF - Lead Generation - U of M New Store` 244, `Lead Generation - OSU` 34, `Lead Generation - ASU` 19, blank 4. Forms: `Lead Form - New Store - Generic` 2,342, `Lead Form - U of M` 238.
 - **Ties to Meta within 2% per form campaign** (Meta-reported leads: 1,287 / 278 / 236 / 34 / 18), so the sheet is complete for instant-form campaigns. `Lead Generation - New Stores 2026` reports 2,313 website (pixel) leads in Meta against 716 form rows here: only its form leads land in this sheet.
 - `sent_to_braze` starts **2025-12-17** (939 earlier leads backfilled that day); after that every lead is pushed the same day it arrives.
-- **Nothing after 2026-03-26.** The live campaign `FF - Lead Gen - New Stores` (since 2026-08-03, $17.6k, 7,049 Meta "lead" results) has no rows. Either its leads are website leads that never pass through this process, or the feed into the sheet stopped. Open question for the steward.
+- **Nothing after 2026-03-26, but the leads still reach Braze.** The sheet stopped; the process now lands every lead in Braze as the custom event `social_signup` (resolved 2026-11-04, see below). The live campaign `FF - Lead Gen - New Stores` (since 2026-08-03) shows up there as 5,984 Meta sign-ups from 2026-08-01 to 2026-11-04.
+
+## The Braze side: `social_signup` event and `signup_info` attribute (the better cohort source)
+
+- **`braze.customevent` where `name = 'social_signup'`** (workspace `cafe_zupas`): first event 2025-10-22, still daily. `properties` JSON carries `signup_platform` (`fb`, `ig`, `tiktok`, `snapchat`, occasionally `ig_2` / `ig_3` / blank), `signup_form` (store name) and `signup_campaign`. 26,047 events / 13,377 Braze users to 2026-11-04. **About half the events have no `external_user_id`** (the profile was alias-only when the event fired); map `user_id` to `braze.users.braze_id` to get the current `external_id`.
+- **`braze.users.custom_attributes.signup_info`**: object with the same three keys, on 13,102 profiles. 12,088 also have the event; 1,014 have the attribute only and therefore **no sign-up date** (`created_at` is the original profile date, back to 2023, so never use it as a lead date).
+- Union of both: 14,391 Braze profiles, 13,037 numeric `external_id`s (join `safe_cast(external_id as int64) = claude.order_customer.mapped_cust_id`, the KB rule), 1,282 with no `external_id`, 72 non-numeric.
+- Separate, not part of this process: `new_location_email_signup_<store>` events (store landing pages, `signup_platform = 'store_landing_page'`).
+- **Cost:** a `name = 'social_signup'` filter on `braze.customevent` from 2025-10-01 bills ~21.5 GB per run (the name does not prune). Pull the cohort once per session.
+
+Value read 2026-11-04 on the event cohort (12,023 customers, sign-up date = first `social_signup`, person orders 2025-10-01 to yesterday): 1,746 new customers, 1,270 existing, 10,680 orders and $227,015 net after sign-up ($131,821 from the new customers). Meta $156,036 (1,173 new), TikTok $56,829 (481 new), Snapchat $804 (8 new), blank platform $13,346. Attribute-only profiles add $24,932 since 2025-10-01 (undated). No catering orders match by id (catering logins are separate accounts). Influenced, not incremental.
 
 ## Value read, 2026-11-04 (method)
 

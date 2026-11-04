@@ -208,5 +208,15 @@ Full playbook with the audit behind it: [Braze Holdout Playbook](https://claude.
 | Flight band segment | `flight_holdout_<yymmdd>_<flight>` | anything without the date |
 
   Add an `ho:<pct>` token (e.g. `ho:10`) to the canvas or campaign name beside `st:` and `cm:` so the holdout size reads without a scan. Sync canvases carry `sync` (§12).
-- **Flight-level questions** ("did the Labor Day campaign work") need the same people held out of every send: a `random_bucket_number` band excluded from every canvas and campaign in the flight, a different band per flight, logged in a roster (flight, band, dates, owner). Keep the per-send holdouts on; they still feed the pool. The owned bucket assignment in D-024 is still pending, so the band lives in Braze segments until then.
+- **Flight-level questions** ("did the Labor Day campaign work") need the same people held out of every send: a `random_bucket_number` band excluded from every canvas and campaign in the flight, a different band per flight, logged in a roster (flight, band, dates, owner). Keep the per-send holdouts on; they still feed the pool. Superseded 2026-11-04 by the owned `holdout` dataset (§17, D-052): flights use `holdout.bucket` with the flight code as seed, not a `random_bucket_number` band.
 - **After the first send:** holdout users messaged = 0%, and holdout share within 0.5 points of the setting.
+
+### 17. Owned holdouts: the `holdout` dataset (built 2026-11-04, ledger D-052)
+
+Supersedes the `random_bucket_number` band approach in §16 for flights and the global holdout. Braze's own random bucket and control groups are per **profile**, so one person with two profiles can be held out on one and messaged on the other (182,509 profiles share an email with another profile, measured 2026-11-04).
+
+- **Flight** = a set of campaigns and canvases read as one: one holdout, one date range, one decision date. Name token `fl:<yymm>_<name>`, tag `fl_<code>`, standalone sends `fl:solo`. Holdout token `ho:fl` (flight holdout), `ho:10` etc. (Braze per-send holdout, standalone only), `ho:exempt` (tag `holdout_exempt`, replaces `globalcontrolexclude`).
+- **Assignment**: `holdout.bucket(layer_code, anchor_key) < holdout_pct * 100`. Record of truth is `holdout.assignment`; never read group membership from Braze.
+- **Reads** join `concat('em:', claude.order_customer.mapped_email_hash) = anchor_key`, `em` anchors only, audience frozen at `freeze_date`.
+- Per-send Braze holdouts on standalone sends (`ho:10`) stay and still feed the pooled read (§6).
+- Full rules, objects and the initial load: `data_dictionaries/holdout.md`.

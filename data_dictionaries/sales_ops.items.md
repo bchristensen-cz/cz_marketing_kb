@@ -32,7 +32,7 @@ intent (steward call 2026-09-14).
 | `item_name_raw` | STRING | The winning Brink name before parsing, size prefix and any `.` / `--` lead intact. Use it when you need the name a store actually sees |
 | `rev_center_id` | INTEGER | From the winning store's row |
 | `rev_center_name` | STRING | 37 distinct, 0 NULLs. Two spellings per category (`COMBOS` / `Combos`), split by era not store (measured 2026-10-28): ALL-CAPS ids last sold 2023-02-16 (`COMBOS` 2023-05-24), mixed-case ids first sold 2023-01-06. Use `upper(rev_center_name)` for any window before 2023-02-17 |
-| `item_type` | STRING | Same taxonomy as `order_lines.item_type`: `Other` 2,903 / `Entree` 186 / `Beverage` 151 / `Kids Meals` 2 |
+| `item_type` | STRING | Same taxonomy as `order_lines.item_type` (dimension-level: the combo-component modifier override to `Other` is line-level and does not exist here). Kids rev-center ids other than the two `Kids Combo` headers are `Kids Meal Item` since 2026-11-04 (were `Entree`). **Fixed 2026-11-04:** POS header 643647054 (`'Kids Combo '`, trailing space) read `Entree` / `Kids` here while `order_lines` said `Kids Meals` / `Regular` — the 2026-09-24 trim never reached `sql/sales_ops.items.sql`; the name parse now trims, matching `order_marts` |
 | `first_sold_date` | DATE | First business date the item ever sold. NULL when `has_ever_sold` is false |
 | `launch_date` | DATE | **Derived, not given** — see the launch-date section |
 | `last_sold_date` | DATE | Most recent business date it sold |

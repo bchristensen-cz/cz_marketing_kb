@@ -258,7 +258,11 @@ Two more instances of the same collision, so it is a pattern and not one dessert
 - **`Kids Combo`** — the same collision with no size story: id 643647054 is the `Kids`
   **$0.00** bundle slot (46,653 units), id 642361971 is the `Regular` **$7.26** paid combo
   (39,844). One name, two things, and a units count on the name double-counts every kids
-  meal — here that is 86,497 where the real paid figure is 39,844.
+  meal — here that is 86,497 where the real paid figure is 39,844. *(Historical figures from
+  2026-08; since 2026-09-24 both ids are real meal headers, see the `order_lines` Kids Meals
+  gotcha.)* **Kids meal units = `item_type = 'Kids Meals'`; kids food = `item_type = 'Kids Meal
+  Item'` (since 2026-11-04). A unit count on `rev_center_name = 'Kids Meals'` counts the meal
+  header plus every selection: 2.1x meals in Dec 2025, 3.1x since June 2026.**
 
 **A size word can still survive inside `item_name`** — 14 names in the window carry one,
 because the strip runs once and is case-sensitive: `PRTY TRAY Avocado Caesar Salad` loses

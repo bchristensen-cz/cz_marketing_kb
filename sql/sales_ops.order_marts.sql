@@ -453,6 +453,7 @@ select oc.brink_order_id
 	when oc.is_sys_order_email = 1 and oc.is_sys_acct_email = 1 and oc.pulse_customer_id is not null then 'pulse.orders'
 	end as mapped_cust_id_source_system
 , oc.pulse_order_id
+--, oc.pulse_customer_id
 , oc.order_timestamp_utc
 , oc.order_datetime_local
 from `marketing-data-442316`.sales_ops.order_customer oc
@@ -839,7 +840,7 @@ case when coalesce(safe_divide(bol.item_gross_sales,bi.price),0) < 1 then 1 else
 , case
     when brc.name in ('Bowls','Salads','Sandwiches','Soups') then 'Entree'
     when brc.name = 'Kids Meals' and bi.name = 'Kids Combo' then 'Kids Meals'
-    when brc.name = 'Kids Meals' and bi.name <> 'Kids Combo' then 'Entree'
+    when brc.name = 'Kids Meals' and bi.name <> 'Kids Combo' then 'Kids Meal Item'  -- '2026-11-04' was 'Entree'; kids selections counted again as entrees and beside the Kids Combo header
     when brc.name in ('Bottled Beverages','Foutain Beverages') then 'Beverage'
     when bol.line_item_type = 'discount' then 'Discount' -- '2026-07-30'  added discount
     when bol.line_item_type = 'promotion' then 'Promotion' -- '2026-07-31'  added promotion
@@ -887,6 +888,17 @@ from brink_items bi
 group by 1
 )
 
+, combo_components as (  -- '2026-11-04' priced combo components, so a modifier on one can be re-parented to its combo header
+select
+	k.brink_order_id
+	, k.order_item_id
+	, k.combo_order_line_item_id
+from order_lines_detail k
+where k.line_item_type = 'item'
+and k.composite_item_id is not null
+qualify row_number() over(partition by k.brink_order_id, k.order_item_id order by k.item_id_seq_num) = 1
+)
+
 select
 l.brink_order_id
 , l.pulse_order_id
@@ -899,7 +911,7 @@ l.brink_order_id
 , l.order_item_id
 , l.item_id_seq_num
 , l.line_item_type
-, l.combo_order_line_item_id
+, coalesce(k.combo_order_line_item_id, l.combo_order_line_item_id) as combo_order_line_item_id  -- '2026-11-04' modifiers on a priced combo component roll up to the combo header
 , l.composite_item_id
 , l.description
 , l.item_id
@@ -918,7 +930,10 @@ l.brink_order_id
 , l.price
 , l.qty
 , l.item_net_sales
-, l.item_type
+, case
+	when k.order_item_id is not null then 'Other'  -- '2026-11-04' choice/add-on on a priced combo component (POS kids soup flavor, kids drink, Try 2 Mixed Soup flavor); the component is the unit
+	else l.item_type
+  end as item_type
 , case
   when l.item_type = 'Discount' then 'Discount' -- '2026-07-30'  added discount	
   when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion
@@ -931,12 +946,16 @@ l.brink_order_id
 when l.item_type = 'Promotion' then 'Promotion' -- '2026-07-31'  added promotion  
 	else coalesce(c.item_grp_name, l.description) end as parent_item_grp_name
 from order_lines_detail l
+	left join combo_components k  -- '2026-11-04' parent of a modifier is a priced combo component
+	on l.line_item_type = 'modifier'
+	and k.brink_order_id = l.brink_order_id
+	and k.order_item_id = l.order_item_id
 	left join order_lines_detail c
-	on c.combo_order_line_item_id = l.combo_order_line_item_id
+	on c.combo_order_line_item_id = coalesce(k.combo_order_line_item_id, l.combo_order_line_item_id)
 	and c.composite_item_id is null
 	and c.line_item_type = 'item'
 		left join combo_attrs ca
-		on ca.combo_order_line_item_id = l.combo_order_line_item_id
+		on ca.combo_order_line_item_id = coalesce(k.combo_order_line_item_id, l.combo_order_line_item_id)
       left join `marketing-data-442316.sales_ops.store_info` si
       on si.store_id = l.store_id
         left join size_families f

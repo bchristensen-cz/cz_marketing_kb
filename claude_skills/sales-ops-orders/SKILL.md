@@ -74,7 +74,7 @@ Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)`. **The default measure for item questions** |
 | Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it |
 | Item net sales | `sum(item_net_sales)` from `order_lines` — safe to report **when asked**. Does **not** reconcile to order-level `net_sales`; say so in the same breath |
-| Menu mix name | `item_name` (size-stripped) + `item_size`; resolve to `item_id`. Menu category via `rev_center_name` (`item_type` is only the closed 7-value rollup) |
+| Menu mix name | `item_name` (size-stripped) + `item_size`; resolve to `item_id`. Menu category via `rev_center_name` (`item_type` is only the closed 8-value rollup). **Kids meals: count `item_type = 'Kids Meals'`, never units on `rev_center_name = 'Kids Meals'`** (header + selections, 2-3x) |
 
 ## Pre-query clarification protocol (steward rule 2026-07-28 — MANDATORY)
 

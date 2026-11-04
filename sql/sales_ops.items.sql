@@ -172,6 +172,7 @@ w.item_id
 , w.rev_center_id
 , w.rev_center_name
 , w.name_store_count
+, trim(w.item_name_raw) as name  -- '2026-11-04' parse the trimmed name, as order_marts brink_items has since 2026-09-24
 , trim(w.item_name_raw) as name_trimmed
 , regexp_extract(w.item_name_raw, r'^(REG|Mini|LG|PRTY|HALF|Kids|LARGE|Medium|Tray|QUART) ') as size_prefix
 from item_name_winner w
@@ -185,14 +186,14 @@ p.item_id
 , p.rev_center_name
 , p.name_store_count
 , case
-	when lower(p.item_name_raw) like 'try 2 combo%' then 'Try 2 Combo'
-	when p.item_name_raw like 'Kids Combo%' then 'Kids Combo'
-	when p.size_prefix is not null then substr(p.item_name_raw, strpos(p.item_name_raw, ' ') + 1)
+	when lower(p.name) like 'try 2 combo%' then 'Try 2 Combo'
+	when p.name like 'Kids Combo%' then 'Kids Combo'
+	when p.size_prefix is not null then substr(p.name, strpos(p.name, ' ') + 1)
 	else regexp_replace(p.name_trimmed, r'^(\.|--)\s*', '')
   end as item_name
 , case
-	when lower(p.item_name_raw) like 'try 2 combo%' then null
-	when p.item_name_raw = 'Kids Combo' then null
+	when lower(p.name) like 'try 2 combo%' then null
+	when p.name = 'Kids Combo' then null
 	when p.size_prefix is not null then
 		case trim(p.size_prefix)
 			when 'REG'    then 'Regular'
@@ -394,8 +395,8 @@ r.item_id
 , r.rev_center_name
 , case
 	when r.rev_center_name in ('Bowls','Salads','Sandwiches','Soups') then 'Entree'
-	when r.rev_center_name = 'Kids Meals' and r.item_name_raw = 'Kids Combo' then 'Kids Meals'
-	when r.rev_center_name = 'Kids Meals' and r.item_name_raw <> 'Kids Combo' then 'Entree'
+	when r.rev_center_name = 'Kids Meals' and trim(r.item_name_raw) = 'Kids Combo' then 'Kids Meals'  -- '2026-11-04' trim: POS id 643647054 is 'Kids Combo '
+	when r.rev_center_name = 'Kids Meals' and trim(r.item_name_raw) <> 'Kids Combo' then 'Kids Meal Item'  -- '2026-11-04' was 'Entree', matches order_lines
 	when r.rev_center_name in ('Bottled Beverages','Foutain Beverages') then 'Beverage'
 	else 'Other'
   end as item_type

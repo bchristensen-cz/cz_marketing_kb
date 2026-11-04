@@ -69,6 +69,7 @@ Full column docs in `data_dictionaries/`: `sales_ops.order_customer.md`, `sales_
 | Guest customer | **`customer_attribute.guest_status`** (steward decision 2026-09-22): `guest` / `converted_guest` / `account`. Exposed on `claude.order_customer`. `is_guest_order` stays the ORDER flag; never call an order-level share a "guest customer" count. Filter `first_order_date >= '2026-07-01'` for the relaunch cohort |
 | First-time order | `customer_order_count = 1` **with `customer_type = 'person'`** — only back to 2023-03-06 |
 | Repeat order | `customer_order_count > 1` **with `customer_type = 'person'`** |
+| New-store loyalty accounts | Accounts the store **acquired** (`customer_order_count = 1` at that store), never distinct customers seen. Run `sql/analysis/new_store_loyalty_benchmark.sql`; cohort, week anchor and the open guest question: [`references/definitions.md`](references/definitions.md) |
 | Lifetime orders per customer | **`customer_attribute.lifetime_order_count`** (`order_sequence.lifetime_customer_order_count` was DROPPED 2026-07-29) |
 | Items sold | `order_lines` where `line_item_type = 'item'`, measure `sum(qty)` or `count(*)`. **The default measure for item questions** |
 | Item sales | `sum(item_gross_sales)` from `order_lines`. **Opt-in, not the default** — combo pricing distorts it |
@@ -117,7 +118,7 @@ Each file below is read when its trigger applies. Nothing below is optional once
 | [`references/clarifications.md`](references/clarifications.md) | every question: store exclusion by layer, date, catering, delivery scope |
 | [`references/sql_style.md`](references/sql_style.md) | before the first SQL of the session; join patterns |
 | [`references/claude_views.md`](references/claude_views.md) | what the `claude` views add or change; `claude` vs `sales_ops` disagreements; the folded lifetime / sequence columns and their zeros |
-| [`references/definitions.md`](references/definitions.md) | `order_source` / `revenue_category` values (incl. Fundraiser), the drive-thru destination list, where tips live, `customer_type`, "loyalty orders", app users |
+| [`references/definitions.md`](references/definitions.md) | `order_source` / `revenue_category` values (incl. Fundraiser), the drive-thru destination list, where tips live, new-store loyalty accounts, `customer_type`, "loyalty orders", app users |
 | [`references/net_sales.md`](references/net_sales.md) | decomposing, validating or reconciling net sales |
 | [`references/item_questions.md`](references/item_questions.md) | any item question: named products, sizes, combos, discount/promotion lines, promotion or discount-program totals |
 | [`references/recipes.md`](references/recipes.md) | you are about to write SQL for sales, menu mix, combos, modifiers, VTO/limited-time items, store or channel breakdowns, fundraisers |

@@ -48,6 +48,22 @@ Tips are already in the marts. A tip question reads `order_customer` (or `claude
 
 These are separate mechanisms (see the `sales_ops.order_customer` dictionary): report them side by side and do not add them blindly. At line level the tip items are `order_lines` rows with `line_item_type = 'tip'` (names seen in user SQL: `CZ Tip`, `Touch Ordering Tip`); read `amount` and keep them out of any sales sum. Seen 2026-11-02: an analyst rebuilt payment tips from raw `brinkOrderPayment` + `brinkOrder` because no skill pointed here. Tip **distribution to employees** (`brink.TipDivisionForEmployeeReport`) and labor hours are not in the marts: that is an open scope call (Asana 1220138577786046), so say so rather than querying raw.
 
+### New-store "loyalty accounts" = accounts the store ACQUIRED (steward definition 2026-09-16, week anchor 2026-10-22; added here 2026-11-04, query-log review)
+
+The board's new-store loyalty metric counts customers whose **first-ever Zupas order** was at that store: `customer_type = 'person'`, `mapped_cust_id is not null`, `customer_order_count = 1`, `business_date >= store_open_date`. It is **not** `count(distinct mapped_cust_id)` of everyone who ordered there: in an existing market about half the guests transfer in from nearby stores, so the two differ by store in a way that looks like noise. Because `customer_order_count = 1` is true for one order per customer chain-wide, a customer is counted at one store in one week only.
+
+Canonical query: **`sql/analysis/new_store_loyalty_benchmark.sql`** in this repo. Run it (set `as_of` to the period end, add the new store to the focus list) instead of rebuilding it, so a chat answer matches the slide.
+
+| Choice | Canonical |
+|---|---|
+| Benchmark | median (`percentile_cont`, per week) of the 12 non-campus 2023-2024 openings: 172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182, 183. Left out on purpose: 169 (opened before the 2023-03-06 `order_sequence` floor), 50 (not a store), 184 and 185 (Dec-2024 openings into the holiday trough) |
+| Weeks | Mon-Sun fiscal weeks since the opening week: `date_diff(date_trunc(acq_date, week(monday)), date_trunc(store_open_date, week(monday)), week) + 1`. Not open-date anniversaries, which leave the final bucket partial |
+| Day-N reads | a day count. A store younger than N days shows blank, never a partial figure |
+| Running total | bucket acquisitions by week, then a running `sum() over`. Never add up weekly `count(distinct mapped_cust_id)`, which double counts every returning guest |
+| Guest first orders, catering | the recipe filters **neither**. Say so when quoting it |
+
+Seen 2026-11-03 (MCP): an analyst rebuilt this metric from scratch with three different choices, each of which moves the number: first orders with `is_guest_order = true` excluded, a benchmark of every 2024+ opening (including campus stores and 184/185), and day-80/89 windows. **Whether guest-checkout first orders (live since 2026-07-01) should count as "loyalty accounts" is an open steward question.** Until it is ruled, use the recipe as written and state that guests are included. The same SQL split out "new app accounts" (first order non-catering with `order_source in ('iOS', 'Android')` or `in_store_scan = 1`). That mirrors the app-user rule below but is not a ratified metric, so label it as the analyst's cut.
+
 ### The `customer_type` rule (steward rule 2026-07-24)
 
 `order_customer.customer_type` classifies the customer **on each order** as `person`, `kiosk`, `internal`, or `aggregator` (NULL when unidentified). **38% of identified orders belong to non-person ids** — shared outdoor-kiosk terminal accounts, employee/developer accounts, and the third-party ordering funnel (ezcater / doordash / itsacheckmate), dominated by pulse id `19192` at ~108K orders a month across 89 stores.

@@ -41,3 +41,9 @@ Cohort = distinct lead emails, each at its earliest `created_time` (local date).
 Results: 889 new loyalty accounts, 702 new customers, 979 leads ordered after the lead, 5,169 orders, $118,290 net sales ($112,049 ex-catering), of which $67,348 from the 702 new customers. This is **influenced, not incremental** revenue: there is no holdout, and most leads were for new-store openings they might have visited anyway. Email match only, so a lead who orders under another address or unidentified is missed (undercount).
 
 Mechanics used because the hashes could not go to a scratch table from the session: the 10-hex prefix of each hash plus lead date and campaign were packed as base64 bytes in the query and decoded with `from_base64` / `to_code_points` (2,569 leads, 0 prefix collisions). Never commit that payload: it is derived from customer emails.
+
+## Incrementality status (2026-11-04)
+
+- **No holdout exists anywhere in the lead path.** Every lead canvas since 2025-10 runs a single variant with no control group: `251025 | Automated | Custom | Canvas | Store_Opening_Leads` (12,894 entries), `25121 | Automated | Trigger | Webhook Social Account Creation`, `251121 | ... | Ad_Leads_$1_Off_Dirty_Sodas`, and the per-store opening broadcasts (`a:store_leads_<store>`, `a:<store>_social_signups`). Finding this cost a 124 GB scan of `braze.canvas_entry` over 13 months; filter by `canvas_id` once known.
+- Meta reports the account and `FF - Lead Gen - New Stores` (120251520923500205) as eligible for self-serve Conversion Lift (checked 2026-11-04).
+- Until a holdout reads, quote break-even incrementality (spend / (new customers x first-year net value)) rather than a point estimate.

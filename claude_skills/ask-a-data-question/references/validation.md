@@ -62,7 +62,9 @@ task and a ledger row.
 1111 / 999 and discount / promotion / surcharge lines, and reads a week in a few MB. Use it for
 the benchmark even when the answer came from `order_lines`; the two tie out exactly under the
 same filters (dictionary, "Tie-out"). Carry the user's catering choice into the benchmark with
-`include_catering`.
+`include_catering`. When the answer was a rollup by `item_type` (kids food, entrees, beverages),
+benchmark on `units - units_combo_modifier`, not `units` (2026-11-04, D-053): plain `units` runs
+about 8% high on kids food.
 
 ```sql
 declare start_date date default date '2026-10-19';

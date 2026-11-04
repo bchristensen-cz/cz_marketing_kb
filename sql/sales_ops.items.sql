@@ -80,6 +80,9 @@ ol.business_date
 , countif(ol.parent_rev_center_name = 'Try 2 Combo') as lines_in_combo
 , count(distinct ol.item_name) as name_variants
 , count(distinct ol.item_size) as size_variants
+, sum(if(ol.line_item_type = 'modifier' and ol.item_type = 'Other'
+	and ol.rev_center_name in ('Bowls','Salads','Sandwiches','Soups','Kids Meals','Bottled Beverages','Foutain Beverages')
+	, ol.qty, 0)) as units_combo_modifier  -- '2026-11-04' LAST: the insert is positional and the column was added by alter table. modifiers re-parented to a priced combo component (D-051): line item_type 'Other', item-level type Entree/Beverage/Kids Meal Item. Category units = units - units_combo_modifier
 from `marketing-data-442316`.sales_ops.order_lines ol
 where 1=1
 and ol.business_date >= start_date

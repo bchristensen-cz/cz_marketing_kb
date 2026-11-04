@@ -5,6 +5,13 @@
 users. Build script: [`sql/claude.item_daily.sql`](../sql/claude.item_daily.sql). Deployed
 2026-10-26.
 
+> **2026-11-04: new column `units_combo_modifier` (D-053).** For any rollup by
+> `claude.items.item_type` use `units - units_combo_modifier`, and count `units_combo_modifier`
+> as `Other`; that matches `order_lines.item_type` exactly. Plain `units` overstates kids food
+> about 8%. Kids meals (`item_type = 'Kids Meals'`) are exact either way. Pattern and
+> verification: [`sales_ops.item_daily`](sales_ops.item_daily.md). View redeployed 2026-11-04
+> so its frozen `select *` schema carries the column.
+
 ## Why it exists
 
 An item trend line, an item's trailing run rate, and the per-category p90 benchmark used by the
@@ -39,6 +46,7 @@ validation step uses:
 | `orders` | Distinct `brink_order_id` **within the day**. Summing across days is exact for orders (an order cannot span days) and an upper bound for customers |
 | `stores_selling` | What `launch_date` is derived from |
 | `lines_as_item`, `lines_as_modifier`, `lines_in_combo` | The sale-shape split without re-reading `order_lines` |
+| `units_combo_modifier` | Units on modifiers re-parented to a priced combo component. Subtract from `units` for any `item_type` rollup (added 2026-11-04) |
 
 Stores 1111 / 999 and `discount` / `promotion` / `surcharge` lines are already excluded in
 the build. Do not re-apply those filters here.

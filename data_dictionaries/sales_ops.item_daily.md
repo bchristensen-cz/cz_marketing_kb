@@ -12,6 +12,40 @@ without re-scanning the line fact. Also usable directly for item trend questions
   trailing 8-day `delete` + `insert` inside a transaction (~1 GiB).
 - **Documented / deployed:** 2026-09-14.
 
+## ⚠️ 2026-11-04: category units need `units_combo_modifier` (D-053)
+
+Since D-051 a modifier on a priced combo component (POS kids soup flavor under the `Soup`
+component, `Sprite` under `Small Bev`, Try 2 `Mixed Soup` flavors) is `item_type = 'Other'` on
+the **line**, but its `item_id` is still `Entree` / `Beverage` / `Kids Meal Item` in
+`sales_ops.items`. A rollup of this table by `items.item_type` therefore counts those units a
+second time. New column `units_combo_modifier` holds them; `units` is unchanged and still ties
+to `order_lines` exactly. Category units that match `order_lines.item_type` exactly:
+
+```sql
+select
+if(is_combo_modifier, 'Other', i.item_type) as item_type
+, sum(if(is_combo_modifier, d.units_combo_modifier, d.units - d.units_combo_modifier)) as units
+from `marketing-data-442316`.claude.item_daily d
+join `marketing-data-442316`.claude.items i
+  on i.item_id = d.item_id
+cross join unnest([false, true]) as is_combo_modifier
+where 1=1
+and d.business_date between start_date and end_date
+group by 1
+```
+
+Verified exact on every type for 2026-10-01 → 10-31 (Entree 2,081,461, Beverage 535,533,
+Kids Meal Item 188,868, Kids Meals 95,416, Other 3,419,197), and on Dec 2025, Jun 2022 and the
+week of 2026-10-26. Without it, October kids food units read **8.2% high** (204,356), Beverage
+0.5%, Entree 0.08%. Kids meal counts (`item_type = 'Kids Meals'`) were never affected.
+
+Added by `alter table ... add column` and backfilled from 2018-08-07 the same afternoon (job
+`job_KWRaZ6fAbjoF68P6KgaKrFVH1pha`, 45.8 GiB): rows, `units` and `gross_sales` identical to the
+pre-backfill snapshot in every year 2018-2026, zero NULLs. It is **0 before 2023** because every
+line was typed `Other` then (see the pre-2023 `item_type` gotcha in `sales-ops-orders`), and
+0.01-0.18% of units per year from 2023. The insert is positional, so the column is **last** in
+statement 1; any new column must be appended after it.
+
 ## Scope, and why the exclusions matter
 
 ```sql
@@ -47,6 +81,7 @@ Fee, tip and gift-card lines **are** real Brink items and are kept. They show up
 | `lines_in_combo` | INTEGER | Lines whose `parent_rev_center_name` is `Try 2 Combo` |
 | `name_variants` | INTEGER | Distinct `item_name` values seen that day for the id. >1 means the same id was ringing under two names across stores |
 | `size_variants` | INTEGER | Same, for `item_size` |
+| `units_combo_modifier` | FLOAT | Added 2026-11-04 (D-053). `qty` on `modifier` lines typed `Other` whose `rev_center_name` maps to Entree / Kids Meals / Beverage, i.e. modifiers re-parented to a priced combo component. Subtract it from `units` before any rollup by `items.item_type`; those units belong to `Other` |
 
 ## Tie-out
 

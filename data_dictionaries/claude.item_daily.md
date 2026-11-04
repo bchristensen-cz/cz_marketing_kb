@@ -9,8 +9,9 @@ users. Build script: [`sql/claude.item_daily.sql`](../sql/claude.item_daily.sql)
 > `claude.items.item_type` use `units - units_combo_modifier`, and count `units_combo_modifier`
 > as `Other`; that matches `order_lines.item_type` exactly. Plain `units` overstates kids food
 > about 8%. Kids meals (`item_type = 'Kids Meals'`) are exact either way. Pattern and
-> verification: [`sales_ops.item_daily`](sales_ops.item_daily.md). View redeployed 2026-11-04
-> so its frozen `select *` schema carries the column.
+> verification: [`sales_ops.item_daily`](sales_ops.item_daily.md). No view change was needed:
+> a `select *` view resolves the parent's columns at query time (it was redeployed with identical
+> text anyway; that was unnecessary).
 
 ## Why it exists
 

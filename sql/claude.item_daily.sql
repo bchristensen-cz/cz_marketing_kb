@@ -17,8 +17,8 @@
 -- result. Stores 1111 / 999 and discount / promotion / surcharge lines are already excluded
 -- upstream in the build (sql/sales_ops.items.sql statement 1); do not re-apply them.
 --
--- Deployed 2026-10-26. Redeployed unchanged 2026-11-04 so the frozen select * schema carries
--- units_combo_modifier (D-053).
+-- Deployed 2026-10-26. 2026-11-04: parent gained units_combo_modifier (D-053); select * exposes it
+-- with no view change (redeployed with identical text anyway, which was not needed).
 
 create or replace view `marketing-data-442316`.claude.item_daily as
 select

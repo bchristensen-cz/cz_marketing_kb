@@ -90,8 +90,51 @@ layer_code string not null options (description = 'FK to layer_register.layer_co
 cluster by layer_code, arm, anchor_key
 options (description = 'Append-only record of truth: who was in which group of which layer, and when. Reporting reads this, never Braze.');
 
+create table if not exists `marketing-data-442316.holdout.layer_audience` (
+layer_code string not null options (description = 'FK to layer_register.layer_code')
+, anchor_key string not null
+, added_at timestamp not null options (description = 'When the anchor entered the layer audience (freeze time for flights, nightly for the global layer)')
+)
+cluster by layer_code, anchor_key
+options (description = 'Who is eligible for each layer, before the draw. Append-only. Global: every em/ph anchor. Flights: the audience snapshot taken at freeze_date.');
+
+create or replace procedure `marketing-data-442316.holdout.write_assignments`(p_layer_code string)
+options (description = 'Appends assignment rows (holdout or treatment) for every layer_audience anchor of this layer that has none yet. Never updates or deletes.')
+begin
+declare v_pct numeric default (
+select
+holdout_pct
+from `marketing-data-442316.holdout.layer_register`
+where layer_code = p_layer_code
+);
+if v_pct is null then
+raise using message = concat('holdout.write_assignments: unknown layer_code ', p_layer_code);
+end if;
+insert into `marketing-data-442316.holdout.assignment` (layer_code, anchor_key, bucket, arm, assigned_at, released_at)
+select
+a.layer_code
+, a.anchor_key
+, `marketing-data-442316.holdout.bucket`(a.layer_code, a.anchor_key) as bucket
+, if(`marketing-data-442316.holdout.bucket`(a.layer_code, a.anchor_key) < v_pct * 100, 'holdout', 'treatment') as arm
+, current_timestamp()
+, cast(null as timestamp)
+from (
+select distinct
+layer_code
+, anchor_key
+from `marketing-data-442316.holdout.layer_audience`
+where layer_code = p_layer_code
+) a
+where not exists (
+select 1
+from `marketing-data-442316.holdout.assignment` x
+where x.layer_code = a.layer_code
+and x.anchor_key = a.anchor_key
+);
+end;
+
 create or replace view `marketing-data-442316.holdout.braze_feed_desired`
-options (description = 'Desired Braze attribute state per profile for active layers: cz_global_holdout and cz_program_holdouts. Only profiles with at least one holdout appear.')
+options (description = 'Desired Braze attribute state per profile for active layers: cz_global_holdout and cz_program_holdouts. Only em/ph-anchored profiles with at least one holdout appear; bz profiles are never written (no order link, D-052).')
 as
 select
 p.braze_id
@@ -106,4 +149,6 @@ from `marketing-data-442316.holdout.profile_anchor` p
 	join `marketing-data-442316.holdout.layer_register` r
 	on r.layer_code = a.layer_code
 	and r.status = 'active'
+where 1=1
+and p.anchor_type in ('em', 'ph')
 group by 1, 2;

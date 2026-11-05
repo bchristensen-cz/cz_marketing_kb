@@ -22,8 +22,14 @@ Built 2026-11-04. Build scripts: `sql/holdout.ddl.sql` (objects), `sql/holdout.r
 | `layer_register` | table | One row per layer (global or flight): seed, %, status, dates, audience. `layer_code` never changes once status leaves `planned` |
 | `profile_anchor` | table | One row per Braze profile: `braze_id`, `external_id`, `anchor_key`, `anchor_type`. Sticky: set at first sight, upgraded only from `bz`/`ph` to `em` (logged) |
 | `anchor_change_log` | table | Every anchor change after first sight |
+| `layer_audience` | table | Append-only: who is eligible for each layer before the draw. Global = every `em`/`ph` anchor; flights = the audience snapshot at `freeze_date` |
+| `nightly_refresh()` | procedure | The nightly job, see below |
+| `refresh_braze_feed()` | procedure | Step 4 of the nightly job: records only changed attribute values in `braze_cdi_state`, payload holding only the changed keys (`sql/holdout.braze_feed.sql`) |
+| `braze_cdi_state` | table | One row per Braze profile ever written: last values sent (`synced_global`, `synced_codes`), `payload`, `updated_at`. Flight codes are only ever added |
+| `braze_cdi_feed_v` | view | **Braze CDI source**: `updated_at`, `braze_id`, `payload` |
+| `write_assignments(layer_code)` | procedure | Appends `assignment` rows for audience anchors that have none yet; rerunning adds nothing. Smoke-tested 2026-11-04 (20,000 anchors at 30%: 30.05% holdout, 0 arm errors, second call added 0 rows) |
 | `assignment` | table | Append-only: layer x anchor, bucket, arm, `assigned_at`, `released_at`. The record of truth for reporting |
-| `braze_feed_desired` | view | Desired Braze state for active layers: `cz_global_holdout`, `cz_program_holdouts` (array of flight codes). Only profiles with a holdout appear |
+| `braze_feed_desired` | view | Desired Braze state for active layers: `cz_global_holdout`, `cz_program_holdouts` (array of flight codes). Only `em`/`ph` profiles with a holdout appear; `bz` profiles are never written |
 
 ## Initial load (2026-11-04, from `braze.users`, 4,425,540 profiles)
 
@@ -44,3 +50,25 @@ Built 2026-11-04. Build scripts: `sql/holdout.ddl.sql` (objects), `sql/holdout.r
 - **Never change a seed after the freeze.** A one-character change reshuffles everyone.
 - **Phone linking is phase 2 and not built.** Two different emails tied by one phone currently get two anchors. Measure the share before building it.
 - `braze_feed_desired` is a view of intent, not a sync log. The Braze CDI feed and its change tracking are added when the first custom attribute is created.
+
+## Nightly job
+
+Scheduled query **`holdout nightly refresh`** (config `6b11698d-0000-2513-988d-94eb2c1f3230`, every day 13:30 UTC = 06:30 MST / 07:30 MDT, owner bchristensen@, created 2026-11-04 through the Data Transfer API). It runs `call holdout.nightly_refresh()` (`sql/holdout.nightly_refresh.sql`), which:
+
+1. refreshes `profile_anchor` from `braze.users` (new profiles in, `bz`/`ph` anchors upgraded to `em`),
+2. for every `active` layer, appends new audience anchors to `layer_audience`: the global layer takes every `em`/`ph` anchor; a flight runs its `layer_register.audience_sql` for business dates `greatest(start_date, yesterday - 2)` to yesterday (3-day lookback for late identity),
+3. calls `write_assignments` for that layer,
+4. calls `refresh_braze_feed`, which writes a `braze_cdi_state` row only when a profile's attribute value changes (smoke-tested: 592 profiles on the first run, 0 rewritten on the second; sample payload `{"cz_program_holdouts":["zz_smoke_flight"]}`).
+
+It creates no tables; it appends to `profile_anchor`, `anchor_change_log`, `layer_audience`, `assignment` and `braze_cdi_state`. Every step is rerun-safe (smoke-tested twice in a row on a throwaway active flight 2026-11-04: 5,113 anchors over 3 days, 30.43% holdout, no duplicates, 1,733 Braze profiles behind the holdout anchors; about 1.5 GB per run). Braze reads `braze_cdi_feed_v` through a Cloud Data Ingestion sync keyed on `BRAZE_ID`, scheduled after this job.
+
+**To launch a flight:** set `status = 'active'` and `start_date` = the automation's launch date in `layer_register`. Buyers from that date are drawn the next morning, days before their day-7 email.
+
+## Layers (decisions 2026-11-04)
+
+| layer_code | Type | Holdout | Status | Dates | Braze writes |
+|---|---|---|---|---|---|
+| `global_2027` | global | 5% | planned | FY2027: 2026-12-28 to 2027-12-26; quarterly reads at fiscal quarter ends | `cz_global_holdout` on `em`/`ph` holdout profiles only: about 97,657 on first load (123,470 `bz` profiles skipped). Write and sync by 2026-12-21, then turn off the Braze Global Control Group after exporting it (the existing scheduled query `create or replace global holdout` copies Braze's export into `braze.global_holdout` and rebuilds it every 24 hours, so snapshot it to a permanent table first) |
+| `2611_item_followup` | flight, automated, no end date | **10%** | **active from 2026-11-05** (automation live 10:00 MT that day) | Email 7 days after purchase unless they bought again recently, so the first emails go out around 2026-11-12 and the Braze attribute must be synced before then | Audience (`audience_sql`, also in `sql/holdout_flights/2611_item_followup.audience.sql`): identified person buyers in `claude.order_lines` of Athlete Bowl, Fall Bacon Grilled Cheese or Italian Sausage Gnocchi Soup, no card-match credit. About 16K buyers a week in October, so roughly 1.6K Braze writes a week at 10%. `cz_program_holdouts` written once per held-out person, never removed. The email step must use "Validate audience at message send". Read per person: entry = qualifying purchase, outcome days 7 to 35, rebuyers in days 1 to 7 dropped from both arms. The existing canvas `repeat_buyer_athlete_bowl` overlaps Athlete Bowl buyers |
+
+**Data point rules that shaped this** (Braze, legacy data point billing): each attribute set costs a data point even when the value is unchanged; setting a whole array costs one; removing or nulling also costs one. So: write only holdout members, sync only changes, never remove flight codes.

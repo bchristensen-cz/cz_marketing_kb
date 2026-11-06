@@ -11,13 +11,23 @@ Do not guess these, and do not rebuild the channel rollup yourself. Live values 
 |---|---|---|
 | `NULL` | In-Store (also Fundraiser, rare Third_Party) | In-store POS order |
 | `Checkmate` | Third_Party | itsacheckmate aggregator feed (DoorDash/UberEats/GrubHub/Postmates) |
-| `iOS` / `Android` | Digital | Native app |
+| `iOS` / `Android` | Digital (also Fundraiser, since D-055) | Native app |
 | `Mobile Web` / `Web` | Digital (also Catering) | Web ordering; `Web` + Catering = online catering |
 | `Outdoor Kiosk` | **In-Store** | Shared kiosk terminal — pairs with `customer_type = 'kiosk'`. Do NOT count as Digital |
 | `Operator` | Catering (some Digital/In-Store) | Phone/manual order entry |
 | `ezcater` | Catering | ezCater marketplace |
 
 **Anti-pattern — do not reconstruct `revenue_category` from `destination`.** `revenue_category` is the canonical rollup and is already on `order_customer`. Hand-rolled `case when destination like '%Cater%' … end` classifiers were observed in analyst SQL 2026-07-27; they drift from the mart and are only needed on the legacy `OrderCustomer` table, which you should not be using. If a destination isn't landing in the category you expect, raise it as a `KB finding:` task instead of writing your own CASE.
+
+### Fundraiser = destination OR the Pulse flag (D-055, 2026-11-06)
+
+`revenue_category = 'Fundraiser'` when the Brink destination is `Fundraiser` / `Fundraiser Drive-Thru`, **or** `pulse.orders.is_fundraiser = 1` on the matching Pulse order. Order of tests in the build: catering (destination, Pulse flag, store 50) first, then Fundraiser destination, then the Fundraiser flag, then Digital / In-Store / Third_Party. Consequences:
+
+- **Flagged online orders left Digital.** Almost every flag-only fundraiser order is an app or web order (Online Takeout, Good Life Lane, Curbside, CZ Delivery); a few hundred a year are Outdoor Kiosk Drive Thru orders that left In-Store. Flag-only orders per year: 2023 4,219 / 2024 7,763 / 2025 8,699 / 2026 through 11-05 6,807. Digital order counts and digital mix for 2023+ are lower than anything quoted before 2026-11-06.
+- **The flag exists from 2023 only.** 2018-2022 Fundraiser is destination-only, so a fundraiser YoY that crosses 2022 -> 2023 is not like for like. Say so, or compare destination-only (`destination in ('Fundraiser','Fundraiser Drive-Thru')`) for that pair.
+- **A Pulse feed stall drops the flag.** Orders missing from `pulse.orders` (e.g. the 2026-09-15 outage, `incidents_and_gaps.md`) fall back to their destination channel, normally Digital.
+- **Still no event calendar.** The flag marks the order, not the event; fundraiser nights are still inferred from order volume.
+- Never rebuild this from `destination`; read `revenue_category`.
 
 ### "Drive-thru" = four `destination` values (steward definition 2026-10-30, cz-dashboard Platform panel)
 

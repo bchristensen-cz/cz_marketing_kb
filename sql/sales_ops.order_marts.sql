@@ -264,6 +264,7 @@ cast(po.id as int64) as id
 , po.source
 , po.brink_order_id
 , po.created_at
+, po.is_fundraiser -- 2026-11-06 added this to give fundraisers more the accurate numbers
 from `marketing-data-442316`.pulse.orders po
 where 1=1
 and po.brink_order_id > 0
@@ -318,6 +319,7 @@ bo.Id as brink_order_id
     when bd.name like 'Drop Spot%' then 'Digital'
     when bd.name in ('Good Life Lane','Online Takeout','Curbside','CZ Delivery') then 'Digital'
     when bd.name in ('Fundraiser','Fundraiser Drive-Thru') then 'Fundraiser'
+		when po.is_fundraiser = 1 then 'Fundraiser'  -- 2026-11-06 added this to give fundraisers more the accurate numbers
     when bd.name in ('Call in Takeout','Drive Thru','Kiosk Dine in','Kiosk Dine In',
                             'Kiosk Drive Thru','Kiosk To Go','TAKEOUT','Takeout','To Stay') then 'In-Store'
     when bd.name in ('DoorDash','Google','GrubHub','Postmates','UberEats') then 'Third_Party'

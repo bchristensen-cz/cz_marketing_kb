@@ -71,6 +71,8 @@ _Empty - 0 rows, 0.00 GB, 1 columns, external._ External table (staging) holding
 
 _Active - 162,885 rows, 0.01 GB, 6 columns, table._ Users assigned to the global holdout group, who are withheld from messaging for incrementality measurement.
 
+> **EMPTY since the 2026-11-07 04:10 MT run (found 2026-11-16).** Built by Brent's scheduled query `create or replace global holdout` (config `69a527e9-0000-2b96-8b35-582429aedb00`): `create or replace` from `staging.braze_global_holdout`, then `truncate` the staging table. The staging feed stopped arriving after 2026-11-06, so every run since rebuilds the table with 0 rows; the last populated version is outside the 7-day time-travel window. Do not use it to exclude Braze Global Control Group members until the feed is fixed; re-export the group from Braze before turning the Global Control Group off (holdout plan, D-054). A rebuild from an empty staging table should fail loudly, not replace.
+
 | Column | Type | Description |
 |---|---|---|
 | `braze_id` | STRING | Braze internal user ID. |

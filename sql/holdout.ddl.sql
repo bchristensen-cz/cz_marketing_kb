@@ -132,23 +132,3 @@ where x.layer_code = a.layer_code
 and x.anchor_key = a.anchor_key
 );
 end;
-
-create or replace view `marketing-data-442316.holdout.braze_feed_desired`
-options (description = 'Desired Braze attribute state per profile for active layers: cz_global_holdout and cz_program_holdouts. Only em/ph-anchored profiles with at least one holdout appear; bz profiles are never written (no order link, D-052).')
-as
-select
-p.braze_id
-, p.external_id
-, logical_or(r.layer_type = 'global') as cz_global_holdout
-, array_agg(if(r.layer_type = 'flight', a.layer_code, null) ignore nulls order by a.layer_code) as cz_program_holdouts
-from `marketing-data-442316.holdout.profile_anchor` p
-	join `marketing-data-442316.holdout.assignment` a
-	on a.anchor_key = p.anchor_key
-	and a.arm = 'holdout'
-	and a.released_at is null
-	join `marketing-data-442316.holdout.layer_register` r
-	on r.layer_code = a.layer_code
-	and r.status = 'active'
-where 1=1
-and p.anchor_type in ('em', 'ph')
-group by 1, 2;

@@ -57,6 +57,8 @@ group by 1
 order by promotion_amount
 ```
 
+**Which item did a promotion give away?** (steward pattern, mined from the 2026-11-16 query log; a heuristic, not a ruled definition.) A promotion line's `item_id` is the **promotion's** id, not the item it made free, and no documented column links it to the menu line it zeroed. The steward's read of a free-cup promotion (id 643647046, stores 186-188) matched it on price inside the order: `abs(promo.amount) = round(item.item_gross_sales / nullif(item.qty, 0), 2)` on `line_item_type = 'item'` lines of the same `brink_order_id`, narrowed to the plausible revenue center, `row_number() ... = 1` so one promotion claims one item, and unmatched rows kept as `'no matching item'` rather than dropped. Two limits to state with the answer: two items at the same price in one order make the match arbitrary, and a partial-value promotion (not 100% off) never matches.
+
 ### Discount-program reporting is now answerable (new 2026-08-12)
 
 Same shape as promotion reporting, but group by **`item_name`** — on discount lines it now carries the program name from the `brink.brinkDiscounts` master. Do **not** group by `description` for program-level questions: it holds the free-text POS name (often the redeemed item, sometimes an employee's personal name — don't surface it unchecked).

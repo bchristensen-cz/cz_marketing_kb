@@ -472,3 +472,34 @@ Rules that come with it (D-032):
 4. `order_source` is blank on digital orders whenever `pulse.orders` stops loading (see
    `incidents_and_gaps.md`, 2026-09-15). Check `countif(oc.revenue_category = 'Digital' and
    oc.order_source is null)` for the window before quoting a platform split.
+
+### DoorDash Free Delivery refund (ledger D-058, steward rule 2026-11-19)
+
+DoorDash reimburses Cafe Zupas a **flat $6.00 per order that redeemed the Free Delivery offer**
+(steward confirmed the rate 2026-11-19). The refund is a count of redemptions times $6. It does
+**not** use the `Dispatch Delivery Fee` line on the order, the order's net sales, or the tip.
+
+```sql
+select
+  date_trunc(d.business_date, quarter) as quarter_start
+, count(distinct d.brink_order_id) as free_delivery_orders
+, count(distinct d.brink_order_id) * 6 as doordash_refund
+from `marketing-data-442316`.claude.order_line_discount_detail d
+where 1=1
+and d.business_date between @start_date and @end_date
+and d.discount_description like 'Free Delivery%'
+group by quarter_start
+order by quarter_start
+```
+
+Rules that come with it:
+
+1. **Count distinct `brink_order_id`, not rows.** As of 2026-11-19 rows equal orders (one Free
+   Delivery line per order in every 2026 quarter), but distinct orders is the definition and stays
+   right if an order ever carries two lines.
+2. **`like 'Free Delivery%'`**, so suffixed variants of the offer name are included.
+3. **No catering or channel filter.** The offer only redeems on CZ Delivery orders; adding a
+   `destination` filter changes nothing today and would hide a mis-tagged redemption.
+4. **Quarters are calendar quarters** unless finance asks for fiscal periods; say which.
+5. History: the original steward query ran in DBeaver on 2026-09-14 (`count(*) * 6` over the last
+   50 days); `admin.job_history` keeps job text from 2026-05-23 on. Anything earlier is gone.

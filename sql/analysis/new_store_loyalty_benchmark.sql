@@ -35,26 +35,26 @@
 -- focus   : current-year openings. add each new store here as it opens. a store
 --           that opened after as_of is simply excluded by its own week count.
 --
--- as_of   : set to the period end being reported. p9 fy2026 = 2026-09-27.
+-- as_of   : set to the period end being reported. p10 fy2026 = 2026-10-25.
 --
 -- caution : day 60 is a DAY count, not a week count, so it is unaffected by the
 --           anchor change. a store under 60 days old at as_of has no day-60
 --           read and must show blank on the slide, never a partial one.
 -- =============================================================================
 
-declare as_of date default '2026-09-27';
+declare as_of date default '2026-10-25';
 
 with stores as (
 	select
 	  s.store_id
 	, s.store_name
 	, s.store_open_date
-	, case when s.store_id in (190, 189, 193, 194, 197, 191, 192) then 'focus' else 'benchmark' end as cohort
+	, case when s.store_id in (190, 189, 193, 194, 197, 191, 192, 198, 199) then 'focus' else 'benchmark' end as cohort
 	, date_diff(date_trunc(as_of, week(monday)), date_trunc(s.store_open_date, week(monday)), week) + 1 as week_at_as_of
 	, date_diff(as_of, s.store_open_date, day) as days_open_at_as_of
 	from `marketing-data-442316`.claude.store_info s
 	where 1=1
-	and s.store_id in (172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182, 183, 190, 189, 193, 194, 197, 191, 192)
+	and s.store_id in (172, 171, 178, 173, 174, 177, 175, 176, 181, 180, 182, 183, 190, 189, 193, 194, 197, 191, 192, 198, 199)
 )
 , acq as (
 	select

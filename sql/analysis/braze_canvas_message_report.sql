@@ -109,7 +109,7 @@ oc.brink_order_id as order_id
 , oc.mapped_email as em
 , oc.order_timestamp_utc as order_ts
 , oc.net_sales as net_sales
-from `marketing-data-442316`.claude.order_customer oc
+from `marketing-data-442316`.claude_pii.order_customer oc -- claude_pii since D-046 (2026-10-27): claude.order_customer no longer has mapped_email
 where 1=1
 and oc.business_date between date '2025-12-29' and current_date('America/Denver')
 and oc.is_catering = false

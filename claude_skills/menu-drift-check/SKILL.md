@@ -114,7 +114,10 @@ For each **event** (not each row):
   (642388932 Sandwiches & Soups, 642388929 Salads & Sandwiches, 642388930 Salads & Soups); Pulse and
   third party send the single priced header 642361973 at `$12.99` with `$0` modifier selections. The
   `sales-ops-orders` skill documented the POS-vs-digital shape split on 2026-07-30; the id split is the
-  same fact seen from the dimension side.
+  same fact seen from the dimension side. **Since 2026-11-25** the build moves the digital header's
+  price onto its entrée lines (header `$0`, entrées priced `item` lines), so if the next run
+  flags a price or line-type shift on the Try 2 entrée ids, that is the build change (history is restated
+  too, so it may not flag at all), not a menu change.
 - **General rule this proved:** the same product can carry a different `item_id` per ordering
   channel, because the Pulse digital menu and the Brink POS menu are configured separately. When
   block 6 shows one name on several ids, break the ids out by `order_customer.destination` before

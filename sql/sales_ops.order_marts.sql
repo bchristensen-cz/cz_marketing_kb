@@ -316,10 +316,10 @@ bo.Id as brink_order_id
     when lower(bd.name) like '%cater%' then 'Catering'
 		when po.is_catering = true then 'Catering'
 		when bo.FKStoreId = 50 then 'Catering' -- '2026-08-17' including store 50 in the catering rev cat
-    when bd.name like 'Drop Spot%' then 'Digital'
-    when bd.name in ('Good Life Lane','Online Takeout','Curbside','CZ Delivery') then 'Digital'
     when bd.name in ('Fundraiser','Fundraiser Drive-Thru') then 'Fundraiser'
 		when po.is_fundraiser = 1 then 'Fundraiser'  -- 2026-11-06 added this to give fundraisers more the accurate numbers
+    when bd.name like 'Drop Spot%' then 'Digital'		
+    when bd.name in ('Good Life Lane','Online Takeout','Curbside','CZ Delivery') then 'Digital'
     when bd.name in ('Call in Takeout','Drive Thru','Kiosk Dine in','Kiosk Dine In',
                             'Kiosk Drive Thru','Kiosk To Go','TAKEOUT','Takeout','To Stay') then 'In-Store'
     when bd.name in ('DoorDash','Google','GrubHub','Postmates','UberEats') then 'Third_Party'
@@ -901,6 +901,50 @@ and k.composite_item_id is not null
 qualify row_number() over(partition by k.brink_order_id, k.order_item_id order by k.item_id_seq_num) = 1
 )
 
+, digital_combo_alloc as (  -- '2026-11-25' digital Try 2 (642361973) prices the header and sends entrees as $0 modifiers; move the header value onto the entree lines, weighted by item price, like POS
+with w as (
+select
+	e.brink_order_id
+	, e.order_item_id
+	, e.item_id_seq_num
+	, e.combo_order_line_item_id
+	, h.amount as hdr_amount
+	, h.item_gross_sales as hdr_gross
+	, h.item_net_sales as hdr_net
+	, coalesce(safe_divide(e.price, sum(e.price) over(partition by e.combo_order_line_item_id))
+		, 1 / count(*) over(partition by e.combo_order_line_item_id)) as wt
+	, row_number() over(partition by e.combo_order_line_item_id order by e.price desc, e.item_id_seq_num) as rn
+from order_lines_detail e
+	join order_lines_detail h
+	on h.combo_order_line_item_id = e.combo_order_line_item_id
+	and h.item_id = 642361973
+	and h.line_item_type = 'item'
+where e.line_item_type = 'modifier'
+and e.rev_center_name in ('Salads','Sandwiches','Soups')
+)
+, r as (
+select w.*
+	, round(w.hdr_amount * w.wt, 2) as a
+	, round(w.hdr_gross * w.wt, 2) as g
+	, round(w.hdr_net * w.wt, 2) as n
+from w
+)
+select
+	r.brink_order_id
+	, r.order_item_id
+	, r.item_id_seq_num
+	, r.combo_order_line_item_id
+	, case when r.rn = 1 then r.hdr_amount - sum(r.a) over(partition by r.combo_order_line_item_id) + r.a else r.a end as alloc_amount  -- leftover cents on the top-priced entree so the lines tie to the header
+	, case when r.rn = 1 then r.hdr_gross - sum(r.g) over(partition by r.combo_order_line_item_id) + r.g else r.g end as alloc_gross
+	, case when r.rn = 1 then r.hdr_net - sum(r.n) over(partition by r.combo_order_line_item_id) + r.n else r.n end as alloc_net
+from r
+)
+
+, digital_combo_headers as (
+select distinct a.combo_order_line_item_id
+from digital_combo_alloc a
+)
+
 select
 l.brink_order_id
 , l.pulse_order_id
@@ -912,7 +956,7 @@ l.brink_order_id
 , si.store_state
 , l.order_item_id
 , l.item_id_seq_num
-, l.line_item_type
+, case when da.order_item_id is not null then 'item' else l.line_item_type end as line_item_type  -- '2026-11-25' digital Try 2 entrees promoted from modifier to item, same shape as POS components
 , coalesce(k.combo_order_line_item_id, l.combo_order_line_item_id) as combo_order_line_item_id  -- '2026-11-04' modifiers on a priced combo component roll up to the combo header
 , l.composite_item_id
 , l.description
@@ -926,12 +970,18 @@ l.brink_order_id
 	when f.family_has_sizes                           then 'Regular'
 	else 'Not Sized'
   end as item_size  -- '2026-08-27'  added this case for better values in item_size
-, l.amount
+, case when dh.combo_order_line_item_id is not null then 0  -- '2026-11-25' digital Try 2 header carries $0 once its value is on the entrees
+	when da.order_item_id is not null then l.amount + da.alloc_amount
+	else l.amount end as amount
 , l.rev_center_name
-, l.item_gross_sales
+, case when dh.combo_order_line_item_id is not null then 0
+	when da.order_item_id is not null then l.item_gross_sales + da.alloc_gross
+	else l.item_gross_sales end as item_gross_sales
 , l.price
 , l.qty
-, l.item_net_sales
+, case when dh.combo_order_line_item_id is not null then 0
+	when da.order_item_id is not null then l.item_net_sales + da.alloc_net
+	else l.item_net_sales end as item_net_sales
 , case
 	when k.order_item_id is not null then 'Other'  -- '2026-11-04' choice/add-on on a priced combo component (POS kids soup flavor, kids drink, Try 2 Mixed Soup flavor); the component is the unit
 	else l.item_type
@@ -962,6 +1012,15 @@ from order_lines_detail l
       on si.store_id = l.store_id
         left join size_families f
         on f.item_grp_name = l.item_grp_name
+          left join digital_combo_alloc da  -- '2026-11-25'
+          on da.brink_order_id = l.brink_order_id
+          and da.order_item_id = l.order_item_id
+          and da.item_id_seq_num = l.item_id_seq_num
+          and l.line_item_type = 'modifier'
+            left join digital_combo_headers dh  -- '2026-11-25'
+            on dh.combo_order_line_item_id = l.combo_order_line_item_id
+            and l.item_id = 642361973
+            and l.line_item_type = 'item'
 where 1=1
 and l.business_date >= start_date
 ;

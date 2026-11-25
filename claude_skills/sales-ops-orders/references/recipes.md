@@ -162,15 +162,18 @@ limit 25
 
 **Entrée units split standalone vs inside a Try 2 Combo (verified 2026-07-28):**
 
+> **Changed 2026-11-25:** digital Try 2 entrées are now priced `item` lines (the header's price is split across them by item price, header set to $0). They have `composite_item_id` NULL and `parent_rev_center_name = 'Try 2 Combo'`, so the standalone test must also exclude that parent, as below. The zero-priced slot now holds only POS Mixed Soup flavor picks.
+
 An entrée appears in `order_lines` in **three** distinct shapes. Getting these wrong is the single easiest way to produce a confidently wrong item number — see the taxonomy note below.
 
 ```sql
 select
 date_trunc(ol.business_date, week(monday)) as week
 , case
-    when ol.line_item_type = 'item' and ol.composite_item_id is null then 'Standalone'
-    when ol.line_item_type = 'item' and ol.composite_item_id is not null then 'Combo component (priced)'
+    when ol.line_item_type = 'item' and ol.composite_item_id is not null then 'Combo component (POS, priced)'
+    when ifnull(ol.parent_rev_center_name, '') = 'Try 2 Combo' and ol.line_item_type = 'item' then 'Combo component (digital, priced)'
     when ol.line_item_type = 'modifier' then 'Combo slot (zero-priced)'
+    when ol.line_item_type = 'item' then 'Standalone'
   end as sale_shape
 , sum(ol.qty) as units
 , round(sum(ol.item_gross_sales), 2) as gross_sales
@@ -185,6 +188,8 @@ order by 1, 2
 ```
 
 ### Combo line taxonomy — the three shapes (steward finding 2026-07-28)
+
+> **Since 2026-11-25** the third shape is gone for digital Try 2: those entrées are `item` lines carrying their share of the combo price, `composite_item_id` NULL, parent `Try 2 Combo`. History was restated at the next 5am reload. The table below describes the build before that date.
 
 | Shape | Filter | Carries revenue? |
 |---|---|---|
@@ -241,7 +246,8 @@ components and $0 modifier lines runs roughly **56/44 across all 88 stores and b
 types** (documented in the taxonomy above). The *why* is settled: it is the POS-vs-digital channel split described in the taxonomy note corrected 2026-07-30, and since 2026-09-24 it is also visible on the dimension side as separate `item_id`s per channel (Try 2: POS 642388932 / 642388929 / 642388930 `$0` composites vs Pulse 642361973 `$12.99`; Kids Combo: POS 643647054 vs Pulse 642361971, see the `order_lines` dictionary Kids Meals gotcha). So a Try 2 Combo
 containing a salad can register as "did not buy a salad", and it does so **only for combo
 buyers** — a behavioural segment, not a random sample. In a lift test that is a biased
-denominator, not noise.
+denominator, not noise. **Since 2026-11-25 this no longer holds for Try 2**: digital entrées are
+priced `item` lines, so `line_item_type = 'item'` catches both channels. Kids Combo still splits.
 
 **For "did the order contain X", ask about presence and ignore `line_item_type`:**
 
@@ -270,7 +276,8 @@ how a control group ends up measured differently from a treated one.
 steward's final form counts distinct entrée categories over item lines **plus** the zero-priced
 combo slot (`modifier` with `parent_rev_center_name = 'Try 2 Combo'`). Counting `item` lines
 only, his first pass, drops the digital Try 2 entrées and so undercounts multi-category orders
-on digital only. Counting every modifier line overcounts, because ordinary customizations are
+on digital only (true before 2026-11-25; since then digital Try 2 entrées are `item` lines and
+the extra slot term only adds the Mixed Soup flavor picks). Counting every modifier line overcounts, because ordinary customizations are
 modifiers too.
 
 ```sql

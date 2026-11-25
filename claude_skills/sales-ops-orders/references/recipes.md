@@ -265,6 +265,24 @@ promotion lines pass the standalone-sale test and named promotions collide with 
 family as the filter-vs-breakout rule in `ask-a-data-question` — reusing one for the other is
 how a control group ends up measured differently from a treated one.
 
+**Entrée categories per order (steward query pattern, mined 2026-11-24; not a ratified metric).**
+"How many orders mix a soup and a salad" is the same presence question counted per order. The
+steward's final form counts distinct entrée categories over item lines **plus** the zero-priced
+combo slot (`modifier` with `parent_rev_center_name = 'Try 2 Combo'`). Counting `item` lines
+only, his first pass, drops the digital Try 2 entrées and so undercounts multi-category orders
+on digital only. Counting every modifier line overcounts, because ordinary customizations are
+modifiers too.
+
+```sql
+count(distinct if(ol.line_item_type = 'item'
+    or (ol.line_item_type = 'modifier' and ol.parent_rev_center_name = 'Try 2 Combo')
+  , ol.rev_center_name, null)) as entree_categories
+-- with ol.rev_center_name in ('Soups', 'Bowls', 'Sandwiches', 'Salads')
+-- grouped by brink_order_id, business_date; left join from order_customer so 0-entrée orders stay in the denominator
+```
+
+State the denominator (all orders vs orders with at least one entrée) and the catering scope.
+
 #### Equivalent formulation without `line_item_type` (verified 2026-07-30)
 
 `line_item_type` is a POS-internal concept — **"item" vs "modifier" means nothing to a
